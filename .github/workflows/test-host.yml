@@ -1,3 +1,10 @@
+name: test workflow
+
+on:
+  push:
+    branches: [ "main" ] 
+  workflow_dispatch: 
+
 jobs:
   build:
     runs-on: [self-hosted, arm64, radxa]
