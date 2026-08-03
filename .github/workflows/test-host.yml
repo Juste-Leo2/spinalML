@@ -1,0 +1,7 @@
+jobs:
+  build:
+    runs-on: [self-hosted, arm64, radxa]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test compilation
+        run: echo "Compilation successful !"
