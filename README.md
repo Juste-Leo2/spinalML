@@ -1,2 +1,33 @@
 # spinalML
-Machine Learning Library with SpinalHDL 
+
+spinalML is a Machine Learning library designed for hardware synthesis and simulation, written in Scala using [SpinalHDL](https://spinalhdl.github.io/SpinalDoc-RTD/). This library aims to provide a robust foundation for implementing neural networks and other machine learning algorithms directly in hardware, leveraging the power and expressiveness of SpinalHDL.
+
+## Overview
+
+The core objective of spinalML is to provide a complete and tested set of tools to describe ML hardware accelerators. The library is structured around several key concepts:
+
+*   **Tensors and Data Flows:** Fundamental representations of multi-dimensional data and the streams used to move this data through the hardware architecture.
+*   **Basic Operations:** Essential mathematical and matrix operations required for any machine learning algorithm.
+*   **Advanced Operations:** Complex layers such as convolutions, activation functions, and pooling mechanisms.
+
+## Project Documentation
+
+To understand the direction and the capabilities of this project, please refer to the following documents:
+
+*   [Roadmap](docs/roadmap.md): The step-by-step checklist of the project's development phases, from tensor management to advanced operations.
+*   [Operations](docs/ops.md): A comprehensive list of all the machine learning operations that this library aims to support.
+
+## Acknowledgements
+
+Special thanks to the SpinalHDL project for providing the incredible framework that makes this library possible. You can find their repository here: [SpinalHDL GitHub Repository](https://github.com/SpinalHDL/SpinalHDL).
+
+## AI Usage Policy
+
+I heavily use AI tools for programming, and using AI to contribute to this project is completely fine by me. The primary focus for spinalML is the quality, correctness, and seamless integration of the code, regardless of whether it was authored by a human or an AI. 
+
+However, there is one strict rule: **Pull Requests must be initiated by a human.** 
+The PR description must be written by you (a human), and you must demonstrate a minimum understanding of the objective and the technical elements that made the implementation successful.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
