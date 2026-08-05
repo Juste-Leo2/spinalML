@@ -21,6 +21,9 @@ jobs:
             echo "System dependencies (Java, Verilator) are already installed."
           fi
 
+      - name: Clear corrupted caches
+        run: rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
       - name: Check and Install Mill
         run: |
           if [ ! -f "mill" ]; then
