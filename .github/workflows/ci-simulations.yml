@@ -38,4 +38,5 @@ jobs:
         env:
           COURSIER_JVM: system
           JAVA_HOME: /usr/lib/jvm/default-java
-        run: ./mill spinalML.test
+          JAVA_OPTS: "-Xmx2G"
+        run: ./mill --no-server spinalML.test
