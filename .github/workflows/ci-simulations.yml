@@ -38,4 +38,4 @@ jobs:
           COURSIER_JVM: system
           JAVA_HOME: /usr/lib/jvm/default-java
           JAVA_OPTS: "-Xmx4G"
-        run: mill --no-server spinalML.test
+        run: mill --no-server --disable-ticker spinalML.test
