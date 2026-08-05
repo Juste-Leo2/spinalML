@@ -29,7 +29,7 @@ The project follows the standard Mill module convention:
 
 ## Running Your First Simulation
 
-To verify that your toolchain works perfectly, we have included a simple `HelloWorld` component (an 8-bit vector adder) and its Verilator simulation.
+To verify that your toolchain works perfectly, you can run the foundational `Tensor` tests we have included (e.g., verifying `Int4` and `Int8` representations).
 
 ### 1. Run the Tests
 In your terminal, at the root of the project, run:
@@ -42,17 +42,15 @@ In your terminal, at the root of the project, run:
 Mill will automatically:
 1. Download the SpinalHDL dependencies.
 2. Compile your Scala hardware code.
-3. Generate the Verilog for the `HelloWorld` component.
+3. Generate the Verilog for the hardware components.
 4. Launch Verilator to compile the Verilog into C++.
-5. Execute the test and verify that `42 + 10 = 52`.
+5. Execute the test and verify the tensor shape logic and values.
 
 If the test passes successfully, your environment is ready to start building the next generation of Machine Learning hardware!
 
-## Generating Verilog
-
-If you just want to generate the Verilog file without running the test simulation, you can create an `App` object with `SpinalVerilog(...)` and run:
+If you just want to generate the Verilog file without running the test simulation, you can create an `App` object (e.g., `TensorVerilog`) with `SpinalVerilog(...)` and run:
 
 ```bash
-./mill spinalML.runMain spinalML.HelloWorldVerilog
+./mill spinalML.runMain spinalML.tensors.TensorVerilog
 ```
-This will produce a `HelloWorld.v` file in your directory.
+This will produce a `.v` file in your directory.

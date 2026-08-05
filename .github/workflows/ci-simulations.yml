@@ -25,17 +25,17 @@ jobs:
 
       - name: Check and Install Mill
         run: |
-          if [ ! -f "mill" ]; then
-            echo "Mill not found in workspace, downloading..."
-            curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7-assembly -o mill
-            chmod +x mill
+          if ! command -v mill &> /dev/null; then
+            echo "Mill not found in PATH, installing globally..."
+            sudo curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7-assembly -o /usr/local/bin/mill
+            sudo chmod +x /usr/local/bin/mill
           else
-            echo "Mill is already present."
+            echo "Mill is already installed globally."
           fi
 
       - name: Run spinalML tests
         env:
           COURSIER_JVM: system
           JAVA_HOME: /usr/lib/jvm/default-java
-          JAVA_OPTS: "-Xmx2G"
-        run: ./mill --no-server spinalML.test
+          JAVA_OPTS: "-Xmx4G"
+        run: mill --no-server spinalML.test
