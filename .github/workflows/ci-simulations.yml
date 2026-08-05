@@ -32,4 +32,7 @@ jobs:
           fi
 
       - name: Run spinalML tests
+        env:
+          COURSIER_JVM: system
+          JAVA_HOME: /usr/lib/jvm/default-java
         run: ./mill spinalML.test
