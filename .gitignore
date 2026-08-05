@@ -1,0 +1,17 @@
+# Mill build tool
+out/
+mill
+mill.*
+
+# SpinalHDL / Verilator Simulation
+simWorkspace/
+*.v
+*.vcd
+
+# IDEs & Metals
+.bsp/
+.bloop/
+.metals/
+.idea/
+*.iml
+.vscode/
