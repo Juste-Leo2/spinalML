@@ -1,0 +1,35 @@
+name: CI - Hardware Simulations
+
+on:
+  push:
+    branches: [ "main" ] 
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: [self-hosted, arm64, radxa]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check and Install System Dependencies
+        run: |
+          if ! command -v javac &> /dev/null || ! command -v verilator &> /dev/null; then
+            echo "Dependencies missing, installing default-jdk and verilator..."
+            sudo apt-get update
+            sudo apt-get install -y default-jdk verilator curl
+          else
+            echo "System dependencies (Java, Verilator) are already installed."
+          fi
+
+      - name: Check and Install Mill
+        run: |
+          if [ ! -f "mill" ]; then
+            echo "Mill not found in workspace, downloading..."
+            curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7-assembly -o mill
+            chmod +x mill
+          else
+            echo "Mill is already present."
+          fi
+
+      - name: Run spinalML tests
+        run: ./mill spinalML.test
