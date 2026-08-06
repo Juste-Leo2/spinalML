@@ -4,19 +4,21 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
+import spinalML.memory.StreamDoubleBuffer
 
 /**
- * MatmulOp: Matrix-Vector multiplication using SRAM (Weight Stationary) + MAC architecture.
+ * MatmulOp: Matrix-Vector multiplication using Double-Buffering (Ping-Pong).
  * A is [M, K], B is [K, 1] (Vector). 
  * Output C is [M, 1].
- * For simplicity in hardware, B is loaded entirely into an internal memory (BRAM) first.
- * Then A streams in, and we compute the dot product for each row of A using MAC (Multiply-Accumulate).
+ * Option A implementation: B is loaded in tiles (tileSize). A is streamed in column-blocks.
  */
-case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int) extends Component {
+case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int, tileSize: Int = 1024) extends Component {
   val M = shapeA(0)
   val K = shapeA(1)
   require(shapeB(0) == K && shapeB(1) == 1, "Currently only Matrix-Vector multiplication is supported for simplicity")
   require(K % lanes == 0, "K dimension must be a multiple of lanes")
+  require(tileSize % lanes == 0, "tileSize must be a multiple of lanes")
+  require(K % tileSize == 0, "K dimension must be a multiple of tileSize")
   
   val io = new Bundle {
     val a = slave(Tensor(dataType, shapeA, lanes))
@@ -24,50 +26,50 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
     val c = master(Tensor(dataType, Seq(M, 1), lanes = 1)) // Output is a column vector, 1 element per cycle
   }
   
-  // 1. Internal Memory (SRAM) for matrix B (the weights)
-  val chunksB = K / lanes
-  val memB = Mem(Vec(dataType, lanes), chunksB)
+  val chunksTile = tileSize / lanes
+  
+  // 1. Double Buffer for weights B
+  val bufferB = StreamDoubleBuffer(dataType, tileSize, lanes)
+  bufferB.io.streamIn << io.b.stream
   
   // Counters for addressing
-  val writeCounterB = Counter(chunksB)
-  val readCounterA = Counter(chunksB)
+  val readCounterTile = Counter(chunksTile)
   
-  // Accumulator register for the MAC operation
-  val accumulator = Reg(dataType)
-  accumulator.init(accumulator.getZero)
-  // Needs to be cleared to 0 at the start of each row
+  // Accumulators for the MAC operation (Option A: M accumulators for partial sums)
+  val accumulators = Vec(Reg(dataType), M)
+  accumulators.foreach(acc => acc.init(acc.getZero.asInstanceOf[T]))
+  
+  val rowCounter = Counter(M)
+  val tileCounter = Counter(K / tileSize)
+  
+  // Wiring buffer
+  bufferB.io.readAddr := readCounterTile.value
+  bufferB.io.nextTile := False
   
   // Default values to avoid SpinalHDL "NO DRIVER" errors
   io.a.stream.ready := False
-  io.b.stream.ready := False
   io.c.stream.valid := False
   io.c.stream.payload(0).assignFromBits(B(0, widthOf(dataType) bits))
   
   // State Machine (FSM)
   val fsm = new StateMachine {
-    val stateLoadB: State = new State with EntryPoint {
+    val stateWaitTile: State = new State with EntryPoint {
       whenIsActive {
-        io.b.stream.ready := True
-        when(io.b.stream.valid) {
-          memB.write(writeCounterB.value, io.b.stream.payload)
-          writeCounterB.increment()
-          when(writeCounterB.willOverflowIfInc) {
-            goto(stateCompute)
-          }
+        when(bufferB.io.tileReady) {
+          goto(stateComputeTile)
         }
       }
     }
     
-    val stateCompute: State = new State {
+    val stateComputeTile: State = new State {
       whenIsActive {
         // We are ready to read A
         io.a.stream.ready := True
         
         // Read B from memory asynchronously for the MAC
-        val bData = memB.readAsync(readCounterA.value)
+        val bData = bufferB.io.readData
         
         when(io.a.stream.valid) {
-          readCounterA.increment()
           
           // MAC calculation (Multiply-Accumulate) for the current lane chunk
           var partialSum: Data = null
@@ -86,31 +88,49 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
             }
           }
           
-          // Accumulate
-          val nextAcc = (accumulator, partialSum) match {
+          // Accumulate with the current row's partial sum
+          val currentAcc = accumulators(rowCounter.value)
+          val nextAcc = (currentAcc, partialSum) match {
             case (acc: SInt, sum: SInt) => (acc + sum).resized.asInstanceOf[T]
             case (acc: UInt, sum: UInt) => (acc + sum).resized.asInstanceOf[T]
           }
-          accumulator := nextAcc
+          accumulators(rowCounter.value) := nextAcc
           
-          // When a row of A is completely processed (readCounterA overflows)
-          when(readCounterA.willOverflowIfInc) {
-            goto(stateOutput)
+          readCounterTile.increment()
+          when(readCounterTile.willOverflowIfInc) {
+            // End of tile for this row
+            rowCounter.increment()
+            when(rowCounter.willOverflowIfInc) {
+              // End of tile for ALL rows -> Next tile
+              bufferB.io.nextTile := True
+              tileCounter.increment()
+              when(tileCounter.willOverflowIfInc) {
+                // End of all tiles! Output result
+                goto(stateOutput)
+              } otherwise {
+                goto(stateWaitTile)
+              }
+            }
           }
         }
       }
     }
     
+    val outCounter = Counter(M)
+    
     val stateOutput: State = new State {
       whenIsActive {
-        // Output the accumulated result
+        // Output the accumulated results
         io.c.stream.valid := True
-        io.c.stream.payload(0) := accumulator
+        io.c.stream.payload(0) := accumulators(outCounter.value)
         
         when(io.c.stream.ready) {
-          // Result consumed, clear accumulator and go back to computing the next row
-          accumulator := accumulator.getZero
-          goto(stateCompute)
+          // Result consumed, clear accumulator and go to next
+          accumulators(outCounter.value) := accumulators(0).getZero.asInstanceOf[T]
+          outCounter.increment()
+          when(outCounter.willOverflowIfInc) {
+             goto(stateWaitTile)
+          }
         }
       }
     }
@@ -119,14 +139,14 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
 
 object matmul {
   /**
-   * Matrix-Vector multiplication using internal BRAM for weights.
+   * Matrix-Vector multiplication using Double Buffered BRAM for weights.
    */
-  def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], b: Tensor[T], tileSize: Int = 1024): Tensor[T] = {
     require(a.shape.length == 2 && b.shape.length == 2, "Matmul requires 2D tensors")
     require(a.shape(1) == b.shape(0), "Inner dimensions must match (A.cols == B.rows)")
     require(a.lanes == b.lanes, "Tensors must have the same lanes")
     
-    val matmulComp = MatmulOp(a.dataType, a.shape, b.shape, a.lanes)
+    val matmulComp = MatmulOp(a.dataType, a.shape, b.shape, a.lanes, tileSize)
     matmulComp.io.a <> a
     matmulComp.io.b <> b
     matmulComp.io.c
