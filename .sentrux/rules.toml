@@ -1,0 +1,26 @@
+[constraints]
+# Interdit les dépendances cycliques (très important pour une architecture maintenable)
+max_cycles = 0
+
+# Empêche la création de fichiers gigantesques ("God Files") qui concentrent trop de responsabilités
+no_god_files = true
+
+# Limite la complexité cyclomatique pour éviter le code "spaghetti" (25 est une bonne limite par défaut)
+max_cc = 25
+
+# Définit des couches pour vérifier le flux de dépendances
+[[layers]]
+name = "source"
+paths = ["spinalML/src/**"]
+order = 0
+
+[[layers]]
+name = "tests"
+paths = ["spinalML/test/**"]
+order = 1
+
+# Empêche explicitement le code de production de dépendre du code de test
+[[boundaries]]
+from = "spinalML/src/**"
+to = "spinalML/test/**"
+reason = "Le code source ne doit jamais dépendre du code de test"
