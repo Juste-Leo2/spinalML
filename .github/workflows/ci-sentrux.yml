@@ -15,19 +15,8 @@ jobs:
       - name: Check and Install sentrux
         run: |
           if ! command -v sentrux &> /dev/null; then
-            echo "sentrux not found, installing..."
-            # L'installation via le script officiel
-            curl -fsSL https://raw.githubusercontent.com/sentrux/sentrux/main/install.sh | sh
-            # Assure-toi que sentrux est dans le PATH (selon le comportement du script d'installation)
-            # En général il s'installe dans ~/.cargo/bin ou ~/.local/bin
-            if [ -d "$HOME/.cargo/bin" ]; then
-              echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-            elif [ -d "$HOME/.local/bin" ]; then
-              echo "$HOME/.local/bin" >> $GITHUB_PATH
-            fi
-            
-            # Autre option si on veut le rendre global (commenté pour l'instant)
-            # sudo curl -fsSL https://raw.githubusercontent.com/sentrux/sentrux/main/install.sh | sudo sh
+            echo "sentrux not found, installing globally..."
+            sudo curl -fsSL https://raw.githubusercontent.com/sentrux/sentrux/main/install.sh | sudo sh
           else
             echo "sentrux is already installed."
           fi
