@@ -3,16 +3,16 @@
 This document lists the machine learning operations that spinalML aims to support natively in hardware.
 
 ## Basic Arithmetic
-- [ ] `Add`: Element-wise addition of two tensors.
-- [ ] `Sub`: Element-wise subtraction of two tensors.
-- [ ] `Mul`: Element-wise multiplication of two tensors (Hadamard product).
+- [x] `Add`: Element-wise addition of two tensors.
+- [x] `Sub`: Element-wise subtraction of two tensors.
+- [x] `Mul`: Element-wise multiplication of two tensors (Hadamard product).
 - [ ] `Div`: Element-wise division of two tensors.
 - [ ] `Exp`: Element-wise exponential.
 - [ ] `Log`: Element-wise natural logarithm.
 - [ ] `Abs`: Element-wise absolute value.
 
 ## Matrix and Vector Operations
-- [ ] `MatMul`: Matrix multiplication of 2D tensors.
+- [x] `MatMul`: Matrix multiplication of 2D tensors (TODO: allow choosing accumulator data type).
 - [ ] `Dot`: Dot product of two 1D vectors.
 
 ## Tensor Manipulations

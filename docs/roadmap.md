@@ -10,9 +10,9 @@ This document outlines the development steps for the spinalML library. Developme
 - [ ] Test and validate memory access patterns and stream handshaking.
 
 ## 2. Basic Operations
-- [ ] Implement element-wise arithmetic (Addition, Subtraction, Multiplication).
+- [x] Implement element-wise arithmetic (Addition, Subtraction, Multiplication).
 - [ ] Implement scalar operations (Broadcast add/mul).
-- [ ] Implement basic Matrix Multiplication (MatMul).
+- [x] Implement basic Matrix Multiplication (MatMul). (TODO: allow choosing accumulator data type)
 - [ ] Implement Dot Product for 1D Tensors.
 - [ ] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
 
