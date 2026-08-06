@@ -12,7 +12,7 @@ import spinalML.memory.StreamDoubleBuffer
  * Output C is [M, 1].
  * Option A implementation: B is loaded in tiles (tileSize). A is streamed in column-blocks.
  */
-case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int, tileSize: Int = 1024) extends Component {
+case class MatmulOp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int, tileSize: Int = 1024) extends Component {
   val M = shapeA(0)
   val K = shapeA(1)
   require(shapeB(0) == K && shapeB(1) == 1, "Currently only Matrix-Vector multiplication is supported for simplicity")
@@ -23,7 +23,7 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
   val io = new Bundle {
     val a = slave(Tensor(dataType, shapeA, lanes))
     val b = slave(Tensor(dataType, shapeB, lanes))
-    val c = master(Tensor(dataType, Seq(M, 1), lanes = 1)) // Output is a column vector, 1 element per cycle
+    val c = master(Tensor(accType, Seq(M, 1), lanes = 1)) // Output is a column vector, 1 element per cycle
   }
   
   val chunksTile = tileSize / lanes
@@ -36,8 +36,8 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
   val readCounterTile = Counter(chunksTile)
   
   // Accumulators for the MAC operation (Option A: M accumulators for partial sums)
-  val accumulators = Vec(Reg(dataType), M)
-  accumulators.foreach(acc => acc.init(acc.getZero.asInstanceOf[T]))
+  val accumulators = Vec(Reg(accType), M)
+  accumulators.foreach(acc => acc.init(acc.getZero.asInstanceOf[TAcc]))
   
   val rowCounter = Counter(M)
   val tileCounter = Counter(K / tileSize)
@@ -49,7 +49,7 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
   // Default values to avoid SpinalHDL "NO DRIVER" errors
   io.a.stream.ready := False
   io.c.stream.valid := False
-  io.c.stream.payload(0).assignFromBits(B(0, widthOf(dataType) bits))
+  io.c.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
   
   // State Machine (FSM)
   val fsm = new StateMachine {
@@ -75,15 +75,15 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
           var partialSum: Data = null
           for (i <- 0 until lanes) {
             val mult = (io.a.stream.payload(i), bData(i)) match {
-              case (valA: SInt, valB: SInt) => (valA * valB).resized.asInstanceOf[T]
-              case (valA: UInt, valB: UInt) => (valA * valB).resized.asInstanceOf[T]
+              case (valA: SInt, valB: SInt) => (valA * valB).resized.asInstanceOf[TAcc]
+              case (valA: UInt, valB: UInt) => (valA * valB).resized.asInstanceOf[TAcc]
               case _ => throw new Exception("Type unsupported")
             }
             if (partialSum == null) partialSum = mult
             else {
               partialSum = (partialSum, mult) match {
-                case (p: SInt, m: SInt) => (p + m).resized.asInstanceOf[T]
-                case (p: UInt, m: UInt) => (p + m).resized.asInstanceOf[T]
+                case (p: SInt, m: SInt) => (p + m).resized.asInstanceOf[TAcc]
+                case (p: UInt, m: UInt) => (p + m).resized.asInstanceOf[TAcc]
               }
             }
           }
@@ -91,8 +91,8 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
           // Accumulate with the current row's partial sum
           val currentAcc = accumulators(rowCounter.value)
           val nextAcc = (currentAcc, partialSum) match {
-            case (acc: SInt, sum: SInt) => (acc + sum).resized.asInstanceOf[T]
-            case (acc: UInt, sum: UInt) => (acc + sum).resized.asInstanceOf[T]
+            case (acc: SInt, sum: SInt) => (acc + sum).resized.asInstanceOf[TAcc]
+            case (acc: UInt, sum: UInt) => (acc + sum).resized.asInstanceOf[TAcc]
           }
           accumulators(rowCounter.value) := nextAcc
           
@@ -126,7 +126,7 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
         
         when(io.c.stream.ready) {
           // Result consumed, clear accumulator and go to next
-          accumulators(outCounter.value) := accumulators(0).getZero.asInstanceOf[T]
+          accumulators(outCounter.value) := accumulators(0).getZero.asInstanceOf[TAcc]
           outCounter.increment()
           when(outCounter.willOverflowIfInc) {
              goto(stateWaitTile)
@@ -140,15 +140,24 @@ case class MatmulOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: 
 object matmul {
   /**
    * Matrix-Vector multiplication using Double Buffered BRAM for weights.
+   * Allows specifying a different accumulator type to prevent overflow.
    */
-  def apply[T <: Data](a: Tensor[T], b: Tensor[T], tileSize: Int = 1024): Tensor[T] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], tileSize: Int): Tensor[TAcc] = {
     require(a.shape.length == 2 && b.shape.length == 2, "Matmul requires 2D tensors")
     require(a.shape(1) == b.shape(0), "Inner dimensions must match (A.cols == B.rows)")
     require(a.lanes == b.lanes, "Tensors must have the same lanes")
     
-    val matmulComp = MatmulOp(a.dataType, a.shape, b.shape, a.lanes, tileSize)
+    val matmulComp = MatmulOp(a.dataType, accType, a.shape, b.shape, a.lanes, tileSize)
     matmulComp.io.a <> a
     matmulComp.io.b <> b
     matmulComp.io.c
   }
+
+  /**
+   * Helper where accumulator type defaults to input type.
+   */
+  def apply[T <: Data](a: Tensor[T], b: Tensor[T], tileSize: Int = 1024): Tensor[T] = {
+    apply(a, b, a.dataType, tileSize)
+  }
 }
+

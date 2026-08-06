@@ -12,7 +12,7 @@ This document outlines the development steps for the spinalML library. Developme
 ## 2. Basic Operations
 - [x] Implement element-wise arithmetic (Addition, Subtraction, Multiplication).
 - [ ] Implement scalar operations (Broadcast add/mul).
-- [x] Implement basic Matrix Multiplication (MatMul). (TODO: allow choosing accumulator data type, TODO: Implement Tiling/Double-Buffering system for large matrices)
+- [x] Implement basic Matrix Multiplication (MatMul). (Accumulator data type selection and Tiling/Double-Buffering system for large matrices are complete)
 - [ ] Implement Dot Product for 1D Tensors.
 - [ ] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
 
