@@ -18,7 +18,7 @@ This document outlines the development steps for the spinalML library. Developme
 
 ## 3. Advanced Operations
 - [x] Implement Dense (Linear) layers.
-- [ ] Implement Convolutional layers (1D and 2D).
+- [x] Implement Convolutional layers (1D and 2D) using `seq2col` and `im2col` strategies.
 - [ ] Implement Activation functions (ReLU, Sigmoid, Tanh).
 - [ ] Implement Pooling layers (MaxPool, AvgPool).
 - [ ] Implement Normalization layers (BatchNorm, LayerNorm).

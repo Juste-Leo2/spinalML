@@ -12,7 +12,7 @@ This document lists the machine learning operations that spinalML aims to suppor
 - [ ] `Abs`: Element-wise absolute value.
 
 ## Matrix and Vector Operations
-- [x] `MatMul`: Matrix multiplication of 2D tensors (TODO: allow choosing accumulator data type).
+- [x] `MatMul`: Matrix multiplication of 2D tensors.
 - [ ] `Dot`: Dot product of two 1D vectors.
 
 ## Tensor Manipulations
@@ -21,11 +21,13 @@ This document lists the machine learning operations that spinalML aims to suppor
 - [ ] `Concatenate`: Join a sequence of tensors along an existing axis.
 - [ ] `Slice`: Extract a subset of elements from a tensor.
 - [ ] `Flatten`: Flatten a multi-dimensional tensor into a 1D tensor.
+- [x] `Seq2Col`: Convert a 1D sequence into sliding windows.
+- [x] `Im2Col`: Convert a 2D image into sliding windows.
 
 ## Neural Network Layers
-- [ ] `Linear` (Dense): Fully connected layer applying a linear transformation to the incoming data.
-- [ ] `Conv1D`: 1D convolution over an input signal composed of several input planes.
-- [ ] `Conv2D`: 2D convolution over an input image composed of several input planes.
+- [x] `Linear` (Dense): Fully connected layer applying a linear transformation to the incoming data.
+- [x] `Conv1D`: 1D convolution over an input signal composed of several input planes.
+- [x] `Conv2D`: 2D convolution over an input image composed of several input planes.
 - [ ] `DepthwiseConv`: Depthwise separable convolution.
 
 ## Attention Mechanisms
