@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: [self-hosted, arm64, radxa]
+    strategy:
+      fail-fast: false
+      matrix:
+        test_group: [ops, layers, interfaces, examples, tensors, accelerator]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,4 +43,4 @@ jobs:
           JAVA_HOME: /usr/lib/jvm/default-java
           JAVA_OPTS: "-Xmx4G"
           MAKEFLAGS: "-j 2"
-        run: mill --no-server --disable-ticker spinalML.test
+        run: mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.${{ matrix.test_group }}.*"
