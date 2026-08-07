@@ -11,13 +11,13 @@ This document outlines the development steps for the spinalML library. Developme
 
 ## 2. Basic Operations
 - [x] Implement element-wise arithmetic (Addition, Subtraction, Multiplication).
-- [ ] Implement scalar operations (Broadcast add/mul).
+- [x] Implement scalar operations (Broadcast add/mul).
 - [x] Implement basic Matrix Multiplication (MatMul). (Accumulator data type selection and Tiling/Double-Buffering system for large matrices are complete)
 - [ ] Implement Dot Product for 1D Tensors.
 - [ ] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
 
 ## 3. Advanced Operations
-- [ ] Implement Dense (Linear) layers.
+- [x] Implement Dense (Linear) layers.
 - [ ] Implement Convolutional layers (1D and 2D).
 - [ ] Implement Activation functions (ReLU, Sigmoid, Tanh).
 - [ ] Implement Pooling layers (MaxPool, AvgPool).
