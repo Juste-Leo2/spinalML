@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test_group: [ops, layers, interfaces, examples, tensors, accelerator]
+        test_group: [ops, layers, interfaces, examples, tensors, accelerator, activations, poolings]
     steps:
       - uses: actions/checkout@v4
 

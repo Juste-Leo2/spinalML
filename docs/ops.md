@@ -36,16 +36,16 @@ This document lists the machine learning operations that spinalML aims to suppor
 - [ ] `Mamba2`: Advanced state space models for sequence processing.
 
 ## Activation Functions
-- [ ] `ReLU`: Rectified Linear Unit.
-- [ ] `LeakyReLU`: Leaky Rectified Linear Unit.
+- [x] `ReLU`: Rectified Linear Unit.
+- [x] `LeakyReLU`: Leaky Rectified Linear Unit.
 - [ ] `Sigmoid`: Sigmoid activation function.
 - [ ] `Tanh`: Hyperbolic tangent activation function.
 - [ ] `Softmax`: Softmax function (usually applied over the last dimension).
 
 ## Pooling Operations
-- [ ] `MaxPool1D`: 1D max pooling.
+- [x] `MaxPool1D`: 1D max pooling.
 - [ ] `MaxPool2D`: 2D max pooling.
-- [ ] `AvgPool1D`: 1D average pooling.
+- [x] `AvgPool1D`: 1D average pooling.
 - [ ] `AvgPool2D`: 2D average pooling.
 
 ## Normalization
