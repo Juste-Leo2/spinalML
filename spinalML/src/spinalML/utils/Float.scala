@@ -185,4 +185,51 @@ object Float {
     }
     
     c
-  }}
+  }
+
+  /**
+   * Hardware circuit to convert an SInt into a FloatML.
+   */
+  def fromSInt(inValue: SInt, expBits: Int, mantBits: Int): FloatML = {
+    val W = inValue.getBitsWidth
+    val c = FloatML(expBits, mantBits)
+    
+    // 1. Sign
+    c.sign := inValue < 0
+    
+    // 2. Absolute value
+    val absVal = inValue.abs
+    
+    // 3. Find leading zero (LZD)
+    val isZero = absVal === 0
+    val reversed = absVal.asBits.reversed
+    val lz = spinal.lib.OHToUInt(spinal.lib.OHMasking.first(reversed))
+    
+    val posSInt = S(W - 1, lz.getWidth + 2 bits) - lz.intoSInt
+    val expSInt = S(c.bias, expBits + 2 bits) + posSInt
+    
+    // 4. Align mantissa
+    val absValShiftedLeft = absVal << lz
+    
+    val paddingBits = math.max(0, mantBits + 1 - W)
+    val paddedVal = if(paddingBits > 0) (absValShiftedLeft @@ U(0, paddingBits bits)) else absValShiftedLeft
+    
+    val W_padded = W + paddingBits
+    val mantissa = paddedVal(W_padded - 2 downto W_padded - 1 - mantBits)
+    
+    // 5. Final assignment
+    when(isZero) {
+      c.exponent := 0
+      c.mantissa := 0
+      c.sign := False
+    } elsewhen(expSInt >= ((1 << expBits) - 1)) {
+      c.exponent := ((1 << expBits) - 1)
+      c.mantissa := 0
+    } otherwise {
+      c.exponent := expSInt.asUInt.resized
+      c.mantissa := mantissa
+    }
+    
+    c
+  }
+}

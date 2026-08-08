@@ -118,6 +118,40 @@ class FloatMathTest extends AnyFunSuite {
       testAdd(0.001f, 100.0f) // 100.0
     }
   }
+
+  test("Test Combinatorial SInt to BF16 Conversion") {
+    SimConfig.withWave.compile(FloatMathFromSIntTestComp()).doSim { dut =>
+      
+      def testFromSInt(value: Int): Unit = {
+        dut.a #= value
+        
+        sleep(1) // combinational delay
+        
+        val signC = if(dut.c.sign.toBoolean) 1 else 0
+        val expC = dut.c.exponent.toInt
+        val mantC = dut.c.mantissa.toInt
+        val bitsC = (signC << 15) | (expC << 7) | mantC
+        
+        val fC = BF16Sim.bf16BitsToFloat(bitsC)
+        val expected = value.toFloat
+        
+        val expectedBf16Bits = BF16Sim.floatToBf16Bits(expected)
+        val expectedBf16Float = BF16Sim.bf16BitsToFloat(expectedBf16Bits)
+        
+        assert(fC == expectedBf16Float, s"Failed for SInt $value. Expected $expectedBf16Float, got $fC")
+      }
+      
+      // Test cases
+      testFromSInt(5)
+      testFromSInt(-5)
+      testFromSInt(0)
+      testFromSInt(127)
+      testFromSInt(-128)
+      testFromSInt(1)
+      testFromSInt(-1)
+      testFromSInt(42)
+    }
+  }
 }
 
 // Component to test purely combinatorial addition
@@ -127,4 +161,12 @@ case class FloatMathAddTestComp() extends Component {
   val c = out(BF16())
   
   c := Float.add(a, b)
+}
+
+// Component to test combinatorial conversion from SInt to BF16
+case class FloatMathFromSIntTestComp() extends Component {
+  val a = in(SInt(8 bits))
+  val c = out(BF16())
+  
+  c := Float.fromSInt(a, 8, 7) // BF16 parameters
 }
