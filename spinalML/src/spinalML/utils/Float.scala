@@ -65,4 +65,124 @@ object Float {
     
     c
   }
-}
+
+  /**
+   * Generates a zero float.
+   */
+  def zero(expBits: Int, mantBits: Int): FloatML = {
+    val z = FloatML(expBits, mantBits)
+    z.sign := False
+    z.exponent := 0
+    z.mantissa := 0
+    z
+  }
+
+  /**
+   * Greater-Than comparison for FloatML.
+   */
+  def gt(a: FloatML, b: FloatML): Bool = {
+    require(a.expBits == b.expBits && a.mantBits == b.mantBits)
+    
+    val signGt = (a.sign === False) && (b.sign === True)
+    val signEq = a.sign === b.sign
+    
+    val magGt = (a.exponent > b.exponent) || ((a.exponent === b.exponent) && (a.mantissa > b.mantissa))
+    val negMagGt = (a.exponent < b.exponent) || ((a.exponent === b.exponent) && (a.mantissa < b.mantissa))
+    
+    val a_zero = a.exponent === 0
+    val b_zero = b.exponent === 0
+    
+    val res = Bool()
+    when(a_zero && b_zero) {
+      res := False
+    } elsewhen(a_zero) {
+      res := (b.sign === True)
+    } elsewhen(b_zero) {
+      res := (a.sign === False)
+    } otherwise {
+      res := signGt || (signEq && Mux(a.sign, negMagGt, magGt))
+    }
+    res
+  }
+
+  /**
+   * Returns the maximum of two FloatML values.
+   */
+  def max(a: FloatML, b: FloatML): FloatML = Mux(gt(a, b), a, b)
+
+  /**
+   * Hardware combinatorial circuit to add/subtract two FloatML types.
+   */
+  def add(a: FloatML, b: FloatML): FloatML = {
+    require(a.expBits == b.expBits && a.mantBits == b.mantBits)
+    val expBits = a.expBits
+    val mantBits = a.mantBits
+    val c = FloatML(expBits, mantBits)
+    
+    val a_zero = a.exponent === 0
+    val b_zero = b.exponent === 0
+    
+    // 1. Sort by magnitude
+    val magA_ge_magB = (a.exponent > b.exponent) || ((a.exponent === b.exponent) && (a.mantissa >= b.mantissa))
+    val larger = Mux(magA_ge_magB, a, b)
+    val smaller = Mux(magA_ge_magB, b, a)
+    val larger_zero = larger.exponent === 0
+    val smaller_zero = smaller.exponent === 0
+    
+    val expDiff = larger.exponent - smaller.exponent
+    
+    // Add implicit 1 to mantissas
+    val largerMant = Mux(larger_zero, U(0, (mantBits + 1) bits), (B"1" ## larger.mantissa).asUInt)
+    val smallerMant = Mux(smaller_zero, U(0, (mantBits + 1) bits), (B"1" ## smaller.mantissa).asUInt)
+    
+    // 2. Shift smaller mantissa to align
+    val guardBits = 3
+    val largerMantExt = largerMant @@ U(0, guardBits bits)
+    val smallerMantExt = smallerMant @@ U(0, guardBits bits)
+    
+    val maxShift = mantBits + guardBits + 2
+    val shiftAmount = Mux(expDiff > maxShift, U(maxShift), expDiff)
+    val smallerMantShifted = smallerMantExt >> shiftAmount
+    
+    // 3. Add or Subtract
+    val sameSign = larger.sign === smaller.sign
+    val subRes = largerMantExt - smallerMantShifted
+    val mantSumExt = Mux(sameSign,
+      largerMantExt +^ smallerMantShifted,  
+      subRes.resize(subRes.getWidth + 1)
+    )
+    
+    val W = mantBits + guardBits + 2 // Total width of mantSumExt
+    
+    // 4. Renormalize (Leading Zero Detection)
+    val reversed = mantSumExt.asBits.reversed
+    val lz = spinal.lib.OHToUInt(spinal.lib.OHMasking.first(reversed))
+    
+    val normalizedSumExt = mantSumExt << lz
+    val finalMantissa = normalizedSumExt(W - 2 downto W - 1 - mantBits)
+    
+    val expAdjustSInt = 1 - lz.intoSInt
+    val newExpSInt = larger.exponent.intoSInt + expAdjustSInt
+    
+    // 5. Pack result
+    c.sign := larger.sign
+    val sumIsZero = mantSumExt === 0
+    
+    when(a_zero && b_zero) {
+      c.exponent := 0
+      c.mantissa := 0
+      c.sign := False
+    } elsewhen(sumIsZero || newExpSInt <= 0) {
+      c.exponent := 0
+      c.mantissa := 0
+      c.sign := False
+    } elsewhen(newExpSInt >= ((1 << expBits) - 1)) {
+      c.exponent := ((1 << expBits) - 1)
+      c.mantissa := 0
+    } otherwise {
+      c.exponent := newExpSInt.asUInt.resized
+      c.mantissa := finalMantissa
+    }
+    
+    c
+  }}

@@ -21,6 +21,8 @@ case class ReLUOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int)
         io.y.stream.payload(i).assignFrom(Mux(valX < 0, zero, valX).asInstanceOf[T])
       case valX: UInt => 
         io.y.stream.payload(i).assignFrom(valX.asInstanceOf[T])
+      case valX: spinalML.dtypes.FloatML =>
+        io.y.stream.payload(i).assignFrom(Mux(valX.sign, spinalML.utils.Float.zero(valX.expBits, valX.mantBits), valX).asInstanceOf[T])
       case _ => 
         throw new Exception("Data type not supported for ReLU operation")
     }

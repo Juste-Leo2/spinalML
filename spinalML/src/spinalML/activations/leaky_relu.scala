@@ -19,6 +19,19 @@ case class LeakyReLUOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes:
         io.y.stream.payload(i).assignFrom(Mux(valX < 0, valX >> shift, valX).asInstanceOf[T])
       case valX: UInt => 
         io.y.stream.payload(i).assignFrom(valX.asInstanceOf[T])
+      case valX: spinalML.dtypes.FloatML =>
+        val neg = spinalML.dtypes.FloatML(valX.expBits, valX.mantBits)
+        neg.sign := True
+        neg.mantissa := valX.mantissa
+        val shiftedExp = valX.exponent.intoSInt - shift
+        when(shiftedExp <= 0 || valX.exponent === 0) {
+          neg.exponent := 0
+          neg.mantissa := 0
+          neg.sign := False
+        } otherwise {
+          neg.exponent := shiftedExp.asUInt.resized
+        }
+        io.y.stream.payload(i).assignFrom(Mux(valX.sign, neg, valX).asInstanceOf[T])
       case _ => 
         throw new Exception("Data type not supported for LeakyReLU operation")
     }

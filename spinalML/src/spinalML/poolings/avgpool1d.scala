@@ -40,6 +40,23 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
         acc = acc + shiftReg(i).asInstanceOf[UInt].resize(dataType.getBitsWidth + shift)
       }
       io.c.stream.payload(0).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
+    case f: spinalML.dtypes.FloatML =>
+      var acc = shiftReg(0).asInstanceOf[spinalML.dtypes.FloatML]
+      for (i <- 1 until poolSize) {
+        acc = spinalML.utils.Float.add(acc, shiftReg(i).asInstanceOf[spinalML.dtypes.FloatML])
+      }
+      val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
+      avg.sign := acc.sign
+      avg.mantissa := acc.mantissa
+      val shiftedExp = acc.exponent.intoSInt - shift
+      when(shiftedExp <= 0 || acc.exponent === 0) {
+        avg.exponent := 0
+        avg.mantissa := 0
+        avg.sign := False
+      } otherwise {
+        avg.exponent := shiftedExp.asUInt.resized
+      }
+      io.c.stream.payload(0).assignFrom(avg.asInstanceOf[T])
     case _ => 
       throw new Exception("Data type not supported for AvgPool")
   }

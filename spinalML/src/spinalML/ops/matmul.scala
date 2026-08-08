@@ -77,6 +77,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: Har
             val mult = (io.a.stream.payload(i), bData(i)) match {
               case (valA: SInt, valB: SInt) => (valA * valB).resized.asInstanceOf[TAcc]
               case (valA: UInt, valB: UInt) => (valA * valB).resized.asInstanceOf[TAcc]
+              case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => spinalML.utils.Float.mul(valA, valB).asInstanceOf[TAcc]
               case _ => throw new Exception("Type unsupported")
             }
             if (partialSum == null) partialSum = mult
@@ -84,6 +85,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: Har
               partialSum = (partialSum, mult) match {
                 case (p: SInt, m: SInt) => (p + m).resized.asInstanceOf[TAcc]
                 case (p: UInt, m: UInt) => (p + m).resized.asInstanceOf[TAcc]
+                case (p: spinalML.dtypes.FloatML, m: spinalML.dtypes.FloatML) => spinalML.utils.Float.add(p, m).asInstanceOf[TAcc]
               }
             }
           }
@@ -93,6 +95,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: Har
           val nextAcc = (currentAcc, partialSum) match {
             case (acc: SInt, sum: SInt) => (acc + sum).resized.asInstanceOf[TAcc]
             case (acc: UInt, sum: UInt) => (acc + sum).resized.asInstanceOf[TAcc]
+            case (acc: spinalML.dtypes.FloatML, sum: spinalML.dtypes.FloatML) => spinalML.utils.Float.add(acc, sum).asInstanceOf[TAcc]
           }
           accumulators(rowCounter.value) := nextAcc
           

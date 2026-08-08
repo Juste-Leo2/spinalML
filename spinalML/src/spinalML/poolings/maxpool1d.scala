@@ -34,6 +34,9 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
       case valA: UInt =>
         val valB = shiftReg(i).asInstanceOf[UInt]
         currentMax = Mux(valA > valB, valA, valB).asInstanceOf[T]
+      case valA: spinalML.dtypes.FloatML =>
+        val valB = shiftReg(i).asInstanceOf[spinalML.dtypes.FloatML]
+        currentMax = spinalML.utils.Float.max(valA, valB).asInstanceOf[T]
       case _ =>
         throw new Exception("Data type not supported for MaxPool")
     }

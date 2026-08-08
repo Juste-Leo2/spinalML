@@ -21,6 +21,7 @@ case class AddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     (io.a.stream.payload(i), io.b.stream.payload(i)) match {
       case (valA: SInt, valB: SInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
       case (valA: UInt, valB: UInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
+      case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => io.c.stream.payload(i).assignFrom(spinalML.utils.Float.add(valA, valB).asInstanceOf[T])
       case _ => throw new Exception("Type de donnée non supporté pour l'opération add")
     }
   }
