@@ -11,7 +11,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test_group: [ops, layers, interfaces, examples, tensors, accelerator, activations, poolings]
+        test_group: [
+          "ops",
+          "layers",
+          "examples",
+          "activations poolings",
+          "accelerator interfaces tensors"
+        ]
     steps:
       - uses: actions/checkout@v4
 
@@ -25,16 +31,14 @@ jobs:
             echo "System dependencies (Java, Verilator) are already installed."
           fi
 
-
-
-      - name: Check and Install Mill
+      - name: Check and install Mill
         run: |
           if ! command -v mill &> /dev/null; then
-            echo "Mill not found in PATH, installing globally..."
-            sudo curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7-assembly -o /usr/local/bin/mill
+            echo "Mill is not installed. Installing..."
+            sudo curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7 > /usr/local/bin/mill
             sudo chmod +x /usr/local/bin/mill
           else
-            echo "Mill is already installed globally."
+            echo "Mill is already installed."
           fi
 
       - name: Run spinalML tests
@@ -44,26 +48,29 @@ jobs:
           JAVA_OPTS: "-Xmx8G"
           MAKEFLAGS: "-j 1"
         run: |
-          GROUP="${{ matrix.test_group }}"
-          echo "Starting sequential tests for group: $GROUP"
-          
-          # Find all .scala files in the group directory
-          TEST_FILES=$(find spinalML/test/src/spinalML/$GROUP -name "*.scala")
+          GROUPS="${{ matrix.test_group }}"
+          echo "Starting sequential tests for groups: $GROUPS"
           
           # Ensure script stops if any test fails
           set -e
           
-          for FILE in $TEST_FILES; do
-            # Extract class name from file name
-            CLASS_NAME=$(basename "$FILE" .scala)
+          for GRP in $GROUPS; do
+            echo ">>> Processing directory: spinalML/test/src/spinalML/$GRP"
+            # Find all .scala files in the current group directory
+            TEST_FILES=$(find spinalML/test/src/spinalML/$GRP -name "*.scala")
             
-            echo "=========================================================="
-            echo "Running test on LITTLE cores: spinalML.$GROUP.$CLASS_NAME"
-            echo "=========================================================="
-            
-            # Run specifically this test class restricted to cores 0, 1, 2, 3 (LITTLE cores)
-            taskset -c 0,1,2,3 mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GROUP.$CLASS_NAME"
-            
-            echo "Cooling down for 1 second..."
-            sleep 1
+            for FILE in $TEST_FILES; do
+              # Extract class name from file name
+              CLASS_NAME=$(basename "$FILE" .scala)
+              
+              echo "=========================================================="
+              echo "Running test on LITTLE cores: spinalML.$GRP.$CLASS_NAME"
+              echo "=========================================================="
+              
+              # Run specifically this test class restricted to cores 0, 1, 2, 3 (LITTLE cores)
+              taskset -c 0,1,2,3 mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GRP.$CLASS_NAME"
+              
+              echo "Cooling down for 1 second..."
+              sleep 1
+            done
           done
