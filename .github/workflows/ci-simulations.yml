@@ -42,5 +42,5 @@ jobs:
           COURSIER_JVM: system
           JAVA_HOME: /usr/lib/jvm/default-java
           JAVA_OPTS: "-Xmx4G"
-          MAKEFLAGS: "-j 2"
+          MAKEFLAGS: "-j 1"
         run: mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.${{ matrix.test_group }}.*"
