@@ -41,6 +41,29 @@ jobs:
         env:
           COURSIER_JVM: system
           JAVA_HOME: /usr/lib/jvm/default-java
-          JAVA_OPTS: "-Xmx4G"
-          MAKEFLAGS: "-j 4"
-        run: mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.${{ matrix.test_group }}.*"
+          JAVA_OPTS: "-Xmx8G"
+          MAKEFLAGS: "-j 1"
+        run: |
+          GROUP="${{ matrix.test_group }}"
+          echo "Starting sequential tests for group: $GROUP"
+          
+          # Find all .scala files in the group directory
+          TEST_FILES=$(find spinalML/test/src/spinalML/$GROUP -name "*.scala")
+          
+          # Ensure script stops if any test fails
+          set -e
+          
+          for FILE in $TEST_FILES; do
+            # Extract class name from file name
+            CLASS_NAME=$(basename "$FILE" .scala)
+            
+            echo "=========================================================="
+            echo "Running test: spinalML.$GROUP.$CLASS_NAME"
+            echo "=========================================================="
+            
+            # Run specifically this test class
+            mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GROUP.$CLASS_NAME"
+            
+            echo "Cooling down for 5 seconds..."
+            sleep 5
+          done
