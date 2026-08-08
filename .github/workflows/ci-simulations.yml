@@ -48,13 +48,13 @@ jobs:
           JAVA_OPTS: "-Xmx8G"
           MAKEFLAGS: "-j 1"
         run: |
-          GROUPS="${{ matrix.test_group }}"
-          echo "Starting sequential tests for groups: $GROUPS"
+          TARGET_GROUPS="${{ matrix.test_group }}"
+          echo "Starting sequential tests for groups: $TARGET_GROUPS"
           
           # Ensure script stops if any test fails
           set -e
           
-          for GRP in $GROUPS; do
+          for GRP in $TARGET_GROUPS; do
             echo ">>> Processing directory: spinalML/test/src/spinalML/$GRP"
             # Find all .scala files in the current group directory
             TEST_FILES=$(find spinalML/test/src/spinalML/$GRP -name "*.scala")
