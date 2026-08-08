@@ -21,6 +21,7 @@ case class MulOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     (io.a.stream.payload(i), io.b.stream.payload(i)) match {
       case (valA: SInt, valB: SInt) => payloadResult(i).assignFrom((valA * valB).resized.asInstanceOf[T])
       case (valA: UInt, valB: UInt) => payloadResult(i).assignFrom((valA * valB).resized.asInstanceOf[T])
+      case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => payloadResult(i).assignFrom(spinalML.utils.Float.mul(valA, valB).asInstanceOf[T])
       case _ => throw new Exception("Data type not supported for mul operation")
     }
   }
