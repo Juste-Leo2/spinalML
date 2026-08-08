@@ -58,12 +58,12 @@ jobs:
             CLASS_NAME=$(basename "$FILE" .scala)
             
             echo "=========================================================="
-            echo "Running test: spinalML.$GROUP.$CLASS_NAME"
+            echo "Running test on LITTLE cores: spinalML.$GROUP.$CLASS_NAME"
             echo "=========================================================="
             
-            # Run specifically this test class
-            mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GROUP.$CLASS_NAME"
+            # Run specifically this test class restricted to cores 0, 1, 2, 3 (LITTLE cores)
+            taskset -c 0,1,2,3 mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GROUP.$CLASS_NAME"
             
-            echo "Cooling down for 5 seconds..."
-            sleep 5
+            echo "Cooling down for 1 second..."
+            sleep 1
           done
