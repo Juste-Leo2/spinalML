@@ -16,11 +16,11 @@ This document lists the machine learning operations that spinalML aims to suppor
 - [ ] `Dot`: Dot product of two 1D vectors.
 
 ## Tensor Manipulations
-- [ ] `Reshape`: Change the dimensions of a tensor without changing its data.
-- [ ] `Transpose`: Permute the dimensions of a tensor.
-- [ ] `Concatenate`: Join a sequence of tensors along an existing axis.
-- [ ] `Slice`: Extract a subset of elements from a tensor.
-- [ ] `Flatten`: Flatten a multi-dimensional tensor into a 1D tensor.
+- [x] `Reshape`: Change the dimensions of a tensor without changing its data.
+- [x] `Transpose`: Permute the dimensions of a tensor.
+- [x] `Concatenate`: Join a sequence of tensors along an existing axis.
+- [x] `Slice`: Extract a subset of elements from a tensor.
+- [x] `Flatten`: Flatten a multi-dimensional tensor into a 1D tensor.
 - [x] `Seq2Col`: Convert a 1D sequence into sliding windows.
 - [x] `Im2Col`: Convert a 2D image into sliding windows.
 
