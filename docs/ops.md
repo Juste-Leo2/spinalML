@@ -12,9 +12,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 - [x] `Sub`: Element-wise subtraction of two tensors.
 - [x] `Mul`: Element-wise multiplication of two tensors (Hadamard product).
 - [ ] `Div`: Element-wise division of two tensors.
-- [ ] `Exp`: Element-wise exponential.
+- [x] `Exp`: Element-wise exponential. *(Requires BRAM for LUT)*
 - [ ] `Log`: Element-wise natural logarithm.
-- [ ] `Abs`: Element-wise absolute value.
+- [x] `Abs`: Element-wise absolute value.
 
 ## Matrix and Vector Operations
 - [x] `MatMul`: Matrix multiplication of 2D tensors. *(Requires BRAM)*

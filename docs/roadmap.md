@@ -23,3 +23,8 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] Implement Pooling layers (MaxPool, AvgPool).
 - [ ] Implement Normalization layers (BatchNorm, LayerNorm).
 - [ ] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
+
+## 4. System Integration & Advanced Improvements (Future Work)
+- [ ] **AXI-DMA Integration**: Develop or integrate a top-level controller to feed AXI4-Stream interfaces directly from external DDR memory.
+- [ ] **Advanced Tiling (Matrix A)**: Implement a Write-Back module and advanced tiling logic for massive matrices where partial sums cannot fit entirely in the on-chip accumulators.
+- [ ] **Dynamic Padding**: Add hardware or software-side logic to support tensor dimensions that are not perfect multiples of the `lanes` or `tileSize` parameters.
