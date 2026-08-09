@@ -14,11 +14,11 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Sub` | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
 | `Div` | ❌ | ❌ | ❌ | ❌ | Element-wise division of two tensors. |
-| `Exp` | ✅ (LUT) | ❌ (PWL) | ✅ (LUT) | ❌ (PWL) | Element-wise exponential. |
+| `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Element-wise exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
 | `sqrt`| ❌ | ❌ | ❌ | ❌ | Square Root. |
-| `rsqrt` | ✅ (LUT) | ❌ (PWL) | ✅ (LUT) | ❌ (PWL) | Inverse Square Root (1/sqrt(x)). |
+| `rsqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Inverse Square Root (1/sqrt(x)). |
 | `scale_add` | ✅ | ✅ | ✅ | ✅ | Fast Fused MAC (A*X + B). Mapped to DSP48. |
 
 ## Matrix and Vector Operations
@@ -66,7 +66,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). |
-| `LayerNorm1D` | ✅ | ❌ | ✅ | ❌ | Uses Adder Tree for Mean/Var and LUT for Rsqrt. |
+| `LayerNorm1D` | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/PWL for Rsqrt. |
 
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Notes |

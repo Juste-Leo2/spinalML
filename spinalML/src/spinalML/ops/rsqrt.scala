@@ -26,8 +26,26 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
   } else {
-    // Passthrough for larger types (BF16, I32) pending Piece-Wise Linear (PWL)
-    io.c <> io.a
+    // PWL Approximation for BF16/FP16/I16/I32
+    val indexBits = 8
+    val numSegments = 1 << indexBits
+    val isFloat = dataType().isInstanceOf[FloatML]
+    
+    val segmentIndexFn: T => UInt = (x: T) => {
+      x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
+    }
+    
+    val (expBits, mantBits) = if (isFloat) {
+      val f = dataType().asInstanceOf[FloatML]
+      (f.expBits, f.mantBits)
+    } else (0, 0)
+    
+    val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-5)
+    val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, isFloat, expBits, mantBits, indexBits, mathFn)
+    
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    pwlOp.io.a <> io.a
+    io.c <> pwlOp.io.c
   }
 }
 

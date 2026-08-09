@@ -23,4 +23,12 @@ class RsqrtTest extends AnyFunSuite {
   test("Rsqrt LUT compilation on FP4") {
     SpinalConfig().generateVerilog(RsqrtTestComp(FP4_E2M1()))
   }
+
+  test("Rsqrt PWL compilation on I16") {
+    SpinalConfig().generateVerilog(RsqrtTestComp(spinalML.dtypes.I16()))
+  }
+
+  test("Rsqrt PWL compilation on BF16") {
+    SpinalConfig().generateVerilog(RsqrtTestComp(spinalML.dtypes.BF16()))
+  }
 }

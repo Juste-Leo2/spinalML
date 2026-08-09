@@ -33,54 +33,184 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   
   val runMode = state === 2
   
-  // =========================================================================
-  // PIPELINE ARCHITECTURE SKELETON
-  // In a real implementation, calculating Mean and Variance across 1024 channels
-  // requires a pipelined Adder Tree to meet timing. 
-  // We use a passthrough placeholder here to establish the architectural flow.
-  // =========================================================================
+  require(isPow2(channels), "Channels must be a power of 2 for division by shift")
   
+  // Helper Math Functions
+  def add(a: T, b: T): T = (a, b) match {
+    case (vx: SInt, va: SInt) => (vx + va).resized.asInstanceOf[T]
+    case (vx: UInt, va: UInt) => (vx + va).resized.asInstanceOf[T]
+    case (vx: FloatML, va: FloatML) => spinalML.utils.Float.add(vx, va).asInstanceOf[T]
+    case _ => throw new Exception("Unsupported type")
+  }
+
+  def sub(a: T, b: T): T = (a, b) match {
+    case (vx: SInt, va: SInt) => (vx - va).resized.asInstanceOf[T]
+    case (vx: UInt, va: UInt) => (vx - va).resized.asInstanceOf[T]
+    case (vx: FloatML, va: FloatML) => 
+        val negB = FloatML(va.expBits, va.mantBits)
+        negB.sign := !va.sign
+        negB.exponent := va.exponent
+        negB.mantissa := va.mantissa
+        spinalML.utils.Float.add(vx, negB).asInstanceOf[T]
+    case _ => throw new Exception("Unsupported type")
+  }
+
+  def mul(a: T, b: T): T = (a, b) match {
+    case (vx: SInt, va: SInt) => (vx * va).resized.asInstanceOf[T]
+    case (vx: UInt, va: UInt) => (vx * va).resized.asInstanceOf[T]
+    case (vx: FloatML, va: FloatML) => spinalML.utils.Float.mul(vx, va).asInstanceOf[T]
+    case _ => throw new Exception("Unsupported type")
+  }
+
+  def divN(a: T, N: Int): T = a match {
+    case (vx: SInt) => (vx / N).resized.asInstanceOf[T]
+    case (vx: UInt) => (vx / N).resized.asInstanceOf[T]
+    case (vx: FloatML) => 
+        val res = FloatML(vx.expBits, vx.mantBits)
+        res.sign := vx.sign
+        res.mantissa := vx.mantissa
+        val logN = spinal.core.log2Up(N)
+        val expSInt = vx.exponent.intoSInt - logN
+        when(vx.exponent === 0 || expSInt <= 0) {
+            res.exponent := 0
+            res.mantissa := 0
+            res.sign := False
+        } otherwise {
+            res.exponent := expSInt.asUInt.resized
+        }
+        res.asInstanceOf[T]
+    case _ => throw new Exception("Unsupported type")
+  }
+
+  // Generic Pipelined Adder Tree that carries an arbitrary payload `carry`
+  def buildPipelinedTree[C <: Data](
+    inputStream: Stream[Vec[T]], 
+    carryStream: Stream[C],
+    addFn: (T, T) => T
+  ): (Stream[T], Stream[C]) = {
+    
+    // Combine input and carry into a single stream
+    case class StageBundle(len: Int) extends Bundle {
+      val sums = Vec(dataType(), len)
+      val carry = cloneOf(carryStream.payload)
+    }
+    var currentStream = Stream(StageBundle(inputStream.payload.length))
+    
+    currentStream.valid := inputStream.valid && carryStream.valid
+    inputStream.ready := currentStream.ready && carryStream.valid
+    carryStream.ready := currentStream.ready && inputStream.valid
+    currentStream.payload.sums := inputStream.payload
+    currentStream.payload.carry := carryStream.payload
+    
+    var currentLen = inputStream.payload.length
+    
+    while(currentLen > 1) {
+      val nextLen = (currentLen + 1) / 2
+      val nextStream = Stream(StageBundle(nextLen))
+      
+      val nextSums = Vec(dataType, nextLen)
+      for (i <- 0 until currentLen / 2) {
+         nextSums(i) := addFn(currentStream.payload.sums(2*i), currentStream.payload.sums(2*i+1))
+      }
+      if (currentLen % 2 != 0) {
+         nextSums(nextLen - 1) := currentStream.payload.sums(currentLen - 1)
+      }
+      
+      nextStream.valid := currentStream.valid
+      currentStream.ready := nextStream.ready
+      nextStream.payload.sums := nextSums
+      nextStream.payload.carry := currentStream.payload.carry
+      
+      currentStream = nextStream.m2sPipe()
+      currentLen = nextLen
+    }
+    
+    val outSum = Stream(dataType)
+    val outCarry = Stream(carryStream.payloadType)
+    
+    outSum.valid := currentStream.valid
+    outCarry.valid := currentStream.valid
+    currentStream.ready := outSum.ready && outCarry.ready
+    
+    outSum.payload := currentStream.payload.sums(0)
+    outCarry.payload := currentStream.payload.carry
+    
+    (outSum, outCarry)
+  }
+
   val pipelinedX = io.x.stream.m2sPipe()
   
-  // 1. Calculate Mean (Placeholder)
-  val mean = pipelinedX.payload(0) // Dummy
+  // Fork pipelinedX because buildPipelinedTree expects two separate streams
+  val (pipelinedX1, pipelinedX2) = StreamFork2(pipelinedX)
   
-  // 2. Calculate Variance (Placeholder)
-  val variance = pipelinedX.payload(0) // Dummy
+  // 1. Calculate Mean (mu)
+  val (sumStream, carryXStream) = buildPipelinedTree(pipelinedX1, pipelinedX2, add)
   
-  // 3. Rsqrt using our LUT infrastructure
-  // We instantiate RsqrtOp manually for the single variance value
+  val muStream = sumStream.translateWith(divN(sumStream.payload, channels))
+  
+  // 2. Calculate Variance (sigma^2)
+  // First, calculate (x - mu) for each channel
+  case class DiffBundle() extends Bundle {
+    val diffs = Vec(dataType(), channels)
+    val origDiffs = Vec(dataType(), channels)
+  }
+  val diffStream = Stream(DiffBundle())
+  
+  diffStream.valid := muStream.valid && carryXStream.valid
+  muStream.ready := diffStream.ready && carryXStream.valid
+  carryXStream.ready := diffStream.ready && muStream.valid
+  
+  for(i <- 0 until channels) {
+    val x = carryXStream.payload(i)
+    val mu = muStream.payload
+    val diff = sub(x, mu)
+    diffStream.payload.diffs(i) := mul(diff, diff) // (x - mu)^2
+    diffStream.payload.origDiffs(i) := diff // carry (x - mu)
+  }
+  
+  val diffPipe = diffStream.m2sPipe()
+  val (diffPipe1, diffPipe2) = StreamFork2(diffPipe)
+  
+  val diffsOnly = diffPipe1.translateWith(diffPipe1.payload.diffs)
+  val origDiffsOnly = diffPipe2.translateWith(diffPipe2.payload.origDiffs)
+  
+  val (varSumStream, carryDiffsStream) = buildPipelinedTree(diffsOnly, origDiffsOnly, add)
+  val varStream = varSumStream.translateWith(divN(varSumStream.payload, channels))
+  
+  // 3. Rsqrt(sigma^2)
   val rsqrtComp = spinalML.ops.RsqrtOp(dataType, Seq(1), lanes = 1)
   
-  // Create a stream for the variance
-  val varStream = Stream(Vec(dataType, 1))
-  varStream.valid := pipelinedX.valid
-  varStream.payload(0) := variance
-  rsqrtComp.io.a.stream << varStream
+  val varVecStream = Stream(Vec(dataType, 1))
+  varVecStream.valid := varStream.valid
+  varVecStream.payload(0) := varStream.payload
+  varStream.ready := varVecStream.ready
   
-  val invStdDev = rsqrtComp.io.c.stream
-  pipelinedX.ready := invStdDev.ready
+  rsqrtComp.io.a.stream << varVecStream
+  val invStdDevStream = rsqrtComp.io.c.stream
   
   // 4. Final Normalization & ScaleAdd
-  // y = (x - mean) * invStdDev * gamma + beta
+  // y_i = (x_i - mu) * invStdDev * gamma_i + beta_i
   val outPayload = Vec(dataType, channels)
+  
+  // Synchronize invStdDevStream and carryDiffsStream
+  val finalSyncValid = invStdDevStream.valid && carryDiffsStream.valid
+  invStdDevStream.ready := io.y.stream.ready && carryDiffsStream.valid
+  carryDiffsStream.ready := io.y.stream.ready && invStdDevStream.valid
+  
   for (i <- 0 until channels) {
-    // Dummy math for skeleton: y_i = x_i + gamma_i
-    val px = pipelinedX.payload(i)
-    val pa = gammaReg(i)
+    val diff = carryDiffsStream.payload(i) // (x - mu)
+    val invStdDev = invStdDevStream.payload(0)
+    val gamma = gammaReg(i)
+    val beta = betaReg(i)
     
-    (px, pa) match {
-      case (vx: SInt, va: SInt) => outPayload(i).assignFrom((vx + va).resized.asInstanceOf[T])
-      case (vx: UInt, va: UInt) => outPayload(i).assignFrom((vx + va).resized.asInstanceOf[T])
-      case (vx: FloatML, va: FloatML) => outPayload(i).assignFrom(vx.asInstanceOf[T]) // Dummy
-      case _ => throw new Exception("Unsupported data type")
-    }
+    val norm = mul(diff, invStdDev)
+    val scaled = mul(norm, gamma)
+    outPayload(i) := add(scaled, beta)
   }
   
   val outStream = Stream(Vec(dataType, channels))
-  outStream.valid := invStdDev.valid
+  outStream.valid := finalSyncValid
   outStream.payload := outPayload
-  invStdDev.ready := outStream.ready
   
   io.y.stream << outStream.m2sPipe()
 }

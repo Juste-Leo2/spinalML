@@ -23,4 +23,12 @@ class ExpTest extends AnyFunSuite {
   test("Exp LUT compilation on FP4") {
     SpinalConfig().generateVerilog(ExpTestComp(FP4_E2M1()))
   }
+
+  test("Exp PWL compilation on I16") {
+    SpinalConfig().generateVerilog(ExpTestComp(spinalML.dtypes.I16()))
+  }
+
+  test("Exp PWL compilation on BF16") {
+    SpinalConfig().generateVerilog(ExpTestComp(spinalML.dtypes.BF16()))
+  }
 }

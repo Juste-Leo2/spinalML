@@ -21,11 +21,19 @@ case class LayerNormTestComp[T <: Data](dataType: HardType[T]) extends Component
 }
 
 class LayerNormTest extends AnyFunSuite {
-  test("LayerNorm1D skeleton compilation on I4") {
+  test("LayerNorm1D compilation on I4") {
     SpinalConfig().generateVerilog(LayerNormTestComp(I4()))
   }
 
-  test("LayerNorm1D skeleton compilation on FP4") {
+  test("LayerNorm1D compilation on FP4") {
     SpinalConfig().generateVerilog(LayerNormTestComp(FP4_E2M1()))
+  }
+
+  test("LayerNorm1D PWL compilation on I16") {
+    SpinalConfig().generateVerilog(LayerNormTestComp(spinalML.dtypes.I16()))
+  }
+
+  test("LayerNorm1D PWL compilation on BF16") {
+    SpinalConfig().generateVerilog(LayerNormTestComp(spinalML.dtypes.BF16()))
   }
 }

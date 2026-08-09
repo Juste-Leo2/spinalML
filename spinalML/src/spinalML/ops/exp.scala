@@ -27,9 +27,26 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
   } else {
-    // PWL Approximation for BF16/I32
-    // TODO: Full PWL datapath. For now, passthrough to allow compilation.
-    io.c <> io.a
+    // PWL Approximation for BF16/FP16/I16/I32
+    val indexBits = 8
+    val numSegments = 1 << indexBits
+    val isFloat = dataType().isInstanceOf[FloatML]
+    
+    val segmentIndexFn: T => UInt = (x: T) => {
+      x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
+    }
+    
+    val (expBits, mantBits) = if (isFloat) {
+      val f = dataType().asInstanceOf[FloatML]
+      (f.expBits, f.mantBits)
+    } else (0, 0)
+    
+    val mathFn = Math.exp _
+    val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, isFloat, expBits, mantBits, indexBits, mathFn)
+    
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    pwlOp.io.a <> io.a
+    io.c <> pwlOp.io.c
   }
 }
 
