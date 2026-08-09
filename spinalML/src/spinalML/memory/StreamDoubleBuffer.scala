@@ -38,9 +38,13 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
   
   // Compute Bank Output Logic
   io.tileReady := (computeBank === False) ? pingFull | pongFull
-  val readDataPing = memPing.readAsync(io.readAddr)
-  val readDataPong = memPong.readAsync(io.readAddr)
-  io.readData := (computeBank === False) ? readDataPing | readDataPong
+  val readDataPing = memPing.readSync(io.readAddr)
+  val readDataPong = memPong.readSync(io.readAddr)
+  
+  // Since readSync adds 1 cycle latency, we should also delay the bank selection signal
+  // by 1 cycle to ensure we read from the correct bank.
+  val computeBankDelayed = RegNext(computeBank)
+  io.readData := (computeBankDelayed === False) ? readDataPing | readDataPong
   
   // Load Process Logic
   val loadCounter = Counter(memSize)

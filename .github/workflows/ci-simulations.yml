@@ -16,7 +16,7 @@ jobs:
           "layers",
           "examples",
           "activations poolings",
-          "accelerator interfaces tensors"
+          "accelerator interfaces tensors dtypes memory"
         ]
     steps:
       - uses: actions/checkout@v4
