@@ -5,7 +5,7 @@ This document outlines the development steps for the spinalML library. Developme
 ## 1. Tensor Management and Data Flows
 - [x] Define foundational data types (e.g., fixed-point (I8), floating-point (BF16, FP8)).
 - [x] Implement the base Tensor hardware representation in SpinalHDL.
-- [x] Create memory management and addressing logic for Tensors.
+- [x] Create memory management and addressing logic for Tensors (Enforcing BRAM inference via `readSync` for large buffers).
 - [x] Implement data flow interfaces (like AXI-Stream) for input and output data streaming.
 - [x] Test and validate memory access patterns and stream handshaking.
 

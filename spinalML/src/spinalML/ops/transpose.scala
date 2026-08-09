@@ -7,7 +7,6 @@ import spinalML.tensors.Tensor
 
 // Transpose 2D tensor [M, N] to [N, M]
 // Assumes input stream provides elements row by row
-// Uses a memory block (LUTRAM/BRAM) to buffer the elements
 case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: Int) extends Component {
   require(M > 0 && N > 0, "Dimensions must be > 0")
   require((M * N) % lanes == 0, "Total elements must be multiple of lanes")
@@ -25,14 +24,23 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
   val readRow = Reg(UInt(log2Up(M) bits)) init(0)
   val readCol = Reg(UInt(log2Up(N) bits)) init(0)
   
-  val readAddr = (readRow * N) + readCol
-  
   io.a.stream.ready := False
-  io.c.stream.valid := False
   
-  // Asynchronous read for simplicity (infers distributed LUTRAM)
-  // For true BRAM, readSync with a pipeline stage should be used.
-  io.c.stream.payload(0) := mem.readAsync(readAddr.resized)
+  // Pipeline for synchronous read (BRAM inference)
+  val readAddrStream = Stream(UInt(log2Up(totalElements) bits))
+  readAddrStream.valid := False
+  readAddrStream.payload := (readRow * N) + readCol
+  
+  val readData = mem.readSync(readAddrStream.payload.resized, enable = readAddrStream.ready)
+  
+  val outValid = RegInit(False)
+  when(readAddrStream.ready) {
+    outValid := readAddrStream.valid
+  }
+  
+  readAddrStream.ready := io.c.stream.ready || !outValid
+  io.c.stream.valid := outValid
+  io.c.stream.payload(0) := readData
   
   val fsm = new StateMachine {
     val stateWrite: State = new State with EntryPoint {
@@ -42,16 +50,23 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
           mem.write(writeAddr, io.a.stream.payload(0))
           writeAddr := writeAddr + 1
           when(writeAddr === totalElements - 1) {
-            goto(stateRead)
+            goto(stateWaitFlush)
           }
         }
       }
     }
     
+    val stateWaitFlush: State = new State {
+       whenIsActive {
+          // Just 1 cycle delay to ensure write completes if needed, though BRAM write is 1 cycle.
+          goto(stateRead)
+       }
+    }
+    
     val stateRead: State = new State {
       whenIsActive {
-        io.c.stream.valid := True
-        when(io.c.stream.ready) {
+        readAddrStream.valid := True
+        when(readAddrStream.ready) {
           readRow := readRow + 1
           when(readRow === M - 1) {
             readRow := 0
@@ -59,10 +74,19 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
             when(readCol === N - 1) {
               readCol := 0
               writeAddr := 0
-              goto(stateWrite)
+              goto(stateWaitEmpty)
             }
           }
         }
+      }
+    }
+    
+    val stateWaitEmpty: State = new State {
+      whenIsActive {
+         // Wait for the pipeline to empty before returning to write
+         when(!outValid || io.c.stream.ready) {
+            goto(stateWrite)
+         }
       }
     }
   }
