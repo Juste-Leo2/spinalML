@@ -13,11 +13,12 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Add` | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
 | `Sub` | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
-| `Div` | ❌ | ❌ | ❌ | ❌ | Element-wise division of two tensors. |
+| `Div` | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
 | `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Element-wise exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
-| `sqrt`| ❌ | ❌ | ❌ | ❌ | Square Root. |
+| `sqrt`| ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Square Root. |
+| `reciprocal` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Inverse (1/x). |
 | `rsqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | Inverse Square Root (1/sqrt(x)). |
 | `scale_add` | ✅ | ✅ | ✅ | ✅ | Fast Fused MAC (A*X + B). Mapped to DSP48. |
 
@@ -60,7 +61,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
 | `Sigmoid` | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
 | `Tanh` | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
-| `Softmax` | ❌ | ❌ | ❌ | ❌ | Softmax function (usually applied over the last dimension). |
+| `Softmax` | ✅ | ✅ | ✅ | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Notes |
