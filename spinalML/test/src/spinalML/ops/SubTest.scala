@@ -5,15 +5,15 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Hardware component to test the subtract operation
-case class SubTestComp() extends Component {
+case class SubTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I8(), Seq(4), lanes = 2))
-    val b = slave(Tensor(I8(), Seq(4), lanes = 2))
-    val c = master(Tensor(I8(), Seq(4), lanes = 2))
+    val a = slave(Tensor(dataType, Seq(4), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(4), lanes = 2))
+    val c = master(Tensor(dataType, Seq(4), lanes = 2))
   }
   
   // Use the GGML-like syntax for subtraction
@@ -21,8 +21,8 @@ case class SubTestComp() extends Component {
 }
 
 class SubTest extends AnyFunSuite {
-  test("Test streaming sub operation on I8 tensors") {
-    SimConfig.withWave.compile(SubTestComp()).doSim { dut =>
+  test("Test streaming sub operation on I4 tensors") {
+    SimConfig.withWave.compile(SubTestComp(I4())).doSim { dut =>
       // Generate a clock with a period of 10 simulation units
       dut.clockDomain.forkStimulus(period = 10)
       
@@ -35,33 +35,33 @@ class SubTest extends AnyFunSuite {
       
       // Send the first chunk (2 elements per lane)
       dut.io.a.stream.valid #= true
-      dut.io.a.stream.payload(0) #= 10
-      dut.io.a.stream.payload(1) #= -5
+      dut.io.a.stream.payload(0) #= 5
+      dut.io.a.stream.payload(1) #= -2
       
       dut.io.b.stream.valid #= true
-      dut.io.b.stream.payload(0) #= 15
-      dut.io.b.stream.payload(1) #= 10
+      dut.io.b.stream.payload(0) #= 3
+      dut.io.b.stream.payload(1) #= 4
       
       // Wait until the operation computes and outputs valid data
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       
-      // Verify results for chunk 1 (10 - 15 = -5, -5 - 10 = -15)
-      assert(dut.io.c.stream.payload(0).toInt == -5)
-      assert(dut.io.c.stream.payload(1).toInt == -15)
+      // Verify results for chunk 1 (5 - 3 = 2, -2 - 4 = -6)
+      assert(dut.io.c.stream.payload(0).toInt == 2)
+      assert(dut.io.c.stream.payload(1).toInt == -6)
       
       // Send the second chunk
-      dut.io.a.stream.payload(0) #= 20
+      dut.io.a.stream.payload(0) #= 2
       dut.io.a.stream.payload(1) #= 3
       
       dut.io.b.stream.payload(0) #= 5
-      dut.io.b.stream.payload(1) #= 6
+      dut.io.b.stream.payload(1) #= -4
       
       // Wait for output
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       
-      // Verify results for chunk 2 (20 - 5 = 15, 3 - 6 = -3)
-      assert(dut.io.c.stream.payload(0).toInt == 15)
-      assert(dut.io.c.stream.payload(1).toInt == -3)
+      // Verify results for chunk 2 (2 - 5 = -3, 3 - (-4) = 7)
+      assert(dut.io.c.stream.payload(0).toInt == -3)
+      assert(dut.io.c.stream.payload(1).toInt == 7)
       
       // Stop sending data
       dut.io.a.stream.valid #= false
@@ -69,5 +69,17 @@ class SubTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  test("Test Sub compilation on I16") {
+    SpinalConfig().generateVerilog(SubTestComp(I16()))
+  }
+
+  test("Test Sub compilation on FP4") {
+    SpinalConfig().generateVerilog(SubTestComp(FP4_E2M1()))
+  }
+
+  test("Test Sub compilation on BF16") {
+    SpinalConfig().generateVerilog(SubTestComp(BF16()))
   }
 }

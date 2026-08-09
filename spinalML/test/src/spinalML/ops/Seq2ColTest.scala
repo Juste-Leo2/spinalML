@@ -5,14 +5,14 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I4, FP4_E2M1}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Wrapper component
 case class Seq2ColTestComp() extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I8(), Seq(3, 1), lanes = 1)) // Sequence of 3
-    val c = master(Tensor(I8(), Seq(2, 2), lanes = 2)) // 2 windows of size 2
+    val a = slave(Tensor(I4(), Seq(3, 1), lanes = 1)) // Sequence of 3
+    val c = master(Tensor(I4(), Seq(2, 2), lanes = 2)) // 2 windows of size 2
   }
   io.c <> seq2col(io.a, kernelSize = 2)
 }
@@ -27,10 +27,10 @@ class Seq2ColTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      val inputs = Seq(10, 20, 30)
+      val inputs = Seq(1, 2, 3)
       val expectedOutputs = Seq(
-        Seq(10, 20),
-        Seq(20, 30)
+        Seq(1, 2),
+        Seq(2, 3)
       )
       
       // Thread to feed inputs
@@ -63,5 +63,13 @@ class Seq2ColTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  test("Test Seq2Col compilation on FP4") {
+    SpinalConfig().generateVerilog(new Component {
+      val a = slave(Tensor(FP4_E2M1(), Seq(3, 1), lanes = 1))
+      val c = master(Tensor(FP4_E2M1(), Seq(2, 2), lanes = 2))
+      c <> seq2col(a, kernelSize = 2)
+    })
   }
 }

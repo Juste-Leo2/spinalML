@@ -5,14 +5,14 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I4, FP4_E2M1}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing Transpose
 case class TransposeTestComp() extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I8(), Seq(2, 3), lanes = 1)) // 2x3 matrix
-    val c = master(Tensor(I8(), Seq(3, 2), lanes = 1)) // transposed to 3x2
+    val a = slave(Tensor(I4(), Seq(2, 3), lanes = 1)) // 2x3 matrix
+    val c = master(Tensor(I4(), Seq(3, 2), lanes = 1)) // transposed to 3x2
   }
   
   io.c <> spinalML.ops.transpose(io.a)
@@ -50,5 +50,13 @@ class TransposeTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  test("Test Transpose compilation on FP4") {
+    SpinalConfig().generateVerilog(new Component {
+      val a = slave(Tensor(FP4_E2M1(), Seq(2, 3), lanes = 1))
+      val c = master(Tensor(FP4_E2M1(), Seq(3, 2), lanes = 1))
+      c <> spinalML.ops.transpose(a)
+    })
   }
 }

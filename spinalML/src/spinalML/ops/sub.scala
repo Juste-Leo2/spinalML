@@ -21,6 +21,13 @@ case class SubOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     (io.a.stream.payload(i), io.b.stream.payload(i)) match {
       case (valA: SInt, valB: SInt) => io.c.stream.payload(i).assignFrom((valA - valB).asInstanceOf[T])
       case (valA: UInt, valB: UInt) => io.c.stream.payload(i).assignFrom((valA - valB).asInstanceOf[T])
+      case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => {
+        val invertedB = spinalML.dtypes.FloatML(valB.expBits, valB.mantBits)
+        invertedB.exponent := valB.exponent
+        invertedB.mantissa := valB.mantissa
+        invertedB.sign := !valB.sign
+        io.c.stream.payload(i).assignFrom(spinalML.utils.Float.add(valA, invertedB).asInstanceOf[T])
+      }
       case _ => throw new Exception("Type de donnée non supporté pour l'opération sub")
     }
   }

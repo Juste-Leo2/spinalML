@@ -5,15 +5,15 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I32
+import spinalML.dtypes.{I4, FP4_E2M1}
 
 class FlattenTest extends AnyFunSuite {
   test("Flatten tensor dimensions") {
     val compiled = SimConfig.withWave.compile {
       new Component {
         val io = new Bundle {
-          val a = slave(Tensor(I32(), Seq(2, 3, 4), lanes = 2))
-          val c = master(Tensor(I32(), Seq(24), lanes = 2))
+          val a = slave(Tensor(I4(), Seq(2, 3, 4), lanes = 2))
+          val c = master(Tensor(I4(), Seq(24), lanes = 2))
         }
         io.c <> flatten(io.a)
       }
@@ -34,5 +34,13 @@ class FlattenTest extends AnyFunSuite {
       assert(dut.io.c.stream.payload(0).toInt == 0)
       assert(dut.io.c.stream.payload(1).toInt == 1)
     }
+  }
+
+  test("Test Flatten compilation on FP4") {
+    SpinalConfig().generateVerilog(new Component {
+      val a = slave(Tensor(FP4_E2M1(), Seq(2, 3, 4), lanes = 2))
+      val c = master(Tensor(FP4_E2M1(), Seq(24), lanes = 2))
+      c <> flatten(a)
+    })
   }
 }

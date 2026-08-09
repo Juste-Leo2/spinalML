@@ -141,7 +141,9 @@ object Float {
     val smallerMantExt = smallerMant @@ U(0, guardBits bits)
     
     val maxShift = mantBits + guardBits + 2
-    val shiftAmount = Mux(expDiff > maxShift, U(maxShift), expDiff)
+    val shiftWidth = Math.max(expDiff.getWidth, spinal.core.log2Up(maxShift + 1))
+    val expDiffWider = expDiff.resize(shiftWidth)
+    val shiftAmount = Mux(expDiffWider > maxShift, U(maxShift, shiftWidth bits), expDiffWider)
     val smallerMantShifted = smallerMantExt >> shiftAmount
     
     // 3. Add or Subtract

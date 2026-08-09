@@ -5,14 +5,14 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I4, FP4_E2M1}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing Reshape (and indirectly Flatten)
 case class ReshapeTestComp() extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I8(), Seq(2, 4), lanes = 2)) // 8 elements total
-    val reshaped = master(Tensor(I8(), Seq(4, 2), lanes = 2))
+    val a = slave(Tensor(I4(), Seq(2, 4), lanes = 2)) // 8 elements total
+    val reshaped = master(Tensor(I4(), Seq(4, 2), lanes = 2))
   }
   
   // We can chain them to test both metadata ops
@@ -46,5 +46,13 @@ class ReshapeTest extends AnyFunSuite {
       dut.io.a.stream.valid #= false
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  test("Test Reshape compilation on FP4") {
+    SpinalConfig().generateVerilog(new Component {
+      val a = slave(Tensor(FP4_E2M1(), Seq(2, 4), lanes = 2))
+      val c = master(Tensor(FP4_E2M1(), Seq(4, 2), lanes = 2))
+      c <> reshape(a, Seq(4, 2))
+    })
   }
 }
