@@ -5,14 +5,22 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I8, FP8_E4M3, FP4_E2M1}
+import spinalML.dtypes.{I4, FP4_E2M1}
+
+case class RsqrtTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2), lanes = 2))
+  }
+  io.c <> rsqrt(io.a)
+}
 
 class RsqrtTest extends AnyFunSuite {
-  test("Rsqrt LUT compilation on FP8") {
-    SpinalConfig().generateVerilog(new Component {
-      val a = slave(Tensor(FP8_E4M3(), Seq(2), lanes = 2))
-      val c = master(Tensor(FP8_E4M3(), Seq(2), lanes = 2))
-      c <> rsqrt(a)
-    })
+  test("Rsqrt LUT compilation on I4") {
+    SpinalConfig().generateVerilog(RsqrtTestComp(I4()))
+  }
+
+  test("Rsqrt LUT compilation on FP4") {
+    SpinalConfig().generateVerilog(RsqrtTestComp(FP4_E2M1()))
   }
 }

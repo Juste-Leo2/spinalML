@@ -5,23 +5,23 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing the LeakyReLU operation
-case class LeakyReLUTestComp() extends Component {
+case class LeakyReLUTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val x = slave(Tensor(I8(), Seq(4), lanes = 2))
-    val y = master(Tensor(I8(), Seq(4), lanes = 2))
+    val x = slave(Tensor(dataType, Seq(4), lanes = 2))
+    val y = master(Tensor(dataType, Seq(4), lanes = 2))
   }
   
-  // shift = 2 means multiplying by 0.25
-  io.y <> spinalML.activations.leaky_relu(io.x, shift = 2)
+  // shift = 1 means multiplying by 0.5
+  io.y <> spinalML.activations.leaky_relu(io.x, shift = 1)
 }
 
 class LeakyReLUTest extends AnyFunSuite {
-  test("Test streaming LeakyReLU operation on I8 tensors") {
-    SimConfig.withWave.compile(LeakyReLUTestComp()).doSim { dut =>
+  test("Test streaming LeakyReLU operation on I4 tensors") {
+    SimConfig.withWave.compile(LeakyReLUTestComp(I4())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       // Initialize Stream signals
@@ -32,24 +32,24 @@ class LeakyReLUTest extends AnyFunSuite {
       
       // Send first chunk (lanes = 2)
       dut.io.x.stream.valid #= true
-      dut.io.x.stream.payload(0) #= 10
-      dut.io.x.stream.payload(1) #= -8
+      dut.io.x.stream.payload(0) #= 6
+      dut.io.x.stream.payload(1) #= -4
       
       dut.clockDomain.waitSamplingWhere(dut.io.y.stream.valid.toBoolean && dut.io.y.stream.ready.toBoolean)
       
       // Check results for chunk 1
-      assert(dut.io.y.stream.payload(0).toInt == 10)
-      // -8 >> 2 = -2
+      assert(dut.io.y.stream.payload(0).toInt == 6)
+      // -4 >> 1 = -2
       assert(dut.io.y.stream.payload(1).toInt == -2)
       
       // Send second chunk
-      dut.io.x.stream.payload(0) #= -12
+      dut.io.x.stream.payload(0) #= -6
       dut.io.x.stream.payload(1) #= 3
       
       dut.clockDomain.waitSamplingWhere(dut.io.y.stream.valid.toBoolean && dut.io.y.stream.ready.toBoolean)
       
       // Check results for chunk 2
-      // -12 >> 2 = -3
+      // -6 >> 1 = -3
       assert(dut.io.y.stream.payload(0).toInt == -3)
       assert(dut.io.y.stream.payload(1).toInt == 3)
       
@@ -57,5 +57,17 @@ class LeakyReLUTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  test("Test LeakyReLU compilation on I16") {
+    SpinalConfig().generateVerilog(LeakyReLUTestComp(I16()))
+  }
+
+  test("Test LeakyReLU compilation on FP4") {
+    SpinalConfig().generateVerilog(LeakyReLUTestComp(FP4_E2M1()))
+  }
+
+  test("Test LeakyReLU compilation on BF16") {
+    SpinalConfig().generateVerilog(LeakyReLUTestComp(BF16()))
   }
 }
