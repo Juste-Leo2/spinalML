@@ -14,7 +14,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise multiplication (Hadamard product). |
 | `Div` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise division (Mul + Reciprocal). |
-| `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ❌ | Element-wise exponential. |
+| `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Element-wise exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise absolute value. |
 | `sqrt`| ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ❌ | Square Root. |

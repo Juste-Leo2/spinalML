@@ -75,6 +75,7 @@ class FloatML:
         return (sign_bit << (self.exp_bits + self.mant_bits)) | (exp_val << self.mant_bits) | mant_val
 
 FP4_E2M1 = FloatML(2, 1)
+FP8_E4M3 = FloatML(4, 3)
 BF16 = FloatML(8, 7)
 
 class SIntML:
@@ -100,4 +101,5 @@ class SIntML:
         return int_val
 
 I4 = SIntML(4)
+I8 = SIntML(8)
 I16 = SIntML(16)

@@ -22,3 +22,4 @@ unnamed.*
 .venv/
 __pycache__/
 sim_build/
+true_math_errors.log

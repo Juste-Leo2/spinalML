@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I8, FP8_E4M3}
 
 case class ExpTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
@@ -16,12 +16,12 @@ case class ExpTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class ExpTest extends AnyFunSuite {
-  test("Exp LUT compilation on I4") {
-    SpinalConfig().generateVerilog(ExpTestComp(I4()))
+  test("Exp LUT compilation on I8") {
+    SpinalConfig().generateVerilog(ExpTestComp(I8()))
   }
 
-  test("Exp LUT compilation on FP4") {
-    SpinalConfig().generateVerilog(ExpTestComp(FP4_E2M1()))
+  test("Exp LUT compilation on FP8") {
+    SpinalConfig().generateVerilog(ExpTestComp(FP8_E4M3()))
   }
 
   test("Exp PWL compilation on I16") {

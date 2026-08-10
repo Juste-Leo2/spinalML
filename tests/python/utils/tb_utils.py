@@ -4,15 +4,23 @@ import shutil
 import subprocess
 import pytest
 
-def run_mill(test_class, filter_name, toplevel_name):
-    """Génère le fichier Verilog via SpinalHDL"""
-    cmd = ["bash", "./mill", "spinalML.test.testOnly", test_class, "--", "-z", filter_name]
+def run_mill(test_class, dtype_filter, toplevel):
+    os.makedirs(f"sim_build/{toplevel.lower()}", exist_ok=True)
+    
+    # Check if local mill exists, otherwise fallback to global mill for Radxa compatibility
+    if os.path.exists("./mill"):
+        mill_cmd = ["bash", "./mill"]
+    else:
+        mill_cmd = ["mill"]
+        
+    cmd = mill_cmd + ["spinalML.test.testOnly", f"{test_class}", "--", "-z", dtype_filter]
+    
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd="/home/leonard/spinalML", capture_output=True, text=True)
     if result.returncode != 0:
         raise Exception(f"Mill compilation failed:\n{result.stdout}\n{result.stderr}")
         
-    v_file = f"/home/leonard/spinalML/{toplevel_name}.v"
+    v_file = f"/home/leonard/spinalML/{toplevel}.v"
     if not os.path.exists(v_file):
         raise Exception(f"Verilog file {v_file} not found!")
     return v_file
