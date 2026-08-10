@@ -17,3 +17,8 @@ unnamed.*
 .idea/
 *.iml
 .vscode/
+
+# Python
+.venv/
+__pycache__/
+sim_build/

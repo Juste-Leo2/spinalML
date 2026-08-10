@@ -16,6 +16,7 @@ To understand the direction and the capabilities of this project, please refer t
 
 *   [Roadmap](docs/roadmap.md): The step-by-step checklist of the project's development phases, from tensor management to advanced operations.
 *   [Operations](docs/ops.md): A comprehensive list of all the machine learning operations that this library aims to support.
+*   [Python Co-Simulation](docs/pythonTest.md): Documentation on the Python/Cocotb/Verilator testing framework used to validate mathematical hardware models.
 
 ## Acknowledgements
 
