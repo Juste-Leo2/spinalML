@@ -1,0 +1,48 @@
+name: CI - Python Co-Simulation
+
+on:
+  workflow_run:
+    workflows: ["CI - Hardware Simulations"]
+    types:
+      - completed
+
+jobs:
+  python-tests:
+    runs-on: [self-hosted, arm64, radxa]
+    # Run only if the parent workflow completed successfully
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install System Dependencies (uv & verilator)
+        run: |
+          if ! command -v verilator &> /dev/null; then
+            echo "Installing Verilator..."
+            sudo apt-get update
+            sudo apt-get install -y verilator
+          fi
+          if ! command -v uv &> /dev/null; then
+            echo "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            # Add to PATH for the next step
+            export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          fi
+
+      - name: Setup Python Environment
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          # Use uv to create virtual env and install dependencies quickly
+          uv venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          
+      - name: Run Pytest (Hardware Co-Simulations)
+        env:
+          COURSIER_JVM: system
+          JAVA_HOME: /usr/lib/jvm/default-java
+          JAVA_OPTS: "-Xmx8G"
+          MAKEFLAGS: "-j 1"
+        run: |
+          source .venv/bin/activate
+          # Run Python tests on the first 4 cores (LITTLE cores) to prevent power/thermal crashes
+          taskset -c 0,1,2,3 pytest tests/python/ -s
