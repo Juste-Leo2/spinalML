@@ -38,7 +38,7 @@ async def cocotb_rsqrt_i16(dut):
 @cocotb.test()
 async def cocotb_rsqrt_bf16(dut):
     def expected_fn(val):
-        return pwl_rsqrt_float(val, BF16, index_bits=8)
+        return BF16.from_float(true_rsqrt(val))
     await run_unary_test(dut, "Rsqrt", "BF16", BF16, [2.0, 100.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[100.0])
 
 # =========================================================================

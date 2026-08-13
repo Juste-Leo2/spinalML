@@ -34,7 +34,7 @@ async def cocotb_sqrt_i16(dut):
 @cocotb.test()
 async def cocotb_sqrt_bf16(dut):
     def expected_fn(val):
-        return pwl_sqrt_float(val, BF16, index_bits=8)
+        return BF16.from_float(true_sqrt(val))
     await run_unary_test(dut, "Sqrt", "BF16", BF16, [2.0, 100.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_sqrt)
 
 def run_sqrt_sim(dtype_filter, testcase_name, request=None):

@@ -25,23 +25,105 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-5))
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
+  } else if (dataType().isInstanceOf[FloatML]) {
+    // Algebraic separation for FloatML > 8 bits (e.g. BF16, FP16)
+    val fType = dataType().asInstanceOf[FloatML]
+    val expBits = fType.expBits
+    val mantBits = fType.mantBits
+    val bias = fType.bias
+    
+    val lutIndexBits = mantBits + 1
+    val lutStates = 1 << lutIndexBits
+    
+    val rsqrtLuts = for (i <- 0 until lanes) yield {
+      val romContent = for (idx <- 0 until lutStates) yield {
+        val p = (idx >> mantBits) & 1
+        val m_int = idx & ((1 << mantBits) - 1)
+        val m_frac = m_int.toDouble / (1 << mantBits)
+        val x = (1.0 + m_frac) * (if (p == 1) 2.0 else 1.0)
+        
+        val y = 1.0 / Math.sqrt(x) // y is in (0.5, 1.0]
+        
+        var e_adj = if (y == 1.0) 0 else -1
+        var m_out_frac = if (y == 1.0) 0.0 else (y * 2.0 - 1.0)
+        
+        var m_out_int = Math.round(m_out_frac * (1 << mantBits)).toInt
+        if (m_out_int >= (1 << mantBits)) {
+          m_out_int = 0
+          e_adj += 1
+        }
+        
+        val e_adj_bit = if (e_adj == 0) 0 else 1
+        B((e_adj_bit << mantBits) | m_out_int, (mantBits + 1) bits)
+      }
+      Mem(Bits((mantBits + 1) bits), initialContent = romContent)
+    }
+    
+    val outPayload = Vec(dataType, lanes)
+    val stage1_valid = RegInit(False)
+    
+    when(io.a.stream.ready) {
+      stage1_valid := io.a.stream.valid
+    }
+    
+    for (i <- 0 until lanes) {
+      val x = io.a.stream.payload(i).asInstanceOf[FloatML]
+      val isZero = x.exponent === 0
+      
+      val biasSInt = S(bias, expBits + 2 bits)
+      val expSInt = x.exponent.intoSInt.resize(expBits + 2) - biasSInt
+      val parity = expSInt.lsb.asUInt
+      val lutIndex = (parity @@ x.mantissa)
+      
+      val readVal = rsqrtLuts(i).readSync(lutIndex, enable = io.a.stream.ready)
+      
+      val outX = FloatML(expBits, mantBits)
+      outX.sign := RegNextWhen(x.sign, io.a.stream.ready)
+      
+      val newExpSInt = - (expSInt >> 1)
+      val e_adj_bit = readVal(mantBits)
+      val e_adj = Mux(e_adj_bit, S(-1, expBits+2 bits), S(0, expBits+2 bits))
+      
+      val finalExpSInt = newExpSInt + e_adj + biasSInt
+      
+      val regFinalExp = RegNextWhen(finalExpSInt, io.a.stream.ready)
+      
+      val expUnderflow = RegNextWhen(finalExpSInt <= 0, io.a.stream.ready)
+      val expOverflow = RegNextWhen(finalExpSInt >= ((1 << expBits) - 1), io.a.stream.ready)
+      val expIsZero = RegNextWhen(isZero, io.a.stream.ready)
+      
+      when(expIsZero) {
+        outX.exponent := ((1 << expBits) - 1)
+        outX.mantissa := 0
+      } elsewhen (expUnderflow) {
+        outX.exponent := 0
+        outX.mantissa := 0
+      } elsewhen (expOverflow) {
+        outX.exponent := ((1 << expBits) - 1)
+        outX.mantissa := 0
+      } otherwise {
+        outX.exponent := regFinalExp.asUInt.resize(expBits)
+        outX.mantissa := readVal(mantBits - 1 downto 0).asUInt
+      }
+      
+      outPayload(i).assignFrom(outX.asInstanceOf[T])
+    }
+    
+    io.a.stream.ready := io.c.stream.ready || !stage1_valid
+    io.c.stream.valid := stage1_valid
+    io.c.stream.payload := outPayload
+    
   } else {
-    // PWL Approximation for BF16/FP16/I16/I32
+    // PWL Approximation for Int > 8 bits
     val indexBits = 8
     val numSegments = 1 << indexBits
-    val isFloat = dataType().isInstanceOf[FloatML]
     
     val segmentIndexFn: T => UInt = (x: T) => {
       x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
     }
     
-    val (expBits, mantBits) = if (isFloat) {
-      val f = dataType().asInstanceOf[FloatML]
-      (f.expBits, f.mantBits)
-    } else (0, 0)
-    
     val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-5)
-    val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, isFloat, expBits, mantBits, indexBits, mathFn)
+    val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
     
     val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
     pwlOp.io.a <> io.a
