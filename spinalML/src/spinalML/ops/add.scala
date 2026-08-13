@@ -14,17 +14,17 @@ case class AddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
   // SpinalHDL StreamJoin automatically handles the valid/ready handshake between a and b
   val syncStream = StreamJoin.arg(io.a.stream, io.b.stream)
   
-  // Output stream valid when inputs are synchronized
-  io.c.stream.arbitrationFrom(syncStream)
-  
+  val payloadResult = Vec(dataType, lanes)
   for (i <- 0 until lanes) {
     (io.a.stream.payload(i), io.b.stream.payload(i)) match {
-      case (valA: SInt, valB: SInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
-      case (valA: UInt, valB: UInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
-      case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => io.c.stream.payload(i).assignFrom(spinalML.utils.Float.add(valA, valB).asInstanceOf[T])
+      case (valA: SInt, valB: SInt) => payloadResult(i).assignFrom((valA + valB).asInstanceOf[T])
+      case (valA: UInt, valB: UInt) => payloadResult(i).assignFrom((valA + valB).asInstanceOf[T])
+      case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => payloadResult(i).assignFrom(spinalML.utils.Float.add(valA, valB).asInstanceOf[T])
       case _ => throw new Exception("Type de donnée non supporté pour l'opération add")
     }
   }
+  
+  io.c.stream << syncStream.translateWith(payloadResult).m2sPipe()
 }
 
 object add {

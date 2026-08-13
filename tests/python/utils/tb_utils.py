@@ -13,8 +13,12 @@ def run_mill(test_class, dtype_filter, toplevel):
     if os.path.exists("./mill"):
         mill_cmd = ["bash", "./mill"]
     else:
-        mill_cmd = ["mill"]
-        
+        global_mill = shutil.which("mill")
+        if global_mill:
+            mill_cmd = ["bash", global_mill]
+        else:
+            mill_cmd = ["mill"]
+            
     cmd = mill_cmd + ["spinalML.test.testOnly", f"{test_class}", "--", "-z", dtype_filter]
     
     print(f"Running: {' '.join(cmd)}")

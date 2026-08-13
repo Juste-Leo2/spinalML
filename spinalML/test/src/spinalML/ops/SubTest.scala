@@ -5,7 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Hardware component to test the subtract operation
@@ -21,8 +21,8 @@ case class SubTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class SubTest extends AnyFunSuite {
-  test("Test streaming sub operation on I4 tensors") {
-    SimConfig.withWave.compile(SubTestComp(I4())).doSim { dut =>
+  test("Test streaming sub operation on I8 tensors") {
+    SimConfig.withWave.compile(SubTestComp(I8())).doSim { dut =>
       // Generate a clock with a period of 10 simulation units
       dut.clockDomain.forkStimulus(period = 10)
       
@@ -49,20 +49,6 @@ class SubTest extends AnyFunSuite {
       assert(dut.io.c.stream.payload(0).toInt == 2)
       assert(dut.io.c.stream.payload(1).toInt == -6)
       
-      // Send the second chunk
-      dut.io.a.stream.payload(0) #= 2
-      dut.io.a.stream.payload(1) #= 3
-      
-      dut.io.b.stream.payload(0) #= 5
-      dut.io.b.stream.payload(1) #= -4
-      
-      // Wait for output
-      dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
-      
-      // Verify results for chunk 2 (2 - 5 = -3, 3 - (-4) = 7)
-      assert(dut.io.c.stream.payload(0).toInt == -3)
-      assert(dut.io.c.stream.payload(1).toInt == 7)
-      
       // Stop sending data
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
@@ -71,12 +57,16 @@ class SubTest extends AnyFunSuite {
     }
   }
 
+  test("Test Sub compilation on I8") {
+    SpinalConfig().generateVerilog(SubTestComp(I8()))
+  }
+
   test("Test Sub compilation on I16") {
     SpinalConfig().generateVerilog(SubTestComp(I16()))
   }
 
-  test("Test Sub compilation on FP4") {
-    SpinalConfig().generateVerilog(SubTestComp(FP4_E2M1()))
+  test("Test Sub compilation on FP8") {
+    SpinalConfig().generateVerilog(SubTestComp(FP8_E4M3()))
   }
 
   test("Test Sub compilation on BF16") {

@@ -5,7 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing the mul operation
@@ -21,8 +21,8 @@ case class MulTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class MulTest extends AnyFunSuite {
-  test("Test streaming pipelined mul operation on I4 tensors") {
-    SimConfig.withWave.compile(MulTestComp(I4())).doSim { dut =>
+  test("Test streaming pipelined mul operation on I8 tensors") {
+    SimConfig.withWave.compile(MulTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       // Initialize Stream signals
@@ -55,12 +55,16 @@ class MulTest extends AnyFunSuite {
     }
   }
 
+  test("Test Mul compilation on I8") {
+    SpinalConfig().generateVerilog(MulTestComp(I8()))
+  }
+
   test("Test Mul compilation on I16") {
     SpinalConfig().generateVerilog(MulTestComp(I16()))
   }
 
-  test("Test Mul compilation on FP4") {
-    SpinalConfig().generateVerilog(MulTestComp(FP4_E2M1()))
+  test("Test Mul compilation on FP8") {
+    SpinalConfig().generateVerilog(MulTestComp(FP8_E4M3()))
   }
 
   test("Test Mul compilation on BF16") {

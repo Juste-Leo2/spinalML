@@ -1,18 +1,133 @@
 import numpy as np
 from golden_models.dtypes import FloatML
 
-def floatml_add(a: float, b: float, dtype: FloatML) -> float:
-    """Golden model for FloatML hardware addition."""
-    # hardware logic: converts to float, adds, then re-quantizes
-    res = a + b
-    res_bits = dtype.from_float(res)
-    return dtype.to_float(res_bits)
-
 def floatml_mul(a: float, b: float, dtype: FloatML) -> float:
-    """Golden model for FloatML hardware multiplication."""
-    res = a * b
-    res_bits = dtype.from_float(res)
-    return dtype.to_float(res_bits)
+    """Golden model for FloatML hardware multiplication (matches HW truncation)."""
+    if a == 0 or b == 0:
+        return 0.0
+    a_bits = dtype.from_float(a)
+    b_bits = dtype.from_float(b)
+    
+    a_sign = (a_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    b_sign = (b_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    c_sign = a_sign ^ b_sign
+    
+    a_exp = (a_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    b_exp = (b_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    
+    if a_exp == 0 or b_exp == 0:
+        return 0.0
+        
+    a_mant = a_bits & ((1 << dtype.mant_bits) - 1)
+    b_mant = b_bits & ((1 << dtype.mant_bits) - 1)
+    
+    a_mant_full = (1 << dtype.mant_bits) | a_mant
+    b_mant_full = (1 << dtype.mant_bits) | b_mant
+    
+    mant_prod = a_mant_full * b_mant_full
+    
+    overflow = (mant_prod >> (2 * dtype.mant_bits + 1)) & 1
+    if overflow:
+        norm_mant = (mant_prod >> (dtype.mant_bits + 1)) & ((1 << dtype.mant_bits) - 1)
+    else:
+        norm_mant = (mant_prod >> dtype.mant_bits) & ((1 << dtype.mant_bits) - 1)
+        
+    exp_sum = a_exp + b_exp - dtype.bias + overflow
+    
+    if exp_sum <= 0:
+        c_exp, c_mant, c_sign = 0, 0, 0
+    elif exp_sum >= ((1 << dtype.exp_bits) - 1):
+        c_exp = (1 << dtype.exp_bits) - 1
+        c_mant = 0
+    else:
+        c_exp = exp_sum
+        c_mant = norm_mant
+        
+    c_bits = (c_sign << (dtype.exp_bits + dtype.mant_bits)) | (c_exp << dtype.mant_bits) | c_mant
+    return dtype.to_float(c_bits)
+
+def floatml_add(a: float, b: float, dtype: FloatML) -> float:
+    """Golden model for FloatML hardware addition (matches HW truncation)."""
+    a_bits = dtype.from_float(a)
+    b_bits = dtype.from_float(b)
+    
+    a_sign = (a_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    b_sign = (b_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    a_exp = (a_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    b_exp = (b_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    a_mant = a_bits & ((1 << dtype.mant_bits) - 1)
+    b_mant = b_bits & ((1 << dtype.mant_bits) - 1)
+    
+    a_zero = (a_exp == 0)
+    b_zero = (b_exp == 0)
+    
+    magA_ge_magB = (a_exp > b_exp) or (a_exp == b_exp and a_mant >= b_mant)
+    if magA_ge_magB:
+        larger_sign, larger_exp, larger_mant, larger_zero = a_sign, a_exp, a_mant, a_zero
+        smaller_sign, smaller_exp, smaller_mant, smaller_zero = b_sign, b_exp, b_mant, b_zero
+    else:
+        larger_sign, larger_exp, larger_mant, larger_zero = b_sign, b_exp, b_mant, b_zero
+        smaller_sign, smaller_exp, smaller_mant, smaller_zero = a_sign, a_exp, a_mant, a_zero
+        
+    expDiff = larger_exp - smaller_exp
+    
+    larger_mant_full = 0 if larger_zero else ((1 << dtype.mant_bits) | larger_mant)
+    smaller_mant_full = 0 if smaller_zero else ((1 << dtype.mant_bits) | smaller_mant)
+    
+    guardBits = 3
+    larger_mant_ext = larger_mant_full << guardBits
+    smaller_mant_ext = smaller_mant_full << guardBits
+    
+    maxShift = dtype.mant_bits + guardBits + 2
+    shiftAmount = min(expDiff, maxShift)
+    smaller_mant_shifted = smaller_mant_ext >> shiftAmount
+    
+    sameSign = (larger_sign == smaller_sign)
+    if sameSign:
+        mantSumExt = larger_mant_ext + smaller_mant_shifted
+    else:
+        subRes = larger_mant_ext - smaller_mant_shifted
+        mantSumExt = subRes & ((1 << (dtype.mant_bits + guardBits + 3)) - 1)
+        
+    W = dtype.mant_bits + guardBits + 2
+    
+    if mantSumExt == 0:
+        lz = 0
+    else:
+        lz = W - mantSumExt.bit_length()
+        if lz < 0: lz = 0
+        
+    normalizedSumExt = (mantSumExt << lz) & ((1 << 64) - 1)
+    finalMantissa = (normalizedSumExt >> (W - 1 - dtype.mant_bits)) & ((1 << dtype.mant_bits) - 1)
+    
+    expAdjustSInt = 1 - lz
+    newExpSInt = larger_exp + expAdjustSInt
+    
+    c_sign = larger_sign
+    sumIsZero = (mantSumExt == 0)
+    
+    if (a_zero and b_zero) or sumIsZero or (newExpSInt <= 0):
+        c_exp, c_mant, c_sign = 0, 0, 0
+    elif newExpSInt >= ((1 << dtype.exp_bits) - 1):
+        c_exp = (1 << dtype.exp_bits) - 1
+        c_mant = 0
+    else:
+        c_exp = newExpSInt
+        c_mant = finalMantissa
+        
+    c_bits = (c_sign << (dtype.exp_bits + dtype.mant_bits)) | (c_exp << dtype.mant_bits) | c_mant
+    return dtype.to_float(c_bits)
+
+def floatml_sub(a: float, b: float, dtype: FloatML) -> float:
+    """Golden model for FloatML hardware subtraction (matches HW truncation)."""
+    return floatml_add(a, -b, dtype)
+
+def floatml_div(a: float, b: float, dtype: FloatML) -> float:
+    """Golden model for FloatML hardware division (Mul + Reciprocal)."""
+    # 1. HW Reciprocal of b
+    inv_b = reciprocal(b, dtype)
+    # 2. HW Mul of a and inv_b
+    return floatml_mul(a, inv_b, dtype)
 
 def rsqrt(x: float, dtype: FloatML = None) -> float:
     """Golden model for Inverse Square Root. Includes PWL approximation error if dtype is provided."""
@@ -26,6 +141,13 @@ def rsqrt(x: float, dtype: FloatML = None) -> float:
         return exact
         
     # Re-quantize to simulate hardware rounding
+    return dtype.to_float(dtype.from_float(exact))
+
+def reciprocal(x: float, dtype: FloatML = None) -> float:
+    """Golden model for Reciprocal."""
+    exact = 1.0 / (x + (1e-9 if x >= 0 else -1e-9))
+    if dtype is None:
+        return exact
     return dtype.to_float(dtype.from_float(exact))
 
 def exp(x: float, dtype: FloatML = None) -> float:
@@ -131,6 +253,11 @@ def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
         return math.exp(x)
     return pwl_int(x_val, bit_width, exp_fn, index_bits)
 
+def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+    def rec_fn(x):
+        return 1.0 / (x + (1e-9 if x >= 0 else -1e-9))
+    return pwl_int(x_val, bit_width, rec_fn, index_bits)
+
 def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8) -> int:
     """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les flottants."""
     bit_width = dtype.exp_bits + dtype.mant_bits + 1
@@ -223,3 +350,8 @@ def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
     def rsqrt_fn(x):
         return 1.0 / np.sqrt(abs(x) + 1e-5)
     return pwl_float(x_val, dtype, rsqrt_fn, index_bits)
+
+def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
+    def rec_fn(x):
+        return 1.0 / (x + (1e-9 if x >= 0 else -1e-9))
+    return pwl_float(x_val, dtype, rec_fn, index_bits)

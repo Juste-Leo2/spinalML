@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1, I16, BF16}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 
 case class DivTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
@@ -17,8 +17,8 @@ case class DivTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class DivTest extends AnyFunSuite {
-  test("Div LUT compilation on I4") { SpinalConfig().generateVerilog(DivTestComp(I4())) }
-  test("Div LUT compilation on FP4") { SpinalConfig().generateVerilog(DivTestComp(FP4_E2M1())) }
+  test("Div LUT compilation on I8") { SpinalConfig().generateVerilog(DivTestComp(I8())) }
+  test("Div LUT compilation on FP8") { SpinalConfig().generateVerilog(DivTestComp(FP8_E4M3())) }
   test("Div PWL compilation on I16") { SpinalConfig().generateVerilog(DivTestComp(I16())) }
   test("Div PWL compilation on BF16") { SpinalConfig().generateVerilog(DivTestComp(BF16())) }
 }

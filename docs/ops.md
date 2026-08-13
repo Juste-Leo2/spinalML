@@ -10,10 +10,10 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Basic Arithmetic
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Add` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise addition of two tensors. |
-| `Sub` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise subtraction of two tensors. |
-| `Mul` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise multiplication (Hadamard product). |
-| `Div` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise division (Mul + Reciprocal). |
+| `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
+| `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
+| `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
+| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
 | `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Element-wise exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise absolute value. |
