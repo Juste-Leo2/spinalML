@@ -480,3 +480,65 @@ def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
     newExpSInt = 2 * dtype.bias - exp - shift
     
     return floatml_algebraic_pack(dtype, sign, newExpSInt, readMant)
+
+def build_adder_tree_hw(inputs, is_floatml, dtype, pipeline_tree=True):
+    if len(inputs) == 1:
+        return inputs[0]
+        
+    next_stage = []
+    for i in range(0, len(inputs), 2):
+        if i + 1 < len(inputs):
+            a, b = inputs[i], inputs[i+1]
+            if is_floatml:
+                sum_val = floatml_add(a, b, dtype)
+            else:
+                sum_val = a + b
+                if hasattr(dtype, 'bit_width'):
+                    val_bits = sum_val
+                    if val_bits < 0:
+                        val_bits = (1 << dtype.bit_width) + val_bits
+                    val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                    if hasattr(dtype, 'min_val') and dtype.min_val < 0:
+                        if val_bits & (1 << (dtype.bit_width - 1)):
+                            val_bits -= (1 << dtype.bit_width)
+                    sum_val = val_bits
+            next_stage.append(sum_val)
+        else:
+            next_stage.append(inputs[i])
+            
+    return build_adder_tree_hw(next_stage, is_floatml, dtype, pipeline_tree)
+
+def matmul_hw(A, B, dtype):
+    M = len(A)
+    K = len(A[0])
+    N = len(B[0])
+    
+    is_floatml = hasattr(dtype, 'exp_bits')
+    
+    C = [[0.0] * N for _ in range(M)]
+    
+    for m in range(M):
+        for n in range(N):
+            products = []
+            for k in range(K):
+                a_val = A[m][k]
+                b_val = B[k][n]
+                if is_floatml:
+                    prod = floatml_mul(a_val, b_val, dtype)
+                else:
+                    prod = a_val * b_val
+                    if hasattr(dtype, 'bit_width'):
+                        val_bits = prod
+                        if val_bits < 0:
+                            val_bits = (1 << dtype.bit_width) + val_bits
+                        val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                        if hasattr(dtype, 'min_val') and dtype.min_val < 0:
+                            if val_bits & (1 << (dtype.bit_width - 1)):
+                                val_bits -= (1 << dtype.bit_width)
+                        prod = val_bits
+                products.append(prod)
+                
+            tree_sum = build_adder_tree_hw(products, is_floatml, dtype)
+            C[m][n] = tree_sum
+            
+    return C

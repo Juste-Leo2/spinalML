@@ -5,24 +5,52 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing matmul: Matrix A [1, 2] x Vector B [2, 1]
-case class MatmulTestComp[T <: Data](dataType: HardType[T]) extends Component {
+case class MatmulTest_Vector[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(1, 2), lanes = 2))
     val b = slave(Tensor(dataType, Seq(2, 1), lanes = 2))
     val c = master(Tensor(dataType, Seq(1, 1), lanes = 1))
   }
-  
-  // tileSize = 2
-  io.c <> spinalML.ops.matmul(io.a, io.b, tileSize = 2)
+  io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
+}
+
+// Component for testing GEMM Parallel: A[2, 4] x B[4, 2]
+case class MatmulTest_GEMM_Parallel[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 1))
+  }
+  io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = true)
+}
+
+// Component for testing GEMM Sequential: A[2, 4] x B[4, 2]
+case class MatmulTest_GEMM_Sequential[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 1))
+  }
+  io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
+}
+
+// Component for testing Dynamic Padding: A[1, 3] x B[3, 1] with lanes=2
+case class MatmulTest_DynamicPadding[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(1, 3), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(3, 1), lanes = 2))
+    val c = master(Tensor(dataType, Seq(1, 1), lanes = 1))
+  }
+  io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
 }
 
 class MatmulTest extends AnyFunSuite {
-  test("Test streaming matmul (SRAM + MAC) operation on I4 tensors") {
-    SimConfig.withWave.compile(MatmulTestComp(I4())).doSim { dut =>
+  test("Test streaming matmul Vector operation on I4 tensors") {
+    SimConfig.withWave.compile(MatmulTest_Vector(I4())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.a.stream.valid #= false
@@ -58,15 +86,81 @@ class MatmulTest extends AnyFunSuite {
     }
   }
 
-  test("Test Matmul compilation on I16") {
-    SpinalConfig().generateVerilog(MatmulTestComp(I16()))
+  test("Test streaming matmul GEMM Parallel on I8") {
+    SimConfig.withWave.compile(MatmulTest_GEMM_Parallel(I8())).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.b.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+      
+      // B is 4x2. K=4, N=2. chunksK = 2.
+      dut.io.b.stream.valid #= true
+      // Col 0, Chunk 0
+      dut.io.b.stream.payload(0) #= 1
+      dut.io.b.stream.payload(1) #= 1
+      dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
+      // Col 0, Chunk 1
+      dut.io.b.stream.payload(0) #= 1
+      dut.io.b.stream.payload(1) #= 1
+      dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
+      // Col 1, Chunk 0
+      dut.io.b.stream.payload(0) #= 2
+      dut.io.b.stream.payload(1) #= 2
+      dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
+      // Col 1, Chunk 1
+      dut.io.b.stream.payload(0) #= 2
+      dut.io.b.stream.payload(1) #= 2
+      dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
+      
+      dut.io.b.stream.valid #= false
+      
+      // Stream A (2x4). 2 rows, 2 chunks per row.
+      dut.io.a.stream.valid #= true
+      // Row 0, Chunk 0
+      dut.io.a.stream.payload(0) #= 1
+      dut.io.a.stream.payload(1) #= 0
+      dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+      // Row 0, Chunk 1
+      dut.io.a.stream.payload(0) #= 0
+      dut.io.a.stream.payload(1) #= 1
+      dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+      // Row 1, Chunk 0
+      dut.io.a.stream.payload(0) #= 0
+      dut.io.a.stream.payload(1) #= 1
+      dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+      // Row 1, Chunk 1
+      dut.io.a.stream.payload(0) #= 1
+      dut.io.a.stream.payload(1) #= 0
+      dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+      
+      dut.io.a.stream.valid #= false
+      
+      var count = 0
+      while(count < 4) {
+        dut.clockDomain.waitSampling()
+        if (dut.io.c.stream.valid.toBoolean) {
+            count += 1
+        }
+      }
+      
+      dut.clockDomain.waitSampling(5)
+    }
   }
 
-  test("Test Matmul compilation on FP4") {
-    SpinalConfig().generateVerilog(MatmulTestComp(FP4_E2M1()))
-  }
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
 
-  test("Test Matmul compilation on BF16") {
-    SpinalConfig().generateVerilog(MatmulTestComp(BF16()))
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Matmul compilation on $name") {
+      SpinalConfig().generateVerilog(MatmulTest_Vector(dt()))
+      SpinalConfig().generateVerilog(MatmulTest_GEMM_Parallel(dt()))
+      SpinalConfig().generateVerilog(MatmulTest_GEMM_Sequential(dt()))
+      SpinalConfig().generateVerilog(MatmulTest_DynamicPadding(dt()))
+    }
   }
 }

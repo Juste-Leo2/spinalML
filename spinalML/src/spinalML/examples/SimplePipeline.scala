@@ -29,7 +29,8 @@ case class SimplePipeline[T <: Data](dataType: HardType[T], lanes: Int = 2) exte
   // 1. Element-wise Addition: sum = A + B
   val sum = add(io.a, io.b)
   
-  // 2. Matrix Multiplication (Tiled Double-Buffered): Y = sum * W
-  // We use tileSize = 2 so the whole K dimension fits in one tile.
-  io.y <> matmul(sum, io.w, tileSize = 2)
+  // 2. Matmul
+  // Note: The `lanes` parameter (degree of parallelism) is automatically inferred
+  // from the input Tensor object (sum.lanes). There is no need to pass it manually.
+  io.y <> matmul(sum, io.w, parallelN = false)
 }

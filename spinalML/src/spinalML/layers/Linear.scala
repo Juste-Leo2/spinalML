@@ -21,7 +21,7 @@ case class LinearLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
   }
   
   // 1. Matrix Multiplication: A * W
-  val matmulResult = matmul(io.a, io.w, accType, tileSize)
+  val matmulResult = matmul(io.a, io.w, accType, parallelN = false)
   
   // 2. Add Bias (Broadcast): (A * W) + b
   io.y <> bias_add(matmulResult, io.b)

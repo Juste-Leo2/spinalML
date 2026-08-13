@@ -25,7 +25,7 @@ case class Conv1DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
   
   // 2. Matrix Multiplication: cols * W
   // cols is [L_out, K], W is [K, 1]. Output is [L_out, 1]
-  val matmulResult = matmul(cols, io.w, accType, tileSize = K)
+  val matmulResult = matmul(cols, io.w, accType, parallelN = false)
   
   // 3. Add Bias
   io.y <> bias_add(matmulResult, io.b)

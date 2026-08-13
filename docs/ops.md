@@ -15,20 +15,18 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
 | `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
-| `Exp` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Alg+LUT: Math for $E$, LUT for $M$. |
+| `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | Exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
-| `Reciprocal` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Alg+LUT: Math for $E$, LUT for $M$. |
-| `Rsqrt` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Inverse Square Root. |
-| `Sqrt` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Square Root. |
+| `Reciprocal` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | Reciprocal (1/X). |
+| `Rsqrt` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | Inverse Square Root. |
+| `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | Square Root. |
 | `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
-
-*Alg+LUT: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa).*
 
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `MatMul` | ✅ | ✅ | ✅ | ✅ | ❌ | Matrix multiplication of 2D tensors. *(Requires BRAM)* |
+| `MatMul` | ✅ | ✅ | ✅ | ✅ | ✅ | Matrix multiplication of 2D tensors. *(Requires BRAM)* |
 | `Dot` | ❌ | ❌ | ❌ | ❌ | ❌ | Dot product of two 1D vectors. |
 
 ## Tensor Manipulations
@@ -64,7 +62,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ❌ | Leaky Rectified Linear Unit. |
 | `Sigmoid` | ❌ | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
 | `Tanh` | ❌ | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
-| `Softmax` | ⚠️ (PWL) | ⚠️ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Softmax function. ⚠️: Supported but mathematically meaningless for unquantized integers. |
+| `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
@@ -79,3 +77,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `MaxPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | 2D max pooling. *(Requires BRAM)* |
 | `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ❌ | 1D average pooling. |
 | `AvgPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | 2D average pooling. *(Requires BRAM)* |
+
+## Methodology Notes
+
+* **Alg+LUT**: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa).
+* **⚠️**: Supported via PWL or LUT approximation, but mathematically meaningless for unquantized integers (results in 0 or overflow).

@@ -12,7 +12,7 @@ case class Tensor[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int)
   require(shape.forall(_ > 0), "All dimensions must be > 0")
 
   val totalElements = shape.product
-  require(totalElements % lanes == 0, s"Total elements ($totalElements) must be a multiple of lanes ($lanes)")
+  // require(totalElements % lanes == 0, s"Total elements ($totalElements) must be a multiple of lanes ($lanes)")
 
   val stream = Stream(Vec(dataType, lanes))
 
