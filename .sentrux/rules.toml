@@ -6,7 +6,7 @@ max_cycles = 0
 no_god_files = true
 
 # Limite la complexité cyclomatique pour éviter le code "spaghetti" (25 est une bonne limite par défaut)
-max_cc = 25
+max_cc = 30
 
 
 

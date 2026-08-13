@@ -22,7 +22,7 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] Implement Activation functions (ReLU, Sigmoid, Tanh).
 - [x] Implement Pooling layers (MaxPool, AvgPool).
 - [ ] Implement Normalization layers (BatchNorm, LayerNorm).
-- [ ] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
+- [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
 
 ## 4. System Integration & Advanced Improvements (Future Work)
 - [ ] **AXI-DMA Integration**: Develop or integrate a top-level controller to feed AXI4-Stream interfaces directly from external DDR memory.

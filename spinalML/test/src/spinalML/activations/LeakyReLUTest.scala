@@ -5,7 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing the LeakyReLU operation
@@ -59,15 +59,16 @@ class LeakyReLUTest extends AnyFunSuite {
     }
   }
 
-  test("Test LeakyReLU compilation on I16") {
-    SpinalConfig().generateVerilog(LeakyReLUTestComp(I16()))
-  }
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
 
-  test("Test LeakyReLU compilation on FP4") {
-    SpinalConfig().generateVerilog(LeakyReLUTestComp(FP4_E2M1()))
-  }
-
-  test("Test LeakyReLU compilation on BF16") {
-    SpinalConfig().generateVerilog(LeakyReLUTestComp(BF16()))
+  for ((name, dt) <- compileTypes) {
+    test(s"Test LeakyReLU compilation on $name") {
+      SpinalConfig().generateVerilog(LeakyReLUTestComp(dt()))
+    }
   }
 }

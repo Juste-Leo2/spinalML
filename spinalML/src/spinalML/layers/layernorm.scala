@@ -125,15 +125,10 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
       currentLen = nextLen
     }
     
-    val outSum = Stream(dataType)
-    val outCarry = Stream(carryStream.payloadType)
+    val (fork1, fork2) = StreamFork2(currentStream)
     
-    outSum.valid := currentStream.valid
-    outCarry.valid := currentStream.valid
-    currentStream.ready := outSum.ready && outCarry.ready
-    
-    outSum.payload := currentStream.payload.sums(0)
-    outCarry.payload := currentStream.payload.carry
+    val outSum = fork1.translateWith(fork1.payload.sums(0))
+    val outCarry = fork2.translateWith(fork2.payload.carry)
     
     (outSum, outCarry)
   }

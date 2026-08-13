@@ -542,3 +542,246 @@ def matmul_hw(A, B, dtype):
             C[m][n] = tree_sum
             
     return C
+
+def linear_hw(A, W, b, dtype):
+    is_floatml = hasattr(dtype, 'exp_bits')
+    matmul_res = matmul_hw(A, W, dtype)
+    
+    Y = [[0.0] * len(matmul_res[0]) for _ in range(len(matmul_res))]
+    for m in range(len(matmul_res)):
+        for n in range(len(matmul_res[0])):
+            if is_floatml:
+                Y[m][n] = floatml_add(matmul_res[m][n], b[0][0], dtype)
+            else:
+                sum_val = matmul_res[m][n] + b[0][0]
+                if hasattr(dtype, 'bit_width'):
+                    val_bits = sum_val
+                    if val_bits < 0: val_bits = (1 << dtype.bit_width) + val_bits
+                    val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                    if hasattr(dtype, 'min_val') and dtype.min_val < 0:
+                        if val_bits & (1 << (dtype.bit_width - 1)):
+                            val_bits -= (1 << dtype.bit_width)
+                    sum_val = val_bits
+                Y[m][n] = sum_val
+    return Y
+
+def conv1d_hw(X, W, b, dtype):
+    L_in = len(X)
+    K = len(W)
+    L_out = L_in - K + 1
+    
+    # Seq2Col
+    cols = [[0.0] * K for _ in range(L_out)]
+    for i in range(L_out):
+        for k in range(K):
+            cols[i][k] = X[i + k][0]
+            
+    return linear_hw(cols, W, b, dtype)
+
+def conv2d_hw(X, W, b, dtype):
+    import math
+    H = len(X)
+    W_in = len(X[0])
+    K = int(math.sqrt(len(W)))
+    
+    H_out = H - K + 1
+    W_out = W_in - K + 1
+    
+    # Im2Col
+    cols = []
+    for i in range(H_out):
+        for j in range(W_out):
+            window = []
+            for ki in range(K):
+                for kj in range(K):
+                    window.append(X[i + ki][j + kj])
+            cols.append(window)
+            
+    return linear_hw(cols, W, b, dtype)
+
+def relu_hw(X, dtype):
+    is_floatml = hasattr(dtype, 'exp_bits')
+    Y = []
+    for row in X:
+        y_row = []
+        for val in row:
+            if is_floatml:
+                val_bits = dtype.from_float(val)
+                sign = (val_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+                if sign == 1:
+                    y_row.append(0.0)
+                else:
+                    y_row.append(dtype.to_float(val_bits))
+            else:
+                val_bits = dtype.from_float(val)
+                # Check sign bit (MSB)
+                is_neg = (val_bits & (1 << (dtype.bit_width - 1))) != 0
+                if is_neg:
+                    y_row.append(0.0)
+                else:
+                    y_row.append(dtype.to_float(val_bits))
+        Y.append(y_row)
+    return Y
+
+def leaky_relu_hw(X, shift, dtype):
+    is_floatml = hasattr(dtype, 'exp_bits')
+    Y = []
+    for row in X:
+        y_row = []
+        for val in row:
+            val_bits = dtype.from_float(val)
+            if is_floatml:
+                sign = (val_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+                if sign == 1:
+                    exp = (val_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+                    mant = val_bits & ((1 << dtype.mant_bits) - 1)
+                    shifted_exp = exp - shift
+                    if shifted_exp <= 0 or exp == 0:
+                        out_bits = 0
+                    else:
+                        out_bits = (1 << (dtype.exp_bits + dtype.mant_bits)) | (shifted_exp << dtype.mant_bits) | mant
+                    y_row.append(dtype.to_float(out_bits))
+                else:
+                    y_row.append(dtype.to_float(val_bits))
+            else:
+                is_neg = (val_bits & (1 << (dtype.bit_width - 1))) != 0
+                if is_neg:
+                    # sign extend to perform arithmetic shift
+                    sval = val_bits
+                    if sval & (1 << (dtype.bit_width - 1)):
+                        sval = sval - (1 << dtype.bit_width)
+                    shifted = sval >> shift
+                    out_bits = shifted & ((1 << dtype.bit_width) - 1)
+                    y_row.append(dtype.to_float(out_bits))
+                else:
+                    y_row.append(dtype.to_float(val_bits))
+        Y.append(y_row)
+    return Y
+
+def adder_tree_hw(vals, dtype):
+    is_float = hasattr(dtype, 'exp_bits')
+    current = list(vals)
+    def add(a, b):
+        if is_float:
+            return floatml_add(a, b, dtype)
+        else:
+            def sign_extend(v, bits):
+                return v - (1 << bits) if v & (1 << (bits - 1)) else v
+            va = sign_extend(dtype.from_float(a), dtype.bit_width)
+            vb = sign_extend(dtype.from_float(b), dtype.bit_width)
+            return dtype.to_float((va + vb) & ((1 << dtype.bit_width) - 1))
+            
+    while len(current) > 1:
+        next_len = (len(current) + 1) // 2
+        next_sums = [0.0] * next_len
+        for i in range(len(current) // 2):
+            next_sums[i] = add(current[2*i], current[2*i+1])
+        if len(current) % 2 != 0:
+            next_sums[next_len - 1] = current[-1]
+        current = next_sums
+    return current[0]
+
+def batchnorm_hw(X, gamma, beta, dtype):
+    is_float = hasattr(dtype, 'exp_bits')
+    Y = []
+    for row in X:
+        y_row = []
+        for i in range(len(row)):
+            if is_float:
+                mul_res = floatml_mul(row[i], gamma[i][0], dtype)
+                res = floatml_add(mul_res, beta[i][0], dtype)
+                y_row.append(res)
+            else:
+                def sign_extend(val, bits):
+                    return val - (1 << bits) if val & (1 << (bits - 1)) else val
+                vx = sign_extend(dtype.from_float(row[i]), dtype.bit_width)
+                vg = sign_extend(dtype.from_float(gamma[i][0]), dtype.bit_width)
+                vb = sign_extend(dtype.from_float(beta[i][0]), dtype.bit_width)
+                res = (vx * vg) + vb
+                out_bits = res & ((1 << dtype.bit_width) - 1)
+                y_row.append(dtype.to_float(out_bits))
+        Y.append(y_row)
+    return Y
+
+def layernorm_hw(X, gamma, beta, dtype):
+    import math
+    is_float = hasattr(dtype, 'exp_bits')
+    channels = len(X[0])
+    log_n = int(math.log2(channels))
+    Y = []
+    
+    def sign_extend(val, bits):
+        return val - (1 << bits) if val & (1 << (bits - 1)) else val
+        
+    def add(a, b):
+        if is_float: return floatml_add(a, b, dtype)
+        else:
+            va, vb = sign_extend(dtype.from_float(a), dtype.bit_width), sign_extend(dtype.from_float(b), dtype.bit_width)
+            return dtype.to_float((va + vb) & ((1 << dtype.bit_width) - 1))
+            
+    def sub(a, b):
+        if is_float:
+            b_bits = dtype.from_float(b)
+            # invert sign
+            neg_b_bits = b_bits ^ (1 << (dtype.exp_bits + dtype.mant_bits))
+            return floatml_add(a, dtype.to_float(neg_b_bits), dtype)
+        else:
+            va, vb = sign_extend(dtype.from_float(a), dtype.bit_width), sign_extend(dtype.from_float(b), dtype.bit_width)
+            return dtype.to_float((va - vb) & ((1 << dtype.bit_width) - 1))
+            
+    def mul(a, b):
+        if is_float: return floatml_mul(a, b, dtype)
+        else:
+            va, vb = sign_extend(dtype.from_float(a), dtype.bit_width), sign_extend(dtype.from_float(b), dtype.bit_width)
+            return dtype.to_float((va * vb) & ((1 << dtype.bit_width) - 1))
+            
+    def div_n(a, n):
+        if is_float:
+            a_bits = dtype.from_float(a)
+            sign = (a_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+            exp = (a_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+            mant = a_bits & ((1 << dtype.mant_bits) - 1)
+            exp_sint = exp - log_n
+            if exp == 0 or exp_sint <= 0:
+                res_bits = 0
+            else:
+                res_bits = (sign << (dtype.exp_bits + dtype.mant_bits)) | (exp_sint << dtype.mant_bits) | mant
+            return dtype.to_float(res_bits)
+        else:
+            va = sign_extend(dtype.from_float(a), dtype.bit_width)
+            # Scala Integer division truncates towards zero
+            res = int(va / n)
+            return dtype.to_float(res & ((1 << dtype.bit_width) - 1))
+            
+    for row in X:
+        y_row = []
+        # Mean
+        sum_x = adder_tree_hw(row, dtype)
+        mu = div_n(sum_x, channels)
+        
+        # Diff and Var
+        diffs = [sub(x, mu) for x in row]
+        sq_diffs = [mul(d, d) for d in diffs]
+        sum_sq = adder_tree_hw(sq_diffs, dtype)
+        var = div_n(sum_sq, channels)
+        
+        # Rsqrt
+        if is_float:
+            # For FloatML we should use floatml_algebraic_pack and floatml_rsqrt if available.
+            # But ops.py uses pwl_int for integers and Alg+LUT for FloatML.
+            # Wait, in rsqrt.scala, FloatML uses Alg+LUT. For exact bit-match, we can use exact float math if not implemented fully, but wait!
+            # The test will fail if it's not exact.
+            # Let's use the Python approximation. Actually, wait! The user has FloatML Rsqrt which does 2^(exp_sint) * LUT.
+            pass
+        # I will leave rsqrt as a fallback to rsqrt(x, dtype) for now and see if it fails.
+        inv_std = rsqrt(var, dtype) if is_float else dtype.to_float(pwl_int(var, dtype.bit_width, lambda x: 1.0/np.sqrt(x) if x>0 else 0))
+        
+        # Final Norm
+        for i in range(channels):
+            norm = mul(diffs[i], inv_std)
+            scaled = mul(norm, gamma[i][0])
+            y_i = add(scaled, beta[i][0])
+            y_row.append(y_i)
+            
+        Y.append(y_row)
+    return Y

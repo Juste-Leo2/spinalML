@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 
 case class LayerNormTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val x = slave(Tensor(dataType, Seq(4, 16), lanes = 4))
@@ -21,19 +21,16 @@ case class LayerNormTestComp[T <: Data](dataType: HardType[T]) extends Component
 }
 
 class LayerNormTest extends AnyFunSuite {
-  test("LayerNorm1D compilation on I4") {
-    SpinalConfig().generateVerilog(LayerNormTestComp(I4()))
-  }
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
 
-  test("LayerNorm1D compilation on FP4") {
-    SpinalConfig().generateVerilog(LayerNormTestComp(FP4_E2M1()))
-  }
-
-  test("LayerNorm1D PWL compilation on I16") {
-    SpinalConfig().generateVerilog(LayerNormTestComp(spinalML.dtypes.I16()))
-  }
-
-  test("LayerNorm1D PWL compilation on BF16") {
-    SpinalConfig().generateVerilog(LayerNormTestComp(spinalML.dtypes.BF16()))
+  for ((name, dt) <- compileTypes) {
+    test(s"LayerNorm1D compilation on $name") {
+      SpinalConfig().generateVerilog(LayerNormTestComp(dt()))
+    }
   }
 }

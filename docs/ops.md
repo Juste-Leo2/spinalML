@@ -43,9 +43,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Neural Network Layers
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Linear` (Dense) | ✅ | ✅ | ✅ | ✅ | ❌ | Fully connected layer. *(Requires BRAM)* |
-| `Conv1D` | ✅ | ✅ | ✅ | ✅ | ❌ | 1D convolution over an input signal. |
-| `Conv2D` | ✅ | ✅ | ✅ | ✅ | ❌ | 2D convolution over an input image. *(Requires BRAM)* |
+| `Linear` (Dense) | ✅ | ✅ | ✅ | ✅ | ✅ | Fully connected layer. *(Requires BRAM)* |
+| `Conv1D` | ✅ | ✅ | ✅ | ✅ | ✅ | 1D convolution over an input signal. |
+| `Conv2D` | ✅ | ✅ | ✅ | ✅ | ✅ | 2D convolution over an input image. *(Requires BRAM)* |
 | `DepthwiseConv` | ❌ | ❌ | ❌ | ❌ | ❌ | Depthwise separable convolution. *(Requires BRAM)* |
 
 ## Attention Mechanisms
@@ -67,8 +67,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ❌ | Inference-only (Scale & Shift via DSP). |
-| `LayerNorm1D` | ✅ | ✅ | ✅ | ✅ | ❌ | Pipelined Adder Tree for Mean/Var, LUT/PWL for Rsqrt. |
+| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). |
+| `LayerNorm1D` | ✅ | ✅ | ✅ | ✅ | 🟠 | Pipelined Adder Tree for Mean/Var, LUT/PWL for Rsqrt. |
 
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |

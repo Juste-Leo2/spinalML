@@ -1,0 +1,130 @@
+import cocotb
+from cocotb.triggers import Timer
+from cocotb_test.simulator import run
+import pytest
+import os
+import random
+import numpy as np
+
+from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
+from golden_models.ops import relu_hw
+from utils.tb_utils import run_mill, copy_roms
+from utils.test_layers_utils import get_random_tensor, log_true_math_error
+
+async def run_relu_test(dut, op_name, dtype_name, dtype, X, is_floatml):
+    # Combinatorial circuit, no clk/reset needed
+    dut.io_x_stream_valid.value = 0
+    dut.io_y_stream_ready.value = 1
+    
+    Y_out = []
+    Y_out_bits = []
+    
+    lanes = 2
+    chunks = (len(X) + lanes - 1) // lanes
+    flattened_x = [x[0] for x in X]
+    
+    for chunk in range(chunks):
+        if is_floatml:
+            for l in range(lanes):
+                idx = chunk * lanes + l
+                val = flattened_x[idx] if idx < len(flattened_x) else 0.0
+                val_bits = dtype.from_float(val)
+                sign = (val_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+                exp_val = (val_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+                mant = val_bits & ((1 << dtype.mant_bits) - 1)
+                getattr(dut, f"io_x_stream_payload_{l}_sign").value = sign
+                getattr(dut, f"io_x_stream_payload_{l}_exponent").value = exp_val
+                getattr(dut, f"io_x_stream_payload_{l}_mantissa").value = mant
+        else:
+            for l in range(lanes):
+                idx = chunk * lanes + l
+                val = flattened_x[idx] if idx < len(flattened_x) else 0.0
+                val_bits = dtype.from_float(val)
+                getattr(dut, f"io_x_stream_payload_{l}").value = val_bits
+                
+        dut.io_x_stream_valid.value = 1
+        await Timer(10, units="ns")
+        
+        for l in range(lanes):
+            idx = chunk * lanes + l
+            if idx < len(flattened_x):
+                if is_floatml:
+                    out_sign = int(getattr(dut, f"io_y_stream_payload_{l}_sign").value)
+                    out_exp = int(getattr(dut, f"io_y_stream_payload_{l}_exponent").value)
+                    out_mant = int(getattr(dut, f"io_y_stream_payload_{l}_mantissa").value)
+                    bits = (out_sign << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
+                else:
+                    bits = int(getattr(dut, f"io_y_stream_payload_{l}").value)
+                    
+                Y_out_bits.append([bits])
+                Y_out.append([dtype.to_float(bits)])
+                
+    dut.io_x_stream_valid.value = 0
+
+    # True Math
+    X_np = np.array([x[0] for x in X])
+    Y_true = [[float(max(0.0, x))] for x in X_np]
+    
+    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+    dut._log.info(log_msg)
+    
+    # Exact HW Math
+    Y_expected = relu_hw(X, dtype)
+    
+    bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
+    for m in range(len(X)):
+        for n in range(1):
+            exp_val = Y_expected[m][n]
+            exp_bits = dtype.from_float(exp_val)
+            out_bits = Y_out_bits[m][0]
+            out_val = Y_out[m][0]
+            if bit_width > 8 and is_floatml:
+                assert abs(out_bits - exp_bits) <= 1, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {dtype.to_float(exp_bits)}"
+            else:
+                assert out_bits == exp_bits, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {dtype.to_float(exp_bits)}"
+
+# ----------------- COCOTB TESTS -----------------
+@cocotb.test()
+async def cocotb_relu_i8(dut):
+    X = get_random_tensor((4, 1), 10.0, True)
+    await run_relu_test(dut, "ReLU", "I8", I8, X, False)
+
+@cocotb.test()
+async def cocotb_relu_fp8(dut):
+    X = get_random_tensor((4, 1), 5.0, False)
+    await run_relu_test(dut, "ReLU", "FP8", FP8_E4M3, X, True)
+
+@cocotb.test()
+async def cocotb_relu_i16(dut):
+    X = get_random_tensor((4, 1), 100.0, True)
+    await run_relu_test(dut, "ReLU", "I16", I16, X, False)
+
+@cocotb.test()
+async def cocotb_relu_bf16(dut):
+    X = get_random_tensor((4, 1), 10.0, False)
+    await run_relu_test(dut, "ReLU", "BF16", BF16, X, True)
+
+
+# ----------------- PYTEST RUNNERS -----------------
+def run_relu_sim(dtype_filter, testcase_name, request=None):
+    v_file = run_mill("spinalML.activations.ReLUTest", dtype_filter, "ReLUTestComp")
+    build_dir = f"sim_build/relu_relutestcomp_{dtype_filter.lower()}"
+    copy_roms(build_dir)
+    debug_flag = "1" if request and request.config.getoption("--debug-math") else "0"
+    run(
+        language="verilog",
+        verilog_sources=[v_file],
+        toplevel="ReLUTestComp",
+        module="test_relu",
+        testcase=testcase_name,
+        simulator="verilator",
+        sim_build=build_dir,
+        timescale="1ns/1ps",
+        extra_args=["-Wno-fatal"],
+        extra_env={"DEBUG_MATH": debug_flag}
+    )
+
+def test_pytest_relu_i8(request): run_relu_sim("I8", "cocotb_relu_i8", request)
+def test_pytest_relu_fp8(request): run_relu_sim("FP8", "cocotb_relu_fp8", request)
+def test_pytest_relu_i16(request): run_relu_sim("I16", "cocotb_relu_i16", request)
+def test_pytest_relu_bf16(request): run_relu_sim("BF16", "cocotb_relu_bf16", request)
