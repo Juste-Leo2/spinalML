@@ -6,6 +6,7 @@ This document lists the machine learning operations that spinalML aims to suppor
 To ensure optimal synthesis on FPGA, operations must follow these memory guidelines:
 - **Streaming & Element-wise Ops**: Do not instantiate `Mem`. Use pure combinational logic or simple `Vec(Reg(dataType))` for 1D sliding windows (e.g., `seq2col`, `MaxPool1D`). These map efficiently to Shift Register LUTs (SRLs).
 - **Stateful Ops (Large Buffers & 2D Windows)**: When storing large tiles or full tensors (e.g., `matmul` weights, `transpose` buffers, `im2col` line buffers), you MUST use `Mem` with **`readSync`** (synchronous read). This introduces a 1-cycle latency that must be pipelined, but guarantees the synthesizer will infer **Block RAM (BRAM)**. Using `readAsync` forces the synthesizer to use distributed LUTRAM, which consumes massive logic resources and ruins Fmax.
+- **FloatML Non-Linear Ops (`Exp`, `Reciprocal`, `Sqrt`)**: Instead of generic Piece-Wise Linear (PWL) approximations which perform poorly on floating point numbers, we implement **Algebraic Separation** (Exponent/Mantissa Split). For example, $e^X = 2^{X \log_2(e)}$ decomposes the exponent into integer and fractional parts, allowing a small, fast 1D LUT (e.g., 256 entries for `BF16` mantissa) to compute the fractional mantissa with near-perfect accuracy without DSP multipliers.
 
 ## Basic Arithmetic
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
@@ -14,13 +15,15 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
 | `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
-| `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Element-wise exponential. |
+| `Exp` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Alg+LUT: Math for $E$, LUT for $M$. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
-| `Reciprocal` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Inverse: 1/X. |
-| `Rsqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Inverse Square Root. |
-| `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Square Root. |
+| `Reciprocal` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Alg+LUT: Math for $E$, LUT for $M$. |
+| `Rsqrt` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Inverse Square Root. |
+| `Sqrt` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Square Root. |
 | `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
+
+*Alg+LUT: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa).*
 
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
@@ -61,7 +64,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ❌ | Leaky Rectified Linear Unit. |
 | `Sigmoid` | ❌ | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
 | `Tanh` | ❌ | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
-| `Softmax` | ✅ | ✅ | ✅ | ✅ | ❌ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
+| `Softmax` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |

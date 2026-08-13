@@ -29,8 +29,15 @@ case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: In
   }
 
   def sub(a: T, b: T): T = (a, b) match {
-    case (vx: SInt, va: SInt) => (vx - va).resized.asInstanceOf[T]
-    case (vx: UInt, va: UInt) => (vx - va).resized.asInstanceOf[T]
+    case (vx: SInt, va: SInt) => 
+       val diff = vx -^ va // expands by 1 bit
+       val minVal = -(1 << (vx.getBitsWidth - 1))
+       val clamped = Mux(diff < minVal, S(minVal, vx.getBitsWidth bits), diff.resized)
+       clamped.asInstanceOf[T]
+    case (vx: UInt, va: UInt) => 
+       val diff = vx.intoSInt -^ va.intoSInt
+       val clamped = Mux(diff < 0, U(0, vx.getBitsWidth bits), diff.asUInt.resized)
+       clamped.asInstanceOf[T]
     case (vx: FloatML, va: FloatML) => 
         val negB = FloatML(va.expBits, va.mantBits)
         negB.sign := !va.sign
@@ -88,15 +95,9 @@ case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: In
       currentLen = nextLen
     }
     
-    val outVal = Stream(dataType)
-    val outCarry = Stream(carryStream.payloadType())
-    
-    outVal.valid := currentStream.valid
-    outCarry.valid := currentStream.valid
-    currentStream.ready := outVal.ready && outCarry.ready
-    
-    outVal.payload := currentStream.payload.vals(0)
-    outCarry.payload := currentStream.payload.carry
+    val (stream1, stream2) = StreamFork2(currentStream)
+    val outVal = stream1.translateWith(stream1.payload.vals(0))
+    val outCarry = stream2.translateWith(stream2.payload.carry)
     
     (outVal, outCarry)
   }

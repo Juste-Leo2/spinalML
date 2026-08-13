@@ -26,6 +26,95 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, Math.exp)
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
+    
+  } else if (dataType().isInstanceOf[FloatML]) {
+    // Algebraic separation for FloatML > 8 bits (e.g. BF16, FP16)
+    val fType = dataType().asInstanceOf[FloatML]
+    val expBits = fType.expBits
+    val mantBits = fType.mantBits
+    val bias = fType.bias
+    
+    val numEntries = 256
+    val lutContent = for (f <- 0 until numEntries) yield {
+      val frac = f.toDouble / numEntries
+      val mantFloat = Math.pow(2.0, frac) // in [1.0, 2.0)
+      val newM = scala.math.round((mantFloat - 1.0) * (1 << mantBits)).toInt
+      val clampedM = scala.math.min(scala.math.max(newM, 0), (1 << mantBits) - 1)
+      B(clampedM, mantBits bits)
+    }
+    
+    val mantLuts = for (i <- 0 until lanes) yield Mem(Bits(mantBits bits), initialContent = lutContent)
+    
+    val outPayload = Vec(dataType, lanes)
+    val stage1_valid = RegInit(False)
+    
+    when(io.a.stream.ready) {
+      stage1_valid := io.a.stream.valid
+    }
+    
+    for (i <- 0 until lanes) {
+      val x = io.a.stream.payload(i).asInstanceOf[FloatML]
+      val isZero = x.exponent === 0
+      
+      // 1. Convert to Fixed Point Q8.8
+      val expTrueSInt = x.exponent.intoSInt - bias
+      val shiftSInt = expTrueSInt - mantBits + 8
+      
+      val isLeftShift = shiftSInt > 0
+      val shiftAbs = Mux(isLeftShift, shiftSInt, -shiftSInt).asUInt
+      
+      val mantWithOne = (B"1" ## x.mantissa).asUInt
+      val absFixed = UInt(16 bits)
+      
+      when(isLeftShift) {
+        absFixed := Mux(shiftAbs > 15, U(0xFFFF, 16 bits), (mantWithOne << shiftAbs.resize(4)).resize(16))
+      } otherwise {
+        absFixed := Mux(shiftAbs > 15, U(0, 16 bits), (mantWithOne >> shiftAbs.resize(4)).resize(16))
+      }
+      
+      val fixedX = Mux(x.sign, -absFixed.intoSInt, absFixed.intoSInt)
+      
+      // 2. Multiply by log2(e) in Q0.16 format. log2(e) * 2^16 = 94548
+      val log2e = S(94548, 18 bits)
+      val yFixedFull = (fixedX * log2e) // Q8.8 * Q0.16 = Q8.24
+      
+      // 3. Extract Integer (I) and Fractional (F)
+      val I = (yFixedFull >> 24).resize(expBits + 2 bits) // SInt
+      val F = yFixedFull(23 downto 16).asUInt // UInt, 8 bits for LUT
+      
+      // 4. LUT Lookup
+      val readMant = mantLuts(i).readSync(F, enable = io.a.stream.ready)
+      
+      val outX = FloatML(expBits, mantBits)
+      outX.sign := False // e^x is always positive
+      
+      val newExpSInt = I + S(bias, expBits + 2 bits)
+      val expUnderflow = RegNextWhen(newExpSInt <= 0, io.a.stream.ready)
+      val expOverflow = RegNextWhen(newExpSInt >= S((1 << expBits) - 1, expBits + 2 bits), io.a.stream.ready)
+      val regNewExp = RegNextWhen(newExpSInt.asUInt.resize(expBits), io.a.stream.ready)
+      val regIsZero = RegNextWhen(isZero, io.a.stream.ready)
+      
+      when(regIsZero) {
+        outX.exponent := bias
+        outX.mantissa := 0
+      } elsewhen (expUnderflow) {
+        outX.exponent := 0
+        outX.mantissa := 0
+      } elsewhen (expOverflow) {
+        outX.exponent := ((1 << expBits) - 1)
+        outX.mantissa := 0
+      } otherwise {
+        outX.exponent := regNewExp
+        outX.mantissa := readMant.asUInt
+      }
+      
+      outPayload(i).assignFrom(outX.asInstanceOf[T])
+    }
+    
+    io.a.stream.ready := io.c.stream.ready || !stage1_valid
+    io.c.stream.valid := stage1_valid
+    io.c.stream.payload := outPayload
+    
   } else {
     // PWL Approximation for BF16/FP16/I16/I32
     val indexBits = 8

@@ -396,9 +396,57 @@ def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8) -> int:
     return dtype.from_float(res_hw)
 
 def pwl_exp_float(x_val: float, dtype, index_bits: int = 8) -> int:
-    def exp_fn(x):
-        return math.exp(x)
-    return pwl_float(x_val, dtype, exp_fn, index_bits)
+    x_bits = dtype.from_float(x_val)
+    exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    mant = x_bits & ((1 << dtype.mant_bits) - 1)
+    sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    
+    if exp == 0:
+        out_exp = dtype.bias
+        out_mant = 0
+    else:
+        expTrueSInt = exp - dtype.bias
+        shiftSInt = expTrueSInt - dtype.mant_bits + 8
+        mantWithOne = (1 << dtype.mant_bits) | mant
+        
+        isLeftShift = shiftSInt > 0
+        shiftAbs = abs(shiftSInt)
+        
+        if isLeftShift:
+            absFixed = 0xFFFF if shiftAbs > 15 else ((mantWithOne << (shiftAbs & 15)) & 0xFFFF)
+        else:
+            absFixed = 0 if shiftAbs > 15 else ((mantWithOne >> (shiftAbs & 15)) & 0xFFFF)
+            
+        if sign:
+            fixedX = (-absFixed) & 0xFFFF
+            fixedX_sint = fixedX - 0x10000 if fixedX & 0x8000 else fixedX
+        else:
+            fixedX_sint = absFixed
+            
+        log2e = 94548
+        yFixedFull = fixedX_sint * log2e
+        
+        I = yFixedFull >> 24
+        F = (yFixedFull >> 16) & 0xFF
+        
+        numEntries = 256
+        frac = F / numEntries
+        mantFloat = math.pow(2.0, frac)
+        newM = round((mantFloat - 1.0) * (1 << dtype.mant_bits))
+        readMant = max(0, min(newM, (1 << dtype.mant_bits) - 1))
+        
+        newExpSInt = I + dtype.bias
+        if newExpSInt <= 0:
+            out_exp, out_mant = 0, 0
+        elif newExpSInt >= ((1 << dtype.exp_bits) - 1):
+            out_exp = (1 << dtype.exp_bits) - 1
+            out_mant = 0
+        else:
+            out_exp = newExpSInt
+            out_mant = readMant
+            
+    out_bits = (0 << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
+    return out_bits
 
 def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
     def rsqrt_fn(x):
@@ -411,6 +459,35 @@ def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
     return pwl_float(x_val, dtype, sqrt_fn, index_bits)
 
 def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
-    def rec_fn(x):
-        return 1.0 / (x + (1e-9 if x >= 0 else -1e-9))
-    return pwl_float(x_val, dtype, rec_fn, index_bits)
+    x_bits = dtype.from_float(x_val)
+    exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    mant = x_bits & ((1 << dtype.mant_bits) - 1)
+    sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    
+    if exp == 0:
+        out_exp = (1 << dtype.exp_bits) - 1
+        out_mant = 0
+    else:
+        numEntries = 1 << dtype.mant_bits
+        if mant == 0:
+            readMant = 0
+        else:
+            floatM = 1.0 + mant / numEntries
+            recipM = 2.0 / floatM
+            newM = round((recipM - 1.0) * numEntries)
+            readMant = max(0, min(newM, numEntries - 1))
+            
+        shift = 0 if mant == 0 else 1
+        newExpSInt = 2 * dtype.bias - exp - shift
+        
+        if newExpSInt <= 0:
+            out_exp, out_mant = 0, 0
+        elif newExpSInt >= ((1 << dtype.exp_bits) - 1):
+            out_exp = (1 << dtype.exp_bits) - 1
+            out_mant = 0
+        else:
+            out_exp = newExpSInt
+            out_mant = readMant
+            
+    out_bits = (sign << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
+    return out_bits
