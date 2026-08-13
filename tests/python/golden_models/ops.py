@@ -129,6 +129,55 @@ def floatml_div(a: float, b: float, dtype: FloatML) -> float:
     # 2. HW Mul of a and inv_b
     return floatml_mul(a, inv_b, dtype)
 
+def abs_hw(x: float, dtype) -> float:
+    """Golden model for Abs (Hardware matched)."""
+    is_float = hasattr(dtype, 'exp_bits')
+    if is_float:
+        x_bits = dtype.from_float(x)
+        # Clear the sign bit (MSB)
+        x_bits &= ((1 << (dtype.exp_bits + dtype.mant_bits)) - 1)
+        return dtype.to_float(x_bits)
+    else:
+        # Integer: just use python abs() and requantize (in case of min negative value overflow)
+        # SInt: min value -128 becomes +128 which overflows to -128 or gets clamped to 127 in HW?
+        # In HW: valA < 0 ? -valA : valA.
+        # Wait, for SInt 8 bits, -(-128) is 128, which truncated to 8 bits is -128.
+        # But wait, python abs(-128) is 128. If we want bit accurate:
+        # Let's do exactly what hardware does: Mux(valA < 0, -valA, valA)
+        x_bits = dtype.from_float(x)
+        valA = x_bits
+        if valA & (1 << (dtype.bit_width - 1)): # is negative
+            out_bits = (-valA) & ((1 << dtype.bit_width) - 1)
+        else:
+            out_bits = valA
+        return dtype.to_float(out_bits)
+
+def scale_add_hw(x: float, a: float, b: float, dtype) -> float:
+    """Golden model for Scale Add: (x * a) + b"""
+    is_float = hasattr(dtype, 'exp_bits')
+    if is_float:
+        mul_res = floatml_mul(x, a, dtype)
+        return floatml_add(mul_res, b, dtype)
+    else:
+        x_bits = dtype.from_float(x)
+        a_bits = dtype.from_float(a)
+        b_bits = dtype.from_float(b)
+        
+        # sign extension for SInt
+        def sign_extend(val, bits):
+            if val & (1 << (bits - 1)):
+                return val - (1 << bits)
+            return val
+            
+        vx = sign_extend(x_bits, dtype.bit_width)
+        va = sign_extend(a_bits, dtype.bit_width)
+        vb = sign_extend(b_bits, dtype.bit_width)
+        
+        # Hardware: outPayload(i).assignFrom(((vx * va) + vb).resized.asInstanceOf[T])
+        res = (vx * va) + vb
+        out_bits = res & ((1 << dtype.bit_width) - 1)
+        return dtype.to_float(out_bits)
+
 def rsqrt(x: float, dtype: FloatML = None) -> float:
     """Golden model for Inverse Square Root. Includes PWL approximation error if dtype is provided."""
     if x <= 0:
@@ -248,6 +297,11 @@ def pwl_rsqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
         return 1.0 / np.sqrt(abs(x) + 1e-5)
     return pwl_int(x_val, bit_width, rsqrt_fn, index_bits)
 
+def pwl_sqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+    def sqrt_fn(x):
+        return np.sqrt(abs(x))
+    return pwl_int(x_val, bit_width, sqrt_fn, index_bits)
+
 def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
     def exp_fn(x):
         return math.exp(x)
@@ -350,6 +404,11 @@ def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
     def rsqrt_fn(x):
         return 1.0 / np.sqrt(abs(x) + 1e-5)
     return pwl_float(x_val, dtype, rsqrt_fn, index_bits)
+
+def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
+    def sqrt_fn(x):
+        return np.sqrt(abs(x))
+    return pwl_float(x_val, dtype, sqrt_fn, index_bits)
 
 def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
     def rec_fn(x):

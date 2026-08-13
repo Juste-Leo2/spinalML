@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 
 case class ScaleAddTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
@@ -18,8 +18,8 @@ case class ScaleAddTestComp[T <: Data](dataType: HardType[T]) extends Component 
 }
 
 class ScaleAddTest extends AnyFunSuite {
-  test("ScaleAdd simulation on I4") {
-    SimConfig.withWave.compile(ScaleAddTestComp(I4())).doSim { dut =>
+  test("ScaleAdd simulation on I8") {
+    SimConfig.withWave.compile(ScaleAddTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.x.stream.valid #= false
@@ -53,15 +53,8 @@ class ScaleAddTest extends AnyFunSuite {
     }
   }
 
-  test("ScaleAdd compilation on I16") {
-    SpinalConfig().generateVerilog(ScaleAddTestComp(I16()))
-  }
-
-  test("ScaleAdd compilation on FP4") {
-    SpinalConfig().generateVerilog(ScaleAddTestComp(FP4_E2M1()))
-  }
-
-  test("ScaleAdd compilation on BF16") {
-    SpinalConfig().generateVerilog(ScaleAddTestComp(BF16()))
-  }
+  test("ScaleAdd compilation on I8") { SpinalConfig().generateVerilog(ScaleAddTestComp(I8())) }
+  test("ScaleAdd compilation on I16") { SpinalConfig().generateVerilog(ScaleAddTestComp(I16())) }
+  test("ScaleAdd compilation on FP8") { SpinalConfig().generateVerilog(ScaleAddTestComp(FP8_E4M3())) }
+  test("ScaleAdd compilation on BF16") { SpinalConfig().generateVerilog(ScaleAddTestComp(BF16())) }
 }

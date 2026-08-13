@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1, I16, BF16}
+import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 
 case class SqrtTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
@@ -16,8 +16,8 @@ case class SqrtTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class SqrtTest extends AnyFunSuite {
-  test("Sqrt LUT compilation on I4") { SpinalConfig().generateVerilog(SqrtTestComp(I4())) }
-  test("Sqrt LUT compilation on FP4") { SpinalConfig().generateVerilog(SqrtTestComp(FP4_E2M1())) }
-  test("Sqrt PWL compilation on I16") { SpinalConfig().generateVerilog(SqrtTestComp(I16())) }
-  test("Sqrt PWL compilation on BF16") { SpinalConfig().generateVerilog(SqrtTestComp(BF16())) }
+  test("Sqrt compilation on I8") { SpinalConfig().generateVerilog(SqrtTestComp(I8())) }
+  test("Sqrt compilation on I16") { SpinalConfig().generateVerilog(SqrtTestComp(I16())) }
+  test("Sqrt compilation on FP8") { SpinalConfig().generateVerilog(SqrtTestComp(FP8_E4M3())) }
+  test("Sqrt compilation on BF16") { SpinalConfig().generateVerilog(SqrtTestComp(BF16())) }
 }

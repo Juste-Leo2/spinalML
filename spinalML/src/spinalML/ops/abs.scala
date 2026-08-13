@@ -29,7 +29,7 @@ case class AbsOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
       }
     }
     outPayload
-  }
+  }.m2sPipe()
 }
 
 object abs {

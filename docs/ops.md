@@ -16,11 +16,11 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
 | `Exp` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Element-wise exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
-| `Abs` | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise absolute value. |
-| `sqrt`| ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ❌ | Square Root. |
-| `reciprocal` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ❌ | Inverse (1/x). |
-| `rsqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Inverse Square Root (1/sqrt(x)). |
-| `scale_add` | ✅ | ✅ | ✅ | ✅ | ❌ | Fast Fused MAC (A*X + B). Mapped to DSP48. |
+| `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
+| `Reciprocal` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Inverse: 1/X. |
+| `Rsqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Inverse Square Root. |
+| `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ (PWL) | ✅ | Square Root. |
+| `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
 
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
