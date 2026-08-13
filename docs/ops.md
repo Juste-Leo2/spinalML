@@ -64,7 +64,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ❌ | Leaky Rectified Linear Unit. |
 | `Sigmoid` | ❌ | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
 | `Tanh` | ❌ | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
-| `Softmax` | ✅ (PWL) | ✅ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
+| `Softmax` | ⚠️ (PWL) | ⚠️ (PWL) | ✅ (Alg+LUT) | ✅ (Alg+LUT) | ✅ | Softmax function. ⚠️: Supported but mathematically meaningless for unquantized integers. |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |

@@ -16,6 +16,21 @@ object MathLUTs {
     Mem(Bits(bitWidth bits), initialContent = romContent)
   }
 
+  // Generates a ROM specifically for FloatML mantissa fraction processing (Algebraic Separation)
+  def generateFloatMantissaROM(inBits: Int, outBits: Int, mathFn: Double => Double): Mem[Bits] = {
+    val states = 1 << inBits
+    val romContent = for (i <- 0 until states) yield {
+      val mantFraction = i.toDouble / states
+      val realMant = 1.0 + mantFraction
+      val y = mathFn(realMant) // y should ideally be within [1.0, 2.0)
+      val frac = y - 1.0
+      val outStates = 1 << outBits
+      val encoded = Math.round(frac * outStates).toInt
+      B(if (encoded >= outStates) outStates - 1 else encoded, outBits bits)
+    }
+    Mem(Bits(outBits bits), initialContent = romContent)
+  }
+
   // Integer codecs (2's complement)
   def intValFn(bitWidth: Int): Int => Double = i => {
     val maxVal = 1 << bitWidth

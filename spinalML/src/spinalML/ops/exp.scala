@@ -34,16 +34,14 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val mantBits = fType.mantBits
     val bias = fType.bias
     
-    val numEntries = 256
-    val lutContent = for (f <- 0 until numEntries) yield {
-      val frac = f.toDouble / numEntries
-      val mantFloat = Math.pow(2.0, frac) // in [1.0, 2.0)
-      val newM = scala.math.round((mantFloat - 1.0) * (1 << mantBits)).toInt
-      val clampedM = scala.math.min(scala.math.max(newM, 0), (1 << mantBits) - 1)
-      B(clampedM, mantBits bits)
-    }
+    // The fixed-point math produces a fractional part of 8 bits for the LUT index.
+    // This is sufficient for up to BF16 (mantBits=7). For FP16/32, we would need 
+    // a larger index (e.g. 10 or 23 bits) and likely PWL interpolation to avoid huge ROMs.
+    val lutIndexBits = 8
     
-    val mantLuts = for (i <- 0 until lanes) yield Mem(Bits(mantBits bits), initialContent = lutContent)
+    val mantLuts = for (i <- 0 until lanes) yield {
+      spinalML.utils.MathLUTs.generateFloatMantissaROM(lutIndexBits, mantBits, x => Math.pow(2.0, x - 1.0))
+    }
     
     val outPayload = Vec(dataType, lanes)
     val stage1_valid = RegInit(False)
@@ -80,7 +78,8 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
       
       // 3. Extract Integer (I) and Fractional (F)
       val I = (yFixedFull >> 24).resize(expBits + 2 bits) // SInt
-      val F = yFixedFull(23 downto 16).asUInt // UInt, 8 bits for LUT
+      // We extract the top `lutIndexBits` from the 24-bit fractional part
+      val F = yFixedFull(23 downto (24 - lutIndexBits)).asUInt // UInt for LUT index
       
       // 4. LUT Lookup
       val readMant = mantLuts(i).readSync(F, enable = io.a.stream.ready)

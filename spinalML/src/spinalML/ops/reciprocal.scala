@@ -38,20 +38,12 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
     
     // LUT for mantissa: maps 1.M to 2 / 1.M
     // The mantissa has `mantBits`. M ranges from 0 to (1<<mantBits)-1.
-    val numEntries = 1 << mantBits
-    val lutContent = for (m <- 0 until numEntries) yield {
-      if (m == 0) {
-        B(0, mantBits bits)
-      } else {
-        val floatM = 1.0 + m.toDouble / numEntries
-        val recipM = 2.0 / floatM // This is in (1.0, 2.0)
-        val newM = scala.math.round((recipM - 1.0) * numEntries).toInt
-        val clampedM = scala.math.min(scala.math.max(newM, 0), numEntries - 1)
-        B(clampedM, mantBits bits)
-      }
+    val mantLuts = for (i <- 0 until lanes) yield {
+      spinalML.utils.MathLUTs.generateFloatMantissaROM(mantBits, mantBits, x => {
+        // x is realMant = 1.0 + mantFraction
+        if (x == 1.0) 1.0 else (2.0 / x)
+      })
     }
-    
-    val mantLuts = for (i <- 0 until lanes) yield Mem(Bits(mantBits bits), initialContent = lutContent)
     
     val outPayload = Vec(dataType, lanes)
     val stage1_valid = RegInit(False)
