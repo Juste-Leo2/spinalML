@@ -25,9 +25,19 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
 
 ## 4. System Integration & Advanced Improvements (Future Work)
-- [ ] **AXI-DMA Integration**: Develop or integrate a top-level controller to feed AXI4-Stream interfaces directly from external DDR memory.
+
 - [ ] **Advanced Tiling (Matrix A)**: Implement a Write-Back module and advanced tiling logic for massive matrices where partial sums cannot fit entirely in the on-chip accumulators.
 - [x] **Dynamic Padding**: Add hardware or software-side logic to support tensor dimensions that are not perfect multiples of the `lanes` or `tileSize` parameters.
 - [x] **Hardware Adder Tree (Timing Optimization)**: Replace the linear accumulation loop in `MatmulOp` with a logarithmic pipelined Adder Tree to resolve severe combinatorial timing delays and preserve high $F_{max}$.
 - [ ] **Floating-Point Pipelining (Retiming)**: Introduce internal pipeline registers inside `FloatML` arithmetic operations (`Add`, `Mul`) to prevent synthesis timing violations.
 - [x] **True Matrix-Matrix Multiplication (GEMM)**: Upgrade the `MatmulOp` from Matrix-Vector (currently restricted by `shapeB(1) == 1`) to full Matrix-Matrix support for batch processing and attention mechanisms.
+
+## 5. Advanced Memory Architecture
+- [x] **AXI4 Memory Mapped Master (DDR4)**: Implement an internal DMA controller capable of random addressing to autonomously fetch data and weights from external DDR4 memory.
+- [x] **Hardware Tiling & Caching**: Implement automated 2D tiling to split large tensors (e.g. images) that cannot fit in FPGA BRAM, swapping them dynamically with DDR4 (Implemented via `DMAReader2D`).
+- [ ] **Weight Manager (Pre-fetching)**: Implement asynchronous double-buffering for network weights, fetching layer $N+1$ from DDR4 while layer $N$ is currently computing.
+
+## 6. High-Level AI Abstraction
+- [ ] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
+- [ ] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
+- [ ] **ONNX One-Liner Importer**: Develop a parser that reads an ONNX model file and automatically generates a fully functional SpinalML hardware accelerator in a single line of Scala code.

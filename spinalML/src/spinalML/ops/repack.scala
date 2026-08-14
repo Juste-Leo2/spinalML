@@ -35,6 +35,12 @@ object repack {
     // If the lanes are already correct, return the tensor directly
     if (a.lanes == newLanes) return a
     
+    // If widths are not multiples of each other, chain through 1 lane
+    if (a.lanes % newLanes != 0 && newLanes % a.lanes != 0) {
+      val temp = repack(a, 1)
+      return repack(temp, newLanes)
+    }
+    
     val repackComp = RepackOp(a.dataType, a.shape, a.lanes, newLanes)
     repackComp.io.a <> a
     repackComp.io.c
