@@ -68,7 +68,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). |
-| `LayerNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. |
+| `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. |
 
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |

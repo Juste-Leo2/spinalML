@@ -22,7 +22,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
     }
     
-    val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-5))
+    val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9))
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
   } else if (dataType().isInstanceOf[FloatML]) {
@@ -122,7 +122,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
     }
     
-    val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-5)
+    val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9)
     val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
     
     val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)

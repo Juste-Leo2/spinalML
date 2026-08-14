@@ -172,13 +172,26 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   val (varSumStream, carryDiffsStream) = buildPipelinedTree(diffsOnly, origDiffsOnly, add)
   val varStream = varSumStream.translateWith(divN(varSumStream.payload, channels))
   
-  // 3. Rsqrt(sigma^2)
+  // 3. Rsqrt(sigma^2 + eps)
   val rsqrtComp = spinalML.ops.RsqrtOp(dataType, Seq(1), lanes = 1)
   
+  val epsVal: T = (dataType() match {
+    case f: FloatML => 
+      val epsBits = B(spinalML.utils.MathLUTs.floatEncodeFn(f.expBits, f.mantBits)(1e-5), f.getBitsWidth bits)
+      val epsFloat = FloatML(f.expBits, f.mantBits)
+      epsFloat.assignFromBits(epsBits)
+      epsFloat
+    case s: SInt => S(0, s.getWidth bits)
+    case u: UInt => U(0, u.getWidth bits)
+    case _ => throw new Exception("Unsupported type")
+  }).asInstanceOf[T]
+
+  val varWithEpsStream = varStream.translateWith(add(varStream.payload, epsVal))
+
   val varVecStream = Stream(Vec(dataType, 1))
-  varVecStream.valid := varStream.valid
-  varVecStream.payload(0) := varStream.payload
-  varStream.ready := varVecStream.ready
+  varVecStream.valid := varWithEpsStream.valid
+  varVecStream.payload(0) := varWithEpsStream.payload
+  varWithEpsStream.ready := varVecStream.ready
   
   rsqrtComp.io.a.stream << varVecStream
   val invStdDevStream = rsqrtComp.io.c.stream

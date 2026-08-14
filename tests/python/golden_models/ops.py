@@ -183,8 +183,8 @@ def rsqrt(x: float, dtype: FloatML = None) -> float:
     if x <= 0:
         return 0.0 # Or hardware default
     
-    # Exact math (matching SpinalHDL 1e-5 offset to avoid div by zero)
-    exact = 1.0 / np.sqrt(abs(x) + 1e-5)
+    # Exact math (matching SpinalHDL 1e-9 offset to avoid div by zero)
+    exact = 1.0 / np.sqrt(abs(x) + 1e-9)
     
     if dtype is None:
         return exact
@@ -294,7 +294,7 @@ def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8) -> int:
 
 def pwl_rsqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-5)
+        return 1.0 / np.sqrt(abs(x) + 1e-9)
     return pwl_int(x_val, bit_width, rsqrt_fn, index_bits)
 
 def pwl_sqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
@@ -450,7 +450,7 @@ def pwl_exp_float(x_val: float, dtype, index_bits: int = 8) -> int:
 
 def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-5)
+        return 1.0 / np.sqrt(abs(x) + 1e-9)
     return pwl_float(x_val, dtype, rsqrt_fn, index_bits)
 
 def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
