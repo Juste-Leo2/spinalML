@@ -5,15 +5,15 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 
 class FlattenTest extends AnyFunSuite {
   test("Flatten tensor dimensions") {
     val compiled = SimConfig.withWave.compile {
       new Component {
         val io = new Bundle {
-          val a = slave(Tensor(I4(), Seq(2, 3, 4), lanes = 2))
-          val c = master(Tensor(I4(), Seq(24), lanes = 2))
+          val a = slave(Tensor(I8(), Seq(2, 3, 4), lanes = 2))
+          val c = master(Tensor(I8(), Seq(24), lanes = 2))
         }
         io.c <> flatten(io.a)
       }
@@ -36,11 +36,20 @@ class FlattenTest extends AnyFunSuite {
     }
   }
 
-  test("Test Flatten compilation on FP4") {
-    SpinalConfig().generateVerilog(new Component {
-      val a = slave(Tensor(FP4_E2M1(), Seq(2, 3, 4), lanes = 2))
-      val c = master(Tensor(FP4_E2M1(), Seq(24), lanes = 2))
-      c <> flatten(a)
-    })
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Flatten compilation on $name") {
+      SpinalConfig().generateVerilog(new Component {
+        val a = slave(Tensor(dt(), Seq(2, 3, 4), lanes = 2))
+        val c = master(Tensor(dt(), Seq(24), lanes = 2))
+        c <> flatten(a)
+      })
+    }
   }
 }

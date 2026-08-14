@@ -32,13 +32,13 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Tensor Manipulations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Reshape` | ✅ | ✅ | ✅ | ✅ | ❌ | Change the dimensions of a tensor without changing its data. |
-| `Transpose` | ✅ | ✅ | ✅ | ✅ | ❌ | Permute the dimensions of a tensor. *(Requires BRAM)* |
-| `Concatenate` | ✅ | ✅ | ✅ | ✅ | ❌ | Join a sequence of tensors along an existing axis. |
-| `Slice` | ✅ | ✅ | ✅ | ✅ | ❌ | Extract a subset of elements from a tensor. |
-| `Flatten` | ✅ | ✅ | ✅ | ✅ | ❌ | Flatten a multi-dimensional tensor into a 1D tensor. |
-| `Seq2Col` | ✅ | ✅ | ✅ | ✅ | ❌ | Convert a 1D sequence into sliding windows. |
-| `Im2Col` | ✅ | ✅ | ✅ | ✅ | ❌ | Convert a 2D image into sliding windows. *(Requires BRAM)* |
+| `Reshape` | ✅ | ✅ | ✅ | ✅ | ✅ | Change the dimensions of a tensor without changing its data. |
+| `Transpose` | ✅ | ✅ | ✅ | ✅ | ✅ | Permute the dimensions of a tensor. *(Requires BRAM)* |
+| `Concatenate` | ✅ | ✅ | ✅ | ✅ | ✅ | Join a sequence of tensors along an existing axis. |
+| `Slice` | ✅ | ✅ | ✅ | ✅ | ✅ | Extract a subset of elements from a tensor. |
+| `Flatten` | ✅ | ✅ | ✅ | ✅ | ✅ | Flatten a multi-dimensional tensor into a 1D tensor. |
+| `Seq2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 1D sequence into sliding windows. |
+| `Im2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 2D image into sliding windows. *(Requires BRAM)* |
 
 ## Neural Network Layers
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
@@ -73,9 +73,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ❌ | 1D max pooling. |
+| `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | 1D max pooling. |
 | `MaxPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | 2D max pooling. *(Requires BRAM)* |
-| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ❌ | 1D average pooling. |
+| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
 | `AvgPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | 2D average pooling. *(Requires BRAM)* |
 
 ## Methodology Notes

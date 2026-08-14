@@ -29,7 +29,7 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
   // Pipeline for synchronous read (BRAM inference)
   val readAddrStream = Stream(UInt(log2Up(totalElements) bits))
   readAddrStream.valid := False
-  readAddrStream.payload := (readRow * N) + readCol
+  readAddrStream.payload := ((readRow * N) + readCol).resized
   
   val readData = mem.readSync(readAddrStream.payload.resized, enable = readAddrStream.ready)
   

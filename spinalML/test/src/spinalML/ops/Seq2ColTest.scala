@@ -5,21 +5,30 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component
-case class Seq2ColTestComp() extends Component {
+// Wrapper component for Seq of 3 with K=2
+case class Seq2ColTestComp_3_K2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I4(), Seq(3, 1), lanes = 1)) // Sequence of 3
-    val c = master(Tensor(I4(), Seq(2, 2), lanes = 2)) // 2 windows of size 2
+    val a = slave(Tensor(dataType, Seq(3, 1), lanes = 1)) // Sequence of 3
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 2)) // 2 windows of size 2
   }
   io.c <> seq2col(io.a, kernelSize = 2)
 }
 
+// Wrapper component for Seq of 5 with K=3
+case class Seq2ColTestComp_5_K3[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(5, 1), lanes = 1)) // Sequence of 5
+    val c = master(Tensor(dataType, Seq(3, 3), lanes = 3)) // 3 windows of size 3
+  }
+  io.c <> seq2col(io.a, kernelSize = 3)
+}
+
 class Seq2ColTest extends AnyFunSuite {
   test("Test Seq2Col sliding window logic") {
-    SimConfig.withWave.compile(Seq2ColTestComp()).doSim { dut =>
+    SimConfig.withWave.compile(Seq2ColTestComp_3_K2(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.a.stream.valid #= false
@@ -65,11 +74,17 @@ class Seq2ColTest extends AnyFunSuite {
     }
   }
 
-  test("Test Seq2Col compilation on FP4") {
-    SpinalConfig().generateVerilog(new Component {
-      val a = slave(Tensor(FP4_E2M1(), Seq(3, 1), lanes = 1))
-      val c = master(Tensor(FP4_E2M1(), Seq(2, 2), lanes = 2))
-      c <> seq2col(a, kernelSize = 2)
-    })
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Seq2Col compilation on $name") {
+      SpinalConfig().generateVerilog(Seq2ColTestComp_3_K2(dt()))
+      SpinalConfig().generateVerilog(Seq2ColTestComp_5_K3(dt()))
+    }
   }
 }

@@ -5,14 +5,14 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing Reshape (and indirectly Flatten)
-case class ReshapeTestComp() extends Component {
+case class ReshapeTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I4(), Seq(2, 4), lanes = 2)) // 8 elements total
-    val reshaped = master(Tensor(I4(), Seq(4, 2), lanes = 2))
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2)) // 8 elements total
+    val reshaped = master(Tensor(dataType, Seq(4, 2), lanes = 2))
   }
   
   // We can chain them to test both metadata ops
@@ -24,7 +24,7 @@ case class ReshapeTestComp() extends Component {
 
 class ReshapeTest extends AnyFunSuite {
   test("Test Reshape and Flatten metadata operations on I8 tensors") {
-    SimConfig.withWave.compile(ReshapeTestComp()).doSim { dut =>
+    SimConfig.withWave.compile(ReshapeTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       // Initialize
@@ -48,11 +48,16 @@ class ReshapeTest extends AnyFunSuite {
     }
   }
 
-  test("Test Reshape compilation on FP4") {
-    SpinalConfig().generateVerilog(new Component {
-      val a = slave(Tensor(FP4_E2M1(), Seq(2, 4), lanes = 2))
-      val c = master(Tensor(FP4_E2M1(), Seq(4, 2), lanes = 2))
-      c <> reshape(a, Seq(4, 2))
-    })
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Reshape compilation on $name") {
+      SpinalConfig().generateVerilog(ReshapeTestComp(dt()))
+    }
   }
 }

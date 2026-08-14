@@ -5,7 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing the MaxPool1D operation
@@ -20,8 +20,8 @@ case class MaxPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component
 }
 
 class MaxPool1DTest extends AnyFunSuite {
-  test("Test streaming MaxPool1D operation on I4 tensors") {
-    SimConfig.withWave.compile(MaxPool1DTestComp(I4())).doSim { dut =>
+  test("Test streaming MaxPool1D operation on I8 tensors") {
+    SimConfig.withWave.compile(MaxPool1DTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       // Initialize Stream signals
@@ -56,12 +56,16 @@ class MaxPool1DTest extends AnyFunSuite {
     }
   }
 
-  test("Test MaxPool1D compilation on I16") {
-    SpinalConfig().generateVerilog(MaxPool1DTestComp(I16()))
+  test("Test MaxPool1D compilation on I8") {
+    SpinalConfig().generateVerilog(MaxPool1DTestComp(I8()))
   }
 
-  test("Test MaxPool1D compilation on FP4") {
-    SpinalConfig().generateVerilog(MaxPool1DTestComp(FP4_E2M1()))
+  test("Test MaxPool1D compilation on FP8") {
+    SpinalConfig().generateVerilog(MaxPool1DTestComp(FP8_E4M3()))
+  }
+
+  test("Test MaxPool1D compilation on I16") {
+    SpinalConfig().generateVerilog(MaxPool1DTestComp(I16()))
   }
 
   test("Test MaxPool1D compilation on BF16") {

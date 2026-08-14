@@ -1,0 +1,119 @@
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
+from cocotb_test.simulator import run
+import numpy as np
+
+from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error
+from utils.tb_utils import run_mill, copy_roms
+
+# MaxPool1D golden model
+def maxpool1d_hw(X, poolSize, stride, dtype):
+    L_in = len(X)
+    L_out = (L_in - poolSize) // stride + 1
+    Y = []
+    for i in range(L_out):
+        start = i * stride
+        window = X[start:start+poolSize]
+        
+        # Max hardware emulation
+        max_val = window[0][0]
+        max_bits = dtype.from_float(max_val)
+        for j in range(1, poolSize):
+            val = window[j][0]
+            val_bits = dtype.from_float(val)
+            if dtype.to_float(val_bits) > dtype.to_float(max_bits):
+                max_bits = val_bits
+        
+        Y.append([dtype.to_float(max_bits)])
+    return Y
+
+async def run_maxpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, stride, is_floatml):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+    
+    dut.io_a_stream_valid.value = 0
+    dut.io_c_stream_ready.value = 0
+    
+    L_in = len(X)
+    L_out = (L_in - poolSize) // stride + 1
+    
+    send_x = cocotb.start_soon(send_tensor(dut, "io_a_stream", X, (L_in, 1), 1, dtype, is_floatml))
+    recv_y = cocotb.start_soon(recv_tensor(dut, "io_c_stream", (L_out, 1), dtype, is_floatml))
+    
+    Y_out_bits, Y_out = await recv_y
+    await send_x
+    
+    # True Math
+    X_np = np.array([x[0] for x in X])
+    Y_true = []
+    for i in range(L_out):
+        start = i * stride
+        window = X_np[start:start+poolSize]
+        Y_true.append([float(np.max(window))])
+        
+    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+    dut._log.info(log_msg)
+    
+    # Exact HW Math
+    Y_expected = maxpool1d_hw(X, poolSize, stride, dtype)
+    
+    bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
+    for m in range(L_out):
+        for n in range(1):
+            exp_val = Y_expected[m][n]
+            exp_bits = dtype.from_float(exp_val)
+            out_bits = Y_out_bits[m][n]
+            out_val = Y_out[m][n]
+            if bit_width > 8 and is_floatml:
+                assert abs(out_bits - exp_bits) <= 1, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {dtype.to_float(exp_bits)}"
+            else:
+                assert out_bits == exp_bits, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {dtype.to_float(exp_bits)}"
+
+@cocotb.test()
+async def cocotb_maxpool1d_i8(dut):
+    X = get_random_tensor((4, 1), 100.0, True)
+    await run_maxpool1d_test(dut, "MaxPool1D", "I8", I8, X, 2, 2, False)
+
+@cocotb.test()
+async def cocotb_maxpool1d_fp8(dut):
+    X = get_random_tensor((4, 1), 10.0, False)
+    await run_maxpool1d_test(dut, "MaxPool1D", "FP8", FP8_E4M3, X, 2, 2, True)
+
+@cocotb.test()
+async def cocotb_maxpool1d_i16(dut):
+    X = get_random_tensor((4, 1), 100.0, True)
+    await run_maxpool1d_test(dut, "MaxPool1D", "I16", I16, X, 2, 2, False)
+
+@cocotb.test()
+async def cocotb_maxpool1d_bf16(dut):
+    X = get_random_tensor((4, 1), 10.0, False)
+    await run_maxpool1d_test(dut, "MaxPool1D", "BF16", BF16, X, 2, 2, True)
+
+def run_pool_sim(layer_name, dtype_filter, testcase_name, toplevel, request=None):
+    v_file = run_mill(f"spinalML.poolings.{layer_name}Test", dtype_filter, toplevel)
+    build_dir = f"sim_build/{layer_name.lower()}_{toplevel.lower()}_{dtype_filter.lower()}"
+    copy_roms(build_dir)
+    debug_flag = "1" if request and request.config.getoption("--debug-math") else "0"
+    run(
+        language="verilog",
+        verilog_sources=[v_file],
+        toplevel=toplevel,
+        module=f"test_{layer_name.lower()}",
+        testcase=testcase_name,
+        simulator="verilator",
+        sim_build=build_dir,
+        timescale="1ns/1ps",
+        extra_args=["-Wno-fatal"],
+        extra_env={"DEBUG_MATH": debug_flag}
+    )
+
+def test_pytest_maxpool1d_i8(request): run_pool_sim("MaxPool1D", "I8", "cocotb_maxpool1d_i8", "MaxPool1DTestComp", request)
+def test_pytest_maxpool1d_fp8(request): run_pool_sim("MaxPool1D", "FP8", "cocotb_maxpool1d_fp8", "MaxPool1DTestComp", request)
+def test_pytest_maxpool1d_i16(request): run_pool_sim("MaxPool1D", "I16", "cocotb_maxpool1d_i16", "MaxPool1DTestComp", request)
+def test_pytest_maxpool1d_bf16(request): run_pool_sim("MaxPool1D", "BF16", "cocotb_maxpool1d_bf16", "MaxPool1DTestComp", request)

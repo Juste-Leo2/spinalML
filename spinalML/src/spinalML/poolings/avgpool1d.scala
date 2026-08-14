@@ -26,25 +26,33 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
   io.a.stream.ready := False
   io.c.stream.valid := False
   
-  // Combinatorial average computation (sum then shift)
-  io.c.stream.payload(0) match {
+  // Combinatorial average computation (Adder-Tree then shift)
+  def buildAdderTree(nodes: Seq[Data]): Data = {
+    if (nodes.length == 1) return nodes.head
+    val nextLevel = nodes.grouped(2).map {
+      case Seq(a) => a
+      case Seq(a, b) =>
+        (a, b) match {
+          case (valA: SInt, valB: SInt) => valA + valB
+          case (valA: UInt, valB: UInt) => valA + valB
+          case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => spinalML.utils.Float.add(valA, valB)
+          case _ => throw new Exception("Type not supported in buildAdderTree")
+        }
+    }.toSeq
+    buildAdderTree(nextLevel)
+  }
+
+  shiftReg(0) match {
     case _: SInt => 
-      var acc = shiftReg(0).asInstanceOf[SInt].resize(dataType.getBitsWidth + shift)
-      for (i <- 1 until poolSize) {
-        acc = acc + shiftReg(i).asInstanceOf[SInt].resize(dataType.getBitsWidth + shift)
-      }
+      val resizedNodes = shiftReg.map(_.asInstanceOf[SInt].resize(dataType.getBitsWidth + shift))
+      val acc = buildAdderTree(resizedNodes).asInstanceOf[SInt]
       io.c.stream.payload(0).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
     case _: UInt =>
-      var acc = shiftReg(0).asInstanceOf[UInt].resize(dataType.getBitsWidth + shift)
-      for (i <- 1 until poolSize) {
-        acc = acc + shiftReg(i).asInstanceOf[UInt].resize(dataType.getBitsWidth + shift)
-      }
+      val resizedNodes = shiftReg.map(_.asInstanceOf[UInt].resize(dataType.getBitsWidth + shift))
+      val acc = buildAdderTree(resizedNodes).asInstanceOf[UInt]
       io.c.stream.payload(0).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
     case f: spinalML.dtypes.FloatML =>
-      var acc = shiftReg(0).asInstanceOf[spinalML.dtypes.FloatML]
-      for (i <- 1 until poolSize) {
-        acc = spinalML.utils.Float.add(acc, shiftReg(i).asInstanceOf[spinalML.dtypes.FloatML])
-      }
+      val acc = buildAdderTree(shiftReg.toSeq).asInstanceOf[spinalML.dtypes.FloatML]
       val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
       avg.sign := acc.sign
       avg.mantissa := acc.mantissa

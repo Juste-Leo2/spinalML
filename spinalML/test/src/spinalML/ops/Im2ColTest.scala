@@ -5,21 +5,30 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, FP4_E2M1}
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component
-case class Im2ColTestComp() extends Component {
+// Wrapper component for 3x3 image with 2x2 kernel
+case class Im2ColTestComp_3x3_K2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I4(), Seq(3, 3), lanes = 1)) // 3x3 image
-    val c = master(Tensor(I4(), Seq(4, 4), lanes = 4)) // 4 windows of 2x2
+    val a = slave(Tensor(dataType, Seq(3, 3), lanes = 1)) // 3x3 image
+    val c = master(Tensor(dataType, Seq(4, 4), lanes = 4)) // 4 windows of 2x2
   }
   io.c <> im2col(io.a, kernelSize = 2)
 }
 
+// Wrapper component for 4x4 image with 3x3 kernel
+case class Im2ColTestComp_4x4_K3[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(4, 4), lanes = 1)) // 4x4 image
+    val c = master(Tensor(dataType, Seq(4, 9), lanes = 9)) // 4 windows of 3x3
+  }
+  io.c <> im2col(io.a, kernelSize = 3)
+}
+
 class Im2ColTest extends AnyFunSuite {
   test("Test Im2Col sliding window logic on 3x3 image with 2x2 kernel") {
-    SimConfig.withWave.compile(Im2ColTestComp()).doSim { dut =>
+    SimConfig.withWave.compile(Im2ColTestComp_3x3_K2(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.a.stream.valid #= false
@@ -71,11 +80,17 @@ class Im2ColTest extends AnyFunSuite {
     }
   }
 
-  test("Test Im2Col compilation on FP4") {
-    SpinalConfig().generateVerilog(new Component {
-      val a = slave(Tensor(FP4_E2M1(), Seq(3, 3), lanes = 1))
-      val c = master(Tensor(FP4_E2M1(), Seq(4, 4), lanes = 4))
-      c <> im2col(a, kernelSize = 2)
-    })
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Im2Col compilation on $name") {
+      SpinalConfig().generateVerilog(Im2ColTestComp_3x3_K2(dt()))
+      SpinalConfig().generateVerilog(Im2ColTestComp_4x4_K3(dt()))
+    }
   }
 }

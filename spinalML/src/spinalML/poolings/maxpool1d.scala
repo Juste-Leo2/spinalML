@@ -24,23 +24,23 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
   io.a.stream.ready := False
   io.c.stream.valid := False
   
-  // Combinatorial max computation
-  var currentMax = shiftReg(0)
-  for (i <- 1 until poolSize) {
-    currentMax match {
-      case valA: SInt =>
-        val valB = shiftReg(i).asInstanceOf[SInt]
-        currentMax = Mux(valA > valB, valA, valB).asInstanceOf[T]
-      case valA: UInt =>
-        val valB = shiftReg(i).asInstanceOf[UInt]
-        currentMax = Mux(valA > valB, valA, valB).asInstanceOf[T]
-      case valA: spinalML.dtypes.FloatML =>
-        val valB = shiftReg(i).asInstanceOf[spinalML.dtypes.FloatML]
-        currentMax = spinalML.utils.Float.max(valA, valB).asInstanceOf[T]
-      case _ =>
-        throw new Exception("Data type not supported for MaxPool")
-    }
+  // Combinatorial max computation (Max-Tree)
+  def buildMaxTree(nodes: Seq[T]): T = {
+    if (nodes.length == 1) return nodes.head
+    val nextLevel = nodes.grouped(2).map {
+      case Seq(a) => a
+      case Seq(a, b) =>
+        (a, b) match {
+          case (valA: SInt, valB: SInt) => Mux(valA > valB, valA, valB).asInstanceOf[T]
+          case (valA: UInt, valB: UInt) => Mux(valA > valB, valA, valB).asInstanceOf[T]
+          case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => spinalML.utils.Float.max(valA, valB).asInstanceOf[T]
+          case _ => throw new Exception("Data type not supported for MaxPool")
+        }
+    }.toSeq
+    buildMaxTree(nextLevel)
   }
+  
+  val currentMax = buildMaxTree(shiftReg.toSeq)
   
   io.c.stream.payload(0) := currentMax
   
