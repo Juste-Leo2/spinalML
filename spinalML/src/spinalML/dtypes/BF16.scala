@@ -1,5 +1,7 @@
 package spinalML.dtypes
 
+import spinal.core._
+
 object BF16 {
   /**
    * Bfloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits.

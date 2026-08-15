@@ -1,5 +1,7 @@
 package spinalML.dtypes
 
+import spinal.core._
+
 object FP8_E4M3 {
   /**
    * FP8 E4M3 format: 1 sign bit, 4 exponent bits, 3 mantissa bits.
