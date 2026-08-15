@@ -20,6 +20,7 @@ case class SequentialCNN(override val axiConfig: Axi4Config) extends Accelerator
   modelSpec = Seq(
     Conv2D(inChannels = 1, outChannels = 1, kernelSize = 3), // 8x8 -> 6x6
     ReLU(),
+    Flatten(),
     Linear(inFeatures = 6 * 6, outFeatures = 1) // 36 features
   ),
   axiConfig = axiConfig

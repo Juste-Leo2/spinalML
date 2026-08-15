@@ -9,8 +9,8 @@ import spinalML.ops.{ExpOp, ReciprocalOp}
 case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
   require(isPow2(channels), "Channels must be a power of 2 for AdderTree")
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
-    val y = master(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
+    val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
+    val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
 
   // Helper Math Functions

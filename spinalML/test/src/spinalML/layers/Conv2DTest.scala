@@ -19,7 +19,7 @@ case class Conv2DTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accTyp
     val x = slave(Tensor(dataType, Seq(H, W_in), lanes = 1)) // 3x3 Image
     val w = slave(Tensor(dataType, Seq(K * K, 1), lanes = K * K)) // 2x2 Kernel Flattened
     val b = slave(Tensor(accType, Seq(1, 1), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(totalWindows, 1), lanes = 1)) // Output Flattened
+    val y = master(Tensor(accType, Seq(H - K + 1, W_in - K + 1), lanes = 1)) // 2D Output Image
   }
   io.y <> Conv2D(io.x, io.w, io.b, accType)
 }

@@ -54,7 +54,7 @@ case class SimpleCNN(dataType: HardType[Data]) extends Component {
   bnBeta.stream.payload.foreach(_.assignFromBits(B(0, dataType.getBitsWidth bits)))
   
   val convReshaped = reshape(conv1dOut, Seq(1, 14))
-  val bnOut = batchnorm(convReshaped, bnGamma, bnBeta, seqLen = 14)
+  val bnOut = batchnorm(convReshaped, bnGamma, bnBeta)
   
   val reluOut = relu(bnOut)
   

@@ -7,10 +7,10 @@ import spinalML.dtypes.FloatML
 
 case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
+    val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
     val gamma = slave(Tensor(dataType, Seq(channels), lanes = channels))
     val beta = slave(Tensor(dataType, Seq(channels), lanes = channels))
-    val y = master(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
+    val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
   
   // Registers to hold the static parameters (Scale and Shift)
@@ -62,8 +62,9 @@ case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
 }
 
 object batchnorm {
-  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T], seqLen: Int): Tensor[T] = {
-    val channels = x.shape(0)
+  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T]): Tensor[T] = {
+    val seqLen = x.shape(0)
+    val channels = if (x.shape.length > 1) x.shape(1) else 1
     val comp = BatchNorm1D(x.dataType, channels, seqLen)
     comp.io.x <> x
     comp.io.gamma <> gamma

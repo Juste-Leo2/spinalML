@@ -18,7 +18,7 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
     val x = slave(Tensor(dataType, Seq(H, W_in), lanes = 1)) // Input Image
     val w = slave(Tensor(dataType, Seq(K * K, 1), lanes = K * K)) // Flattened Kernel Weights
     val b = slave(Tensor(accType, Seq(1, 1), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(totalWindows, 1), lanes = 1)) // Flattened Output Image
+    val y = master(Tensor(accType, Seq(H_out, W_out), lanes = 1)) // 2D Output Image
   }
   
   // 1. Im2Col: Convert 2D image into sliding windows
@@ -30,7 +30,10 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
   val matmulResult = matmul(cols, io.w, accType, parallelN = false)
   
   // 3. Add Bias
-  io.y <> bias_add(matmulResult, io.b)
+  val biasAdded = bias_add(matmulResult, io.b)
+  
+  // 4. Reshape to 2D
+  io.y <> reshape(biasAdded, Seq(H_out, W_out))
 }
 
 object Conv2D {

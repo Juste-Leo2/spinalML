@@ -28,7 +28,7 @@ async def run_conv2d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml):
     await send_tensor(dut, "io_b_stream", b, (1, 1), 1, dtype, is_floatml)
     
     send_x = cocotb.start_soon(send_tensor(dut, "io_x_stream", X, (3, 3), 1, dtype, is_floatml))
-    recv_y = cocotb.start_soon(recv_tensor(dut, "io_y_stream", (4, 1), dtype, is_floatml))
+    recv_y = cocotb.start_soon(recv_tensor(dut, "io_y_stream", (2, 2), dtype, is_floatml))
     
     Y_out_bits, Y_out = await recv_y
     await send_x
@@ -38,19 +38,23 @@ async def run_conv2d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml):
     W_np = np.array([w[0] for w in W]).reshape(2, 2)
     Y_true = []
     for i in range(2):
+        row = []
         for j in range(2):
             window = X_np[i:i+2, j:j+2]
-            Y_true.append([float(np.sum(window * W_np) + b[0][0])])
+            row.append(float(np.sum(window * W_np) + b[0][0]))
+        Y_true.append(row)
             
     log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
     dut._log.info(log_msg)
     
     # Exact HW Math
-    Y_expected = conv2d_hw(X, W, b, dtype)
+    # Exact HW Math
+    Y_expected_flat = conv2d_hw(X, W, b, dtype)
+    Y_expected = [[Y_expected_flat[i*2+j][0] for j in range(2)] for i in range(2)]
     
     bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
-    for m in range(4):
-        for n in range(1):
+    for m in range(2):
+        for n in range(2):
             exp_val = Y_expected[m][n]
             exp_bits = dtype.from_float(exp_val)
             out_bits = Y_out_bits[m][n]

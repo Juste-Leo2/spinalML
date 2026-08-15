@@ -8,12 +8,12 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 
 case class BatchNormTestComp[T <: Data](dataType: HardType[T]) extends Component {
-  val x = slave(Tensor(dataType, Seq(4, 16), lanes = 4))
+  val x = slave(Tensor(dataType, Seq(16, 4), lanes = 4))
   val gamma = slave(Tensor(dataType, Seq(4), lanes = 4))
   val beta = slave(Tensor(dataType, Seq(4), lanes = 4))
-  val y = master(Tensor(dataType, Seq(4, 16), lanes = 4))
+  val y = master(Tensor(dataType, Seq(16, 4), lanes = 4))
   
-  y <> batchnorm(x, gamma, beta, seqLen = 16)
+  y <> batchnorm(x, gamma, beta)
 }
 
 class BatchNormTest extends AnyFunSuite {

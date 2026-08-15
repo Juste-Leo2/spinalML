@@ -8,10 +8,10 @@ import spinalML.ops.{rsqrt, scale_add}
 
 case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
+    val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
     val gamma = slave(Tensor(dataType, Seq(channels), lanes = channels))
     val beta = slave(Tensor(dataType, Seq(channels), lanes = channels))
-    val y = master(Tensor(dataType, Seq(channels, seqLen), lanes = channels))
+    val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
   
   // Registers for static parameters

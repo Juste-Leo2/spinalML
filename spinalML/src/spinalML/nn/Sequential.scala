@@ -5,9 +5,10 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
 import spinalML.tensors.Tensor
-import spinalML.layers.{Conv2D => Conv2DHW, Linear => LinearHW}
-import spinalML.ops._
-import spinalML.activations._
+import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => LinearHW, batchnorm}
+import spinalML.ops.{reshape, repack, flatten}
+import spinalML.activations.{relu, leaky_relu}
+import spinalML.poolings.{maxpool1d, avgpool1d}
 
 case class Sequential(
   globalDataType: HardType[Data],
@@ -61,7 +62,8 @@ case class Sequential(
   // Stride is typically width * byteSize
   val pixelBytes = inputDataType.getBitsWidth / 8
   dmaImg.io.cmd.stride := inputShape(1) * pixelBytes 
-  dmaImg.io.cmd.patchWidth := (inputShape(1) / (axiConfig.dataWidth / inputDataType.getBitsWidth)) - 1
+  val elementsPerBeat = axiConfig.dataWidth / inputDataType.getBitsWidth
+  dmaImg.io.cmd.patchWidth := (scala.math.ceil(inputShape(1).toDouble / elementsPerBeat).toInt - 1).max(0)
   dmaImg.io.cmd.patchHeight := inputShape(0)
   
   allAxiMasters += dmaImg.io.axiMaster
@@ -92,7 +94,10 @@ case class Sequential(
       // Linear requires w.lanes == inFeatures.
       val requiredLanes = layer match {
         case c: Conv2D => c.kernelSize * c.kernelSize
+        case c: Conv1D => c.kernelSize * c.inChannels
         case l: Linear => l.inFeatures
+        case bn: BatchNorm1D => bn.features
+        case ln: LayerNorm1D => ln.features
         case _ => 1
       }
       
@@ -116,8 +121,13 @@ case class Sequential(
     
     // Fetch Bias
     if (bShape.head > 0) {
+      val requiredBiasLanes = layer match {
+        case bn: BatchNorm1D => bn.features
+        case ln: LayerNorm1D => ln.features
+        case _ => 1
+      }
       val elements = bShape.product
-      val dmaB = DMAReader(lType, bShape, outLanes = 1, dmaAxiConfig)
+      val dmaB = DMAReader(lType, bShape, outLanes = requiredBiasLanes, dmaAxiConfig)
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
       reqB.valid := startTriggers(triggerIdx).valid
       startTriggers(triggerIdx).ready := reqB.ready
@@ -133,18 +143,51 @@ case class Sequential(
       triggerIdx += 1
       currentMemoryOffset += elements * (lType.getBitsWidth / 8)
       
-      layerBias = Tensor(lType, bShape, 1)
+      layerBias = Tensor(lType, bShape, requiredBiasLanes)
       layerBias.stream << dmaB.io.outStream.stream.queue(16) // FIFO to prevent deadlocks
     }
     
     // Instantiate computation block
     val nextTensor = layer match {
+      case c: Conv1D =>
+        Conv1DHW(currentTensor, layerWeights, layerBias, lType)
+        
       case c: Conv2D =>
-        val convOut = Conv2DHW(currentTensor, layerWeights, layerBias, lType)
-        convOut
+        Conv2DHW(currentTensor, layerWeights, layerBias, lType)
         
       case _: ReLU =>
         relu(currentTensor)
+        
+      case lr: LeakyReLU =>
+        leaky_relu(currentTensor, lr.shift)
+        
+      case _: Softmax =>
+        val seqLen = currentTensor.shape(0)
+        val channels = if (currentTensor.shape.length > 1) currentTensor.shape(1) else 1
+        val comp = spinalML.activations.Softmax1D(currentType, channels, seqLen)
+        comp.io.x <> currentTensor
+        comp.io.y
+        
+      case bn: BatchNorm1D =>
+        batchnorm(currentTensor, layerWeights, layerBias)
+        
+      case ln: LayerNorm1D =>
+        val seqLen = currentTensor.shape(0)
+        val channels = if (currentTensor.shape.length > 1) currentTensor.shape(1) else 1
+        val comp = spinalML.layers.LayerNorm1D(currentType, channels, seqLen)
+        comp.io.x <> currentTensor
+        comp.io.gamma <> layerWeights
+        comp.io.beta <> layerBias
+        comp.io.y
+        
+      case mp: MaxPool1D =>
+        maxpool1d(currentTensor, mp.poolSize, mp.stride)
+        
+      case ap: AvgPool1D =>
+        avgpool1d(currentTensor, ap.poolSize, ap.stride)
+        
+      case _: Flatten =>
+        flatten(currentTensor)
         
       case l: Linear =>
         val reshaped = reshape(currentTensor, Seq(1, l.inFeatures))

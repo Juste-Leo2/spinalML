@@ -9,8 +9,8 @@ import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 
 case class SoftmaxTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(4, 16), lanes = 4))
-    val y = master(Tensor(dataType, Seq(4, 16), lanes = 4))
+    val x = slave(Tensor(dataType, Seq(16, 4), lanes = 4))
+    val y = master(Tensor(dataType, Seq(16, 4), lanes = 4))
   }
   
   val comp = Softmax1D(dataType, channels = 4, seqLen = 16)
