@@ -11,8 +11,8 @@ import org.scalatest.funsuite.AnyFunSuite
 // Component for testing the MaxPool1D operation
 case class MaxPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(4, 1), lanes = 1))
-    val c = master(Tensor(dataType, Seq(2, 1), lanes = 1))
+    val a = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 2))
   }
   
   // poolSize = 2, stride = 2
@@ -30,15 +30,17 @@ class MaxPool1DTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Send sequence: 5, -2, -3, 4
-      val sequence = Array(5, -2, -3, 4)
+      // Send sequence: (5, 1), (-2, 3), (-3, 0), (4, 5)
+      val seq0 = Array(5, -2, -3, 4)
+      val seq1 = Array(1, 3, 0, 5)
       var i = 0
       
       // Feed data
       fork {
-        while (i < sequence.length) {
+        while (i < 4) {
           dut.io.a.stream.valid #= true
-          dut.io.a.stream.payload(0) #= sequence(i)
+          dut.io.a.stream.payload(0) #= seq0(i)
+          dut.io.a.stream.payload(1) #= seq1(i)
           dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
           i += 1
         }
@@ -48,9 +50,11 @@ class MaxPool1DTest extends AnyFunSuite {
       // Check results
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       assert(dut.io.c.stream.payload(0).toInt == 5) // max(5, -2)
+      assert(dut.io.c.stream.payload(1).toInt == 3) // max(1, 3)
       
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       assert(dut.io.c.stream.payload(0).toInt == 4) // max(-3, 4)
+      assert(dut.io.c.stream.payload(1).toInt == 5) // max(0, 5)
       
       dut.clockDomain.waitSampling(5)
     }

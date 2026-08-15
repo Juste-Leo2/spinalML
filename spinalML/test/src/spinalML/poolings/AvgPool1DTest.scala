@@ -11,8 +11,8 @@ import org.scalatest.funsuite.AnyFunSuite
 // Component for testing the AvgPool1D operation
 case class AvgPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(4, 1), lanes = 1))
-    val c = master(Tensor(dataType, Seq(2, 1), lanes = 1))
+    val a = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 2))
   }
   
   // poolSize = 2, stride = 2
@@ -30,15 +30,17 @@ class AvgPool1DTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Send sequence: 5, 9, 2, 4
-      val sequence = Array(5, 9, 2, 4)
+      // Send sequence: (5, 8), (9, 4), (2, 2), (4, 6)
+      val seq0 = Array(5, 9, 2, 4)
+      val seq1 = Array(8, 4, 2, 6)
       var i = 0
       
       // Feed data
       fork {
-        while (i < sequence.length) {
+        while (i < 4) {
           dut.io.a.stream.valid #= true
-          dut.io.a.stream.payload(0) #= sequence(i)
+          dut.io.a.stream.payload(0) #= seq0(i)
+          dut.io.a.stream.payload(1) #= seq1(i)
           dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
           i += 1
         }
@@ -47,12 +49,14 @@ class AvgPool1DTest extends AnyFunSuite {
       
       // Check results
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
-      // avg(5, 9) = 14 >> 1 = 7
+      // avg(5, 9) = 7, avg(8, 4) = 6
       assert(dut.io.c.stream.payload(0).toInt == 7)
+      assert(dut.io.c.stream.payload(1).toInt == 6)
       
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
-      // avg(2, 4) = 6 >> 1 = 3
+      // avg(2, 4) = 3, avg(2, 6) = 4
       assert(dut.io.c.stream.payload(0).toInt == 3)
+      assert(dut.io.c.stream.payload(1).toInt == 4)
       
       dut.clockDomain.waitSampling(5)
     }

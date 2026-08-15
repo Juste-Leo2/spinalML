@@ -5,18 +5,18 @@ import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
 
-case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, stride: Int) extends Component {
+case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, poolSize: Int, stride: Int) extends Component {
   require(L >= poolSize, "Sequence length L must be >= poolSize")
   val L_out = (L - poolSize) / stride + 1
   
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(L, 1), lanes = 1))
-    val c = master(Tensor(dataType, Seq(L_out, 1), lanes = 1))
+    val a = slave(Tensor(dataType, Seq(L, channels), lanes = channels))
+    val c = master(Tensor(dataType, Seq(L_out, channels), lanes = channels))
   }
   
-  // Shift register to hold the window for the max operation
-  val shiftReg = Vec(Reg(dataType), poolSize)
-  shiftReg.foreach(r => r.init(r.getZero.asInstanceOf[T]))
+  // Shift registers to hold the window for the max operation for each channel
+  val shiftRegs = Seq.fill(channels)(Vec(Reg(dataType), poolSize))
+  shiftRegs.foreach(_.foreach(r => r.init(r.getZero.asInstanceOf[T])))
   
   val elementCount = Counter(L)
   val windowCount = Counter(L_out)
@@ -40,19 +40,22 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
     buildMaxTree(nextLevel)
   }
   
-  val currentMax = buildMaxTree(shiftReg.toSeq)
-  
-  io.c.stream.payload(0) := currentMax
+  for (ch <- 0 until channels) {
+    val currentMax = buildMaxTree(shiftRegs(ch).toSeq)
+    io.c.stream.payload(ch) := currentMax
+  }
   
   val fsm = new StateMachine {
     val stateFill: State = new State with EntryPoint {
       whenIsActive {
         io.a.stream.ready := True
         when(io.a.stream.valid) {
-          for (i <- (1 until poolSize).reverse) {
-            shiftReg(i) := shiftReg(i - 1)
+          for (ch <- 0 until channels) {
+            for (i <- (1 until poolSize).reverse) {
+              shiftRegs(ch)(i) := shiftRegs(ch)(i - 1)
+            }
+            shiftRegs(ch)(0) := io.a.stream.payload(ch)
           }
-          shiftReg(0) := io.a.stream.payload(0)
           
           elementCount.increment()
           when(elementCount.value === poolSize - 1) {
@@ -86,10 +89,12 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
       whenIsActive {
         io.a.stream.ready := True
         when(io.a.stream.valid) {
-          for (i <- (1 until poolSize).reverse) {
-            shiftReg(i) := shiftReg(i - 1)
+          for (ch <- 0 until channels) {
+            for (i <- (1 until poolSize).reverse) {
+              shiftRegs(ch)(i) := shiftRegs(ch)(i - 1)
+            }
+            shiftRegs(ch)(0) := io.a.stream.payload(ch)
           }
-          shiftReg(0) := io.a.stream.payload(0)
           
           slideCounter.increment()
           elementCount.increment()
@@ -112,10 +117,11 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
 
 object maxpool1d {
   def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
-    require(a.shape.length == 2 && a.shape(1) == 1, "MaxPool1D expects a 1D tensor [L, 1]")
-    require(a.lanes == 1, "MaxPool1D input must have lanes = 1")
+    require(a.shape.length == 2, "MaxPool1D expects a 2D tensor [L, channels]")
+    val channels = a.shape(1)
+    require(a.lanes == channels, s"MaxPool1D input must have lanes = channels ($channels)")
     
-    val comp = MaxPool1DOp(a.dataType, a.shape(0), poolSize, stride)
+    val comp = MaxPool1DOp(a.dataType, a.shape(0), channels, poolSize, stride)
     comp.io.a <> a
     comp.io.c
   }

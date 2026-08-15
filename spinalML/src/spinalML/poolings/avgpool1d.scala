@@ -5,7 +5,7 @@ import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
 
-case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, stride: Int) extends Component {
+case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, poolSize: Int, stride: Int) extends Component {
   require(L >= poolSize, "Sequence length L must be >= poolSize")
   require(isPow2(poolSize), "poolSize must be a power of 2 for AvgPool (shift based)")
   
@@ -13,12 +13,12 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
   val shift = log2Up(poolSize)
   
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(L, 1), lanes = 1))
-    val c = master(Tensor(dataType, Seq(L_out, 1), lanes = 1))
+    val a = slave(Tensor(dataType, Seq(L, channels), lanes = channels))
+    val c = master(Tensor(dataType, Seq(L_out, channels), lanes = channels))
   }
   
-  val shiftReg = Vec(Reg(dataType), poolSize)
-  shiftReg.foreach(r => r.init(r.getZero.asInstanceOf[T]))
+  val shiftRegs = Seq.fill(channels)(Vec(Reg(dataType), poolSize))
+  shiftRegs.foreach(_.foreach(r => r.init(r.getZero.asInstanceOf[T])))
   
   val elementCount = Counter(L)
   val windowCount = Counter(L_out)
@@ -42,31 +42,33 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
     buildAdderTree(nextLevel)
   }
 
-  shiftReg(0) match {
-    case _: SInt => 
-      val resizedNodes = shiftReg.map(_.asInstanceOf[SInt].resize(dataType.getBitsWidth + shift))
-      val acc = buildAdderTree(resizedNodes).asInstanceOf[SInt]
-      io.c.stream.payload(0).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
-    case _: UInt =>
-      val resizedNodes = shiftReg.map(_.asInstanceOf[UInt].resize(dataType.getBitsWidth + shift))
-      val acc = buildAdderTree(resizedNodes).asInstanceOf[UInt]
-      io.c.stream.payload(0).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
-    case f: spinalML.dtypes.FloatML =>
-      val acc = buildAdderTree(shiftReg.toSeq).asInstanceOf[spinalML.dtypes.FloatML]
-      val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
-      avg.sign := acc.sign
-      avg.mantissa := acc.mantissa
-      val shiftedExp = acc.exponent.intoSInt - shift
-      when(shiftedExp <= 0 || acc.exponent === 0) {
-        avg.exponent := 0
-        avg.mantissa := 0
-        avg.sign := False
-      } otherwise {
-        avg.exponent := shiftedExp.asUInt.resized
-      }
-      io.c.stream.payload(0).assignFrom(avg.asInstanceOf[T])
-    case _ => 
-      throw new Exception("Data type not supported for AvgPool")
+  for (ch <- 0 until channels) {
+    shiftRegs(ch)(0) match {
+      case _: SInt => 
+        val resizedNodes = shiftRegs(ch).map(_.asInstanceOf[SInt].resize(dataType.getBitsWidth + shift))
+        val acc = buildAdderTree(resizedNodes).asInstanceOf[SInt]
+        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
+      case _: UInt =>
+        val resizedNodes = shiftRegs(ch).map(_.asInstanceOf[UInt].resize(dataType.getBitsWidth + shift))
+        val acc = buildAdderTree(resizedNodes).asInstanceOf[UInt]
+        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
+      case f: spinalML.dtypes.FloatML =>
+        val acc = buildAdderTree(shiftRegs(ch).toSeq).asInstanceOf[spinalML.dtypes.FloatML]
+        val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
+        avg.sign := acc.sign
+        avg.mantissa := acc.mantissa
+        val shiftedExp = acc.exponent.intoSInt - shift
+        when(shiftedExp <= 0 || acc.exponent === 0) {
+          avg.exponent := 0
+          avg.mantissa := 0
+          avg.sign := False
+        } otherwise {
+          avg.exponent := shiftedExp.asUInt.resized
+        }
+        io.c.stream.payload(ch).assignFrom(avg.asInstanceOf[T])
+      case _ => 
+        throw new Exception("Data type not supported for AvgPool")
+    }
   }
   
   val fsm = new StateMachine {
@@ -74,10 +76,12 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
       whenIsActive {
         io.a.stream.ready := True
         when(io.a.stream.valid) {
-          for (i <- (1 until poolSize).reverse) {
-            shiftReg(i) := shiftReg(i - 1)
+          for (ch <- 0 until channels) {
+            for (i <- (1 until poolSize).reverse) {
+              shiftRegs(ch)(i) := shiftRegs(ch)(i - 1)
+            }
+            shiftRegs(ch)(0) := io.a.stream.payload(ch)
           }
-          shiftReg(0) := io.a.stream.payload(0)
           
           elementCount.increment()
           when(elementCount.value === poolSize - 1) {
@@ -111,10 +115,12 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
       whenIsActive {
         io.a.stream.ready := True
         when(io.a.stream.valid) {
-          for (i <- (1 until poolSize).reverse) {
-            shiftReg(i) := shiftReg(i - 1)
+          for (ch <- 0 until channels) {
+            for (i <- (1 until poolSize).reverse) {
+              shiftRegs(ch)(i) := shiftRegs(ch)(i - 1)
+            }
+            shiftRegs(ch)(0) := io.a.stream.payload(ch)
           }
-          shiftReg(0) := io.a.stream.payload(0)
           
           slideCounter.increment()
           elementCount.increment()
@@ -137,10 +143,11 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, poolSize: Int, 
 
 object avgpool1d {
   def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
-    require(a.shape.length == 2 && a.shape(1) == 1, "AvgPool1D expects a 1D tensor [L, 1]")
-    require(a.lanes == 1, "AvgPool1D input must have lanes = 1")
+    require(a.shape.length == 2, "AvgPool1D expects a 2D tensor [L, channels]")
+    val channels = a.shape(1)
+    require(a.lanes == channels, s"AvgPool1D input must have lanes = channels ($channels)")
     
-    val comp = AvgPool1DOp(a.dataType, a.shape(0), poolSize, stride)
+    val comp = AvgPool1DOp(a.dataType, a.shape(0), channels, poolSize, stride)
     comp.io.a <> a
     comp.io.c
   }

@@ -11,22 +11,25 @@ from utils.tb_utils import run_mill, copy_roms
 # MaxPool1D golden model
 def maxpool1d_hw(X, poolSize, stride, dtype):
     L_in = len(X)
+    channels = len(X[0])
     L_out = (L_in - poolSize) // stride + 1
     Y = []
     for i in range(L_out):
         start = i * stride
         window = X[start:start+poolSize]
         
-        # Max hardware emulation
-        max_val = window[0][0]
-        max_bits = dtype.from_float(max_val)
-        for j in range(1, poolSize):
-            val = window[j][0]
-            val_bits = dtype.from_float(val)
-            if dtype.to_float(val_bits) > dtype.to_float(max_bits):
-                max_bits = val_bits
-        
-        Y.append([dtype.to_float(max_bits)])
+        y_row = []
+        for ch in range(channels):
+            # Max hardware emulation
+            max_val = window[0][ch]
+            max_bits = dtype.from_float(max_val)
+            for j in range(1, poolSize):
+                val = window[j][ch]
+                val_bits = dtype.from_float(val)
+                if dtype.to_float(val_bits) > dtype.to_float(max_bits):
+                    max_bits = val_bits
+            y_row.append(dtype.to_float(max_bits))
+        Y.append(y_row)
     return Y
 
 async def run_maxpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, stride, is_floatml):
@@ -41,21 +44,22 @@ async def run_maxpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
     dut.io_c_stream_ready.value = 0
     
     L_in = len(X)
+    channels = len(X[0])
     L_out = (L_in - poolSize) // stride + 1
     
-    send_x = cocotb.start_soon(send_tensor(dut, "io_a_stream", X, (L_in, 1), 1, dtype, is_floatml))
-    recv_y = cocotb.start_soon(recv_tensor(dut, "io_c_stream", (L_out, 1), dtype, is_floatml))
+    send_x = cocotb.start_soon(send_tensor(dut, "io_a_stream", X, (L_in, channels), channels, dtype, is_floatml))
+    recv_y = cocotb.start_soon(recv_tensor(dut, "io_c_stream", (L_out, channels), dtype, is_floatml, lanes=channels))
     
     Y_out_bits, Y_out = await recv_y
     await send_x
     
     # True Math
-    X_np = np.array([x[0] for x in X])
+    X_np = np.array(X)
     Y_true = []
     for i in range(L_out):
         start = i * stride
-        window = X_np[start:start+poolSize]
-        Y_true.append([float(np.max(window))])
+        window = X_np[start:start+poolSize, :]
+        Y_true.append(np.max(window, axis=0).tolist())
         
     log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
     dut._log.info(log_msg)
@@ -65,7 +69,7 @@ async def run_maxpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
     
     bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
     for m in range(L_out):
-        for n in range(1):
+        for n in range(channels):
             exp_val = Y_expected[m][n]
             exp_bits = dtype.from_float(exp_val)
             out_bits = Y_out_bits[m][n]
@@ -77,22 +81,22 @@ async def run_maxpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
 
 @cocotb.test()
 async def cocotb_maxpool1d_i8(dut):
-    X = get_random_tensor((4, 1), 100.0, True)
+    X = get_random_tensor((4, 2), 100.0, True)
     await run_maxpool1d_test(dut, "MaxPool1D", "I8", I8, X, 2, 2, False)
 
 @cocotb.test()
 async def cocotb_maxpool1d_fp8(dut):
-    X = get_random_tensor((4, 1), 10.0, False)
+    X = get_random_tensor((4, 2), 10.0, False)
     await run_maxpool1d_test(dut, "MaxPool1D", "FP8", FP8_E4M3, X, 2, 2, True)
 
 @cocotb.test()
 async def cocotb_maxpool1d_i16(dut):
-    X = get_random_tensor((4, 1), 100.0, True)
+    X = get_random_tensor((4, 2), 100.0, True)
     await run_maxpool1d_test(dut, "MaxPool1D", "I16", I16, X, 2, 2, False)
 
 @cocotb.test()
 async def cocotb_maxpool1d_bf16(dut):
-    X = get_random_tensor((4, 1), 10.0, False)
+    X = get_random_tensor((4, 2), 10.0, False)
     await run_maxpool1d_test(dut, "MaxPool1D", "BF16", BF16, X, 2, 2, True)
 
 def run_pool_sim(layer_name, dtype_filter, testcase_name, toplevel, request=None):

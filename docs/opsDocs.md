@@ -49,8 +49,9 @@ Neural network layers maintain their own state or weights, and typically present
 
 | Layer | Syntax | Description | Inputs | Outputs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Linear** | `Linear(x, w, b)` | Fully Connected Layer. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
-| **Conv1D** | `Conv1D(x, w, b)` | 1D Convolution over sequence. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Linear** | `Linear(x, w, b)` | Fully Connected Layer (Currently limited to `outFeatures=1`). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Conv1D** | `Conv1D(x, w, b)` | 1D Convolution (Currently limited to single-channel). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Conv2D** | `Conv2D(x, w, b)` | 2D Convolution (Currently limited to single-channel). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
 
 ## 6. Activations & Normalizations
 
@@ -61,5 +62,5 @@ Neural network layers maintain their own state or weights, and typically present
 | **Softmax** | `Softmax1D(dt, c, L)` | Component: Probabilities over final dimension. | `x: Tensor[T]` | `y: Tensor[T]` |
 | **BatchNorm** | `BatchNorm1D(x, g, b)` | Inference-only Folded Scale & Shift. | `x, gamma, beta` | `y: Tensor[T]` |
 | **LayerNorm** | `LayerNorm1D(x, g, b)` | Dynamic mean and standard deviation. | `x, gamma, beta` | `y: Tensor[T]` |
-| **MaxPool1D** | `maxpool1d(x, k, s)` | 1D Max Pooling. | `x: Tensor[T]` | `y: Tensor[T]` |
-| **AvgPool1D** | `avgpool1d(x, k, s)` | 1D Average Pooling. | `x: Tensor[T]` | `y: Tensor[T]` |
+| **MaxPool1D** | `maxpool1d(x, k, s)` | 1D Max Pooling (Supports multi-channel). | `x: Tensor[T]` | `y: Tensor[T]` |
+| **AvgPool1D** | `avgpool1d(x, k, s)` | 1D Average Pooling (Supports multi-channel). | `x: Tensor[T]` | `y: Tensor[T]` |

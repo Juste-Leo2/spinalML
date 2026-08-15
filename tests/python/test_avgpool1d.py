@@ -11,6 +11,7 @@ from utils.tb_utils import run_mill, copy_roms
 # AvgPool1D golden model
 def avgpool1d_hw(X, poolSize, stride, dtype):
     L_in = len(X)
+    channels = len(X[0])
     L_out = (L_in - poolSize) // stride + 1
     Y = []
     
@@ -21,17 +22,20 @@ def avgpool1d_hw(X, poolSize, stride, dtype):
         start = i * stride
         window = X[start:start+poolSize]
         
-        if getattr(dtype, 'is_floatml', False):
-            val = sum([w[0] for w in window]) / poolSize
-            bits = dtype.from_float(val)
-        else:
-            # HW integer behavior
-            acc = sum([int(w[0]) for w in window])
-            # Shift
-            val = acc >> shift
-            bits = dtype.from_float(val)
-            
-        Y.append([dtype.to_float(bits)])
+        y_row = []
+        for ch in range(channels):
+            if getattr(dtype, 'is_floatml', False):
+                val = sum([w[ch] for w in window]) / poolSize
+                bits = dtype.from_float(val)
+            else:
+                # HW integer behavior
+                acc = sum([int(w[ch]) for w in window])
+                # Shift
+                val = acc >> shift
+                bits = dtype.from_float(val)
+                
+            y_row.append(dtype.to_float(bits))
+        Y.append(y_row)
     return Y
 
 async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, stride, is_floatml):
@@ -46,21 +50,22 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
     dut.io_c_stream_ready.value = 0
     
     L_in = len(X)
+    channels = len(X[0])
     L_out = (L_in - poolSize) // stride + 1
     
-    send_x = cocotb.start_soon(send_tensor(dut, "io_a_stream", X, (L_in, 1), 1, dtype, is_floatml))
-    recv_y = cocotb.start_soon(recv_tensor(dut, "io_c_stream", (L_out, 1), dtype, is_floatml))
+    send_x = cocotb.start_soon(send_tensor(dut, "io_a_stream", X, (L_in, channels), channels, dtype, is_floatml))
+    recv_y = cocotb.start_soon(recv_tensor(dut, "io_c_stream", (L_out, channels), dtype, is_floatml, lanes=channels))
     
     Y_out_bits, Y_out = await recv_y
     await send_x
     
     # True Math
-    X_np = np.array([x[0] for x in X])
+    X_np = np.array(X)
     Y_true = []
     for i in range(L_out):
         start = i * stride
-        window = X_np[start:start+poolSize]
-        Y_true.append([float(np.mean(window))])
+        window = X_np[start:start+poolSize, :]
+        Y_true.append(np.mean(window, axis=0).tolist())
         
     log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
     dut._log.info(log_msg)
@@ -70,7 +75,7 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
     
     bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
     for m in range(L_out):
-        for n in range(1):
+        for n in range(channels):
             exp_val = Y_expected[m][n]
             exp_bits = dtype.from_float(exp_val)
             out_bits = Y_out_bits[m][n]
@@ -82,27 +87,27 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
 
 @cocotb.test()
 async def cocotb_avgpool1d_i8(dut):
-    X = get_random_tensor((4, 1), 50.0, True)
+    X = get_random_tensor((4, 2), 50.0, True)
     setattr(I8, 'is_floatml', False)
     setattr(I8, 'signed', True)
     await run_avgpool1d_test(dut, "AvgPool1D", "I8", I8, X, 2, 2, False)
 
 @cocotb.test()
 async def cocotb_avgpool1d_fp8(dut):
-    X = get_random_tensor((4, 1), 5.0, False)
+    X = get_random_tensor((4, 2), 5.0, False)
     setattr(FP8_E4M3, 'is_floatml', True)
     await run_avgpool1d_test(dut, "AvgPool1D", "FP8", FP8_E4M3, X, 2, 2, True)
 
 @cocotb.test()
 async def cocotb_avgpool1d_i16(dut):
-    X = get_random_tensor((4, 1), 500.0, True)
+    X = get_random_tensor((4, 2), 500.0, True)
     setattr(I16, 'is_floatml', False)
     setattr(I16, 'signed', True)
     await run_avgpool1d_test(dut, "AvgPool1D", "I16", I16, X, 2, 2, False)
 
 @cocotb.test()
 async def cocotb_avgpool1d_bf16(dut):
-    X = get_random_tensor((4, 1), 5.0, False)
+    X = get_random_tensor((4, 2), 5.0, False)
     setattr(BF16, 'is_floatml', True)
     await run_avgpool1d_test(dut, "AvgPool1D", "BF16", BF16, X, 2, 2, True)
 

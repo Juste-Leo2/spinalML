@@ -21,7 +21,9 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] Implement Convolutional layers (1D and 2D) using `seq2col` and `im2col` strategies..
 - [x] Implement Activation functions (ReLU, Sigmoid, Tanh).
 - [x] Implement Pooling layers (MaxPool, AvgPool).
-- [ ] Implement Normalization layers (BatchNorm, LayerNorm).
+- [ ] **Multi-Channel Convolutions**: Upgrade `Conv1DLayer` and `Conv2DLayer` hardware implementations to support `inChannels > 1` and `outChannels > 1` (requires cross-channel accumulation).
+- [ ] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
+- [x] Implement Normalization layers (BatchNorm, LayerNorm).
 - [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
 
 ## 4. System Integration & Advanced Improvements (Future Work)
@@ -38,6 +40,8 @@ This document outlines the development steps for the spinalML library. Developme
 - [ ] **Weight Manager (Pre-fetching)**: Implement asynchronous double-buffering for network weights, fetching layer $N+1$ from DDR4 while layer $N$ is currently computing.
 
 ## 6. High-Level AI Abstraction
-- [ ] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
-- [ ] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
+- [x] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
+- [x] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
+- [ ] **Support of hardware utilities in LayerSpec**: Expose utility layers in the high-level `LayerSpec` API (e.g. `Repack`, `Concat`) to give users manual control over bus widths and complex topologies.
+- [ ] **Mixed Precision (Dynamic Quantization)**: Implement specific conversion layers (e.g. `Cast(to = I8())`) in `LayerSpec` to dynamically alter the hardware datapath precision in the middle of a `Sequential` model.
 - [ ] **ONNX One-Liner Importer**: Develop a parser that reads an ONNX model file and automatically generates a fully functional SpinalML hardware accelerator in a single line of Scala code.

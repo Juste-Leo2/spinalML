@@ -2,11 +2,61 @@
 
 Welcome to **SpinalML**! SpinalML is an open-source framework written in Scala (on top of SpinalHDL) that allows you to easily design and deploy custom Neural Network hardware accelerators on FPGA.
 
-## 1. Core Concepts
+## 1. The High-Level Sequential API (PyTorch-like)
 
-> [!TIP]
-> **API Reference:** For a full list of all supported hardware operations, their inputs, and outputs, please consult the **[Operations Documentation (opsDocs.md)](./opsDocs.md)**.
+The recommended way to use SpinalML is via the **High-Level API**. If you are familiar with PyTorch or Keras, you will feel right at home! 
 
+SpinalML allows you to define your neural network architecture declaratively using a `Sequential` model builder. The framework will automatically handle:
+- **Dimensions & Shapes**: Deduce the tensor dimensions throughout the network.
+- **AXI4 Bus Arbitration**: Instantiate the AXI memory-mapped DMAs and arbiters to autonomously fetch your inputs, weights, and biases from the external DDR4 memory.
+- **Hardware Pipelining**: Insert FIFOs and connect the AXI4-Stream handshakes between layers.
+
+### The High-Level Template
+
+Here is a complete, ready-to-use template (`HighLevelTemplate.scala`) that defines an entire CNN and generates the Verilog hardware:
+
+```scala
+import spinal.core._
+import spinal.lib.bus.amba4.axi.Axi4Config
+import spinalML.nn._
+import spinalML.dtypes._
+
+case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Accelerator(
+  dataType = I16(),            // Global quantization format for the network
+  inputShape = Seq(28, 1),    // The expected shape of the input tensor (e.g. 1D signal of length 28)
+  
+  // ==========================================
+  // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
+  // ==========================================
+  modelSpec = Seq(
+    Conv1D(inChannels = 1, outChannels = 1, kernelSize = 3),
+    ReLU(),
+    MaxPool1D(poolSize = 2, stride = 2),
+    Flatten(),
+    Linear(inFeatures = 13, outFeatures = 1)
+  ),
+  
+  axiConfig = axiConfig
+)
+
+// Generate the Verilog for the FPGA
+object HighLevelTemplateVerilog extends App {
+  val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+  SpinalVerilog(HighLevelTemplate(axiConfig))
+}
+```
+
+> [!WARNING]
+> **Limitations (V1):** The current High-Level API has a few limitations to keep in mind:
+> - **Hardware Ops Capabilities**: While `LayerSpec` supports multiple channels, the underlying hardware operations for `Conv1D`, `Conv2D`, and `Linear` are currently restricted to a single channel (`inChannels=1, outChannels=1`) or a single output feature (`outFeatures=1`). Passing larger values will cause hardware elaboration shape mismatches.
+> - **Dynamic Mixed Precision**: Casting tensor precision on the fly within the `Sequential` model is not yet supported.
+> - **Manual Repacking**: Changing the bus width (Lanes) dynamically between layers via `Repack` to save transistors is not yet exposed inside the declarative `modelSpec`.
+
+---
+
+## 2. Low-Level Hardware API
+
+If you need total control over your architecture, you can wire up your datapath manually using the low-level hardware modules.
 
 ### Tensors and Streams
 In SpinalML, data is passed between layers using the `Tensor[T]` interface. A tensor is essentially a multi-dimensional array of data, but in hardware, it is transmitted piece by piece over time.
@@ -20,21 +70,20 @@ You **never** need to manage `valid` and `ready` signals manually when using bui
 
 ### Shape vs Lanes
 A tensor has two distinct dimension concepts:
-1. **`shape: Seq[Int]`**: The logical dimensions of the Deep Learning tensor (e.g., `Seq(64, 32, 32)` for an image with 64 channels and 32x32 pixels).
-2. **`lanes: Int`**: The physical bus width / parallelism. If `lanes = 4`, the hardware will process 4 elements per clock cycle. The total time to process the tensor will be `shape.product / lanes` clock cycles.
+1. **`shape: Seq[Int]`**: The logical dimensions of the Deep Learning tensor.
+2. **`lanes: Int`**: The physical bus width / parallelism. If `lanes = 4`, the hardware will process 4 elements per clock cycle.
 
 ### Repack (Gearbox)
-What happens if your external memory provides 64 elements per clock cycle, but your Neural Network layer only processes 8 elements per cycle?
-You use `repack`!
+What happens if your external memory provides 64 elements per clock cycle, but your Neural Network layer only processes 8 elements per cycle? You use `repack`!
 ```scala
 val memStream = Tensor(FP8, Seq(64, 32, 32), lanes = 64)
 val nnStream = spinalML.ops.repack(memStream, newLanes = 8)
 ```
 `repack` safely buffers and slices the physical bus without altering the ML shape.
 
-## 2. The Minimal Template
+### The Low-Level Minimal Template
 
-To start building a custom hardware operation, you can use the provided **[Template.scala](https://github.com/Juste-Leo2/spinalML/blob/main/spinalML/src/spinalML/examples/Template.scala)** as your boilerplate. It features a simple "fill-in-the-blanks" structure:
+You can use the provided **[Template.scala](https://github.com/Juste-Leo2/spinalML/blob/main/spinalML/src/spinalML/examples/Template.scala)** as your boilerplate for writing manual logic:
 
 ```scala
 import spinal.core._
@@ -45,32 +94,15 @@ import spinalML.ops._
 import spinalML.activations._
 
 case class Template[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
-  
-  // ==========================================
-  // 1. DEFINE YOUR IO (Inputs / Outputs)
-  // ==========================================
   val io = new Bundle {
     val x = slave(Tensor(dataType, shape, lanes))
     val y = master(Tensor(dataType, shape, lanes))
   }
   
-  // ==========================================
-  // 2. WRITE YOUR ML DATAFLOW
-  // ==========================================
-  // Example: Y = relu(abs(X))
-  
-  val absX = abs(io.x)
-  val reluX = relu(absX)
-  
-  // ==========================================
-  // 3. CONNECT TO OUTPUT
-  // ==========================================
-  io.y <> reluX
-  
+  // Y = relu(abs(X))
+  io.y <> relu(abs(io.x))
 }
 ```
-
-You can simulate this exact template using its companion testbench, **[TemplateTest.scala](https://github.com/Juste-Leo2/spinalML/blob/main/spinalML/test/src/spinalML/examples/TemplateTest.scala)**.
 
 ## 3. Data Types
 
@@ -86,5 +118,11 @@ Operations like `Exp`, `Softmax`, and `Rsqrt` are implemented using a novel **Al
 
 To see these concepts in action, check out the provided examples directly in the repository:
 
-- **[SimplePipeline.scala](https://github.com/Juste-Leo2/spinalML/blob/main/spinalML/src/spinalML/examples/SimplePipeline.scala)**: A short demonstration of matrix multiplication combined with element-wise addition.
-- **[SimpleCNN.scala](https://github.com/Juste-Leo2/spinalML/blob/main/spinalML/src/spinalML/examples/SimpleCNN.scala)**: A complete 1D Convolutional Neural Network featuring Conv1D, BatchNorm, MaxPool, Gearbox (`repack`), Linear, and Softmax layers!
+- **High-Level API:**
+  - **`HighLevelTemplate.scala`**: The base PyTorch-like boilerplate.
+  - **`SequentialCNN.scala`**: A slightly more complex CNN using the High-Level API.
+  - **`Comprehensive1DCNN.scala`**: A full real-world CNN with Max Pooling and BN.
+- **Low-Level Hardware API:**
+  - **`Template.scala`**: The manual routing boilerplate.
+  - **`SimplePipeline.scala`**: Matrix multiplication + element-wise addition.
+  - **`SimpleCNN.scala`**: A fully hand-wired CNN with manual repacks and memory mapping.
