@@ -28,12 +28,13 @@ async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, 
     
     # Send W
     await send_tensor(dut, "io_w_stream", W_T, (W_shape[1], W_shape[0]), W_lanes, dtype, is_floatml)
+    
+    acc_dtype = dtype if is_floatml else I32
     # Send b (lanes is always 1 for bias)
     b_shape = (1, len(b[0]))
-    await send_tensor(dut, "io_b_stream", b, b_shape, 1, dtype, is_floatml)
+    await send_tensor(dut, "io_b_stream", b, b_shape, 1, acc_dtype, is_floatml)
     
     send_x = cocotb.start_soon(send_tensor(dut, "io_x_stream", X, X_shape, X_lanes, dtype, is_floatml))
-    acc_dtype = dtype if is_floatml else I32
     recv_y = cocotb.start_soon(recv_tensor(dut, "io_y_stream", Y_shape, acc_dtype, is_floatml, Y_lanes))
     
     Y_out_bits, Y_out = await recv_y

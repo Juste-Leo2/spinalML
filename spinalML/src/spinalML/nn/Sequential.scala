@@ -196,8 +196,14 @@ case class Sequential(
       case l: Linear =>
         val reshaped = reshape(currentTensor, Seq(1, l.inFeatures))
         val repackedTensor = repack(reshaped, l.inFeatures)
-        val linOut = LinearHW(repackedTensor, layerWeights, layerBias)
+        val linOut = LinearHW(repackedTensor, layerWeights, layerBias, lType)
         reshape(linOut, Seq(l.outFeatures, 1))
+        
+      case rq: Requantize =>
+        spinalML.ops.requantize(currentTensor, rq.targetType, rq.shift)
+        
+      case rp: Repack =>
+        repack(currentTensor, rp.newLanes)
     }
     
     // Update state for next layer

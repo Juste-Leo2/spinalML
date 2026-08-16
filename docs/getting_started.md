@@ -22,18 +22,26 @@ import spinalML.nn._
 import spinalML.dtypes._
 
 case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Accelerator(
-  dataType = I16(),            // Global quantization format for the network
+  dataType = I8(),            // Global quantization format for the network
   inputShape = Seq(28, 1),    // The expected shape of the input tensor (e.g. 1D signal of length 28)
   
   // ==========================================
   // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
   // ==========================================
   modelSpec = Seq(
-    Conv1D(inChannels = 1, outChannels = 4, kernelSize = 3),
+    // 1. Compute Conv1D in I32 to prevent overflow
+    Conv1D(inChannels = 1, outChannels = 4, kernelSize = 3, customType = Some(I32())),
+    
+    // 2. Requantize the I32 output back to I8 for the rest of the network
+    Requantize(shift = 4, targetType = I8()),
+    
     ReLU(),
     MaxPool1D(poolSize = 2, stride = 2),
     Flatten(),
-    Linear(inFeatures = 52, outFeatures = 10)
+    
+    // 3. Do the same for the final dense layer
+    Linear(inFeatures = 52, outFeatures = 10, customType = Some(I32())),
+    Requantize(shift = 4, targetType = I8())
   ),
   
   axiConfig = axiConfig
@@ -46,10 +54,10 @@ object HighLevelTemplateVerilog extends App {
 }
 ```
 
-> [!WARNING]
-> **Limitations (V1):** The current High-Level API has a few limitations to keep in mind:
-> - **Dynamic Mixed Precision**: Casting tensor precision on the fly within the `Sequential` model is not yet supported.
-> - **Manual Repacking**: Changing the bus width (Lanes) dynamically between layers via `Repack` to save transistors is not yet exposed inside the declarative `modelSpec`.
+> [!TIP]
+> **Advanced Topology Control:** The High-Level API supports dynamic modifications of the hardware datapath directly within the `modelSpec`:
+> - **Dynamic Mixed Precision**: Use `Requantize(shift, targetType)` to adjust quantization and change precision on the fly.
+> - **Manual Repacking**: Use `Repack(newLanes)` to dynamically change the physical bus width between layers to save FPGA resources.
 
 ---
 

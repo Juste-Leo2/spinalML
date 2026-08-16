@@ -137,3 +137,16 @@ case class Flatten() extends LayerSpec {
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
+
+case class Requantize(shift: Int, targetType: HardType[Data]) extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+  override def outType(default: HardType[Data]) = targetType
+}
+
+case class Repack(newLanes: Int) extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}

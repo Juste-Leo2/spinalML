@@ -9,29 +9,29 @@ import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Wrapper component
-case class LinearTestComp[T <: Data](dataType: HardType[T]) extends Component {
+case class LinearTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(1, 2), lanes = 2)) // 1 row, 2 cols (M=1, K=2)
     val w = slave(Tensor(dataType, Seq(2, 1), lanes = 2)) // 2 weights (K=2, 1)
-    val b = slave(Tensor(dataType, Seq(1, 1), lanes = 1)) // 1 bias
-    val y = master(Tensor(dataType, Seq(1, 1), lanes = 1))
+    val b = slave(Tensor(accType, Seq(1, 1), lanes = 1)) // 1 bias
+    val y = master(Tensor(accType, Seq(1, 1), lanes = 1))
   }
-  io.y <> Linear(io.a, io.w, io.b, tileSize = 2, parallelN = false)
+  io.y <> Linear(io.a, io.w, io.b, accType, tileSize = 2, parallelN = false)
 }
 
-case class LinearTestCompMulti[T <: Data](dataType: HardType[T]) extends Component {
+case class LinearTestCompMulti[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 3), lanes = 3)) // M=2, K=3
     val w = slave(Tensor(dataType, Seq(3, 4), lanes = 3)) // K=3, N=4
-    val b = slave(Tensor(dataType, Seq(1, 4), lanes = 1)) // 1, 4 bias
-    val y = master(Tensor(dataType, Seq(2, 4), lanes = 1)) // M=2, N=4
+    val b = slave(Tensor(accType, Seq(1, 4), lanes = 1)) // 1, 4 bias
+    val y = master(Tensor(accType, Seq(2, 4), lanes = 1)) // M=2, N=4
   }
-  io.y <> Linear(io.a, io.w, io.b, tileSize = 2, parallelN = false)
+  io.y <> Linear(io.a, io.w, io.b, accType, tileSize = 2, parallelN = false)
 }
 
 class LinearTest extends AnyFunSuite {
   test("Test Linear Layer: Y = A * W + b on I4 tensors") {
-    SimConfig.withWave.compile(LinearTestComp(I4())).doSim { dut =>
+    SimConfig.withWave.compile(LinearTestComp(I4(), I4())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.a.stream.valid #= false
@@ -91,9 +91,10 @@ class LinearTest extends AnyFunSuite {
   )
 
   for ((name, dt) <- compileTypes) {
+    val accDt = if (name == "I8" || name == "I16") () => spinalML.dtypes.I32() else dt
     test(s"Test Linear compilation on $name") {
-      SpinalConfig().generateVerilog(LinearTestComp(dt()))
-      SpinalConfig().generateVerilog(LinearTestCompMulti(dt()))
+      SpinalConfig().generateVerilog(LinearTestComp(dt(), accDt()))
+      SpinalConfig().generateVerilog(LinearTestCompMulti(dt(), accDt()))
     }
   }
 }
