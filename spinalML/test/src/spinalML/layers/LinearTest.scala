@@ -16,7 +16,7 @@ case class LinearTestComp[T <: Data](dataType: HardType[T]) extends Component {
     val b = slave(Tensor(dataType, Seq(1, 1), lanes = 1)) // 1 bias
     val y = master(Tensor(dataType, Seq(1, 1), lanes = 1))
   }
-  io.y <> Linear(io.a, io.w, io.b, tileSize = 2)
+  io.y <> Linear(io.a, io.w, io.b, tileSize = 2, parallelN = false)
 }
 
 class LinearTest extends AnyFunSuite {

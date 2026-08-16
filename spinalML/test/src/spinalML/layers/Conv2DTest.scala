@@ -10,18 +10,27 @@ import org.scalatest.funsuite.AnyFunSuite
 
 // Wrapper component
 case class Conv2DTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
-  val H = 3
-  val W_in = 3
-  val K = 2
-  val totalWindows = 4
-  
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(H, W_in), lanes = 1)) // 3x3 Image
-    val w = slave(Tensor(dataType, Seq(K * K, 1), lanes = K * K)) // 2x2 Kernel Flattened
+    val x = slave(Tensor(dataType, Seq(3, 3), lanes = 1)) // 3x3 Image
+    val w = slave(Tensor(dataType, Seq(4, 1), lanes = 4)) // K=2 (2x2), C=1, M=1 (Weight)
     val b = slave(Tensor(accType, Seq(1, 1), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(H - K + 1, W_in - K + 1), lanes = 1)) // 2D Output Image
+    
+    val y = master(Tensor(accType, Seq(2, 2), lanes = 1))
   }
-  io.y <> Conv2D(io.x, io.w, io.b, accType)
+
+  io.y <> Conv2D(io.x, io.w, io.b, accType, parallelN = false)
+}
+
+case class Conv2DTestCompMulti[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
+  val io = new Bundle {
+    val x = slave(Tensor(dataType, Seq(3, 3, 2), lanes = 1)) // 3x3x2 Image, lanes=1
+    val w = slave(Tensor(dataType, Seq(8, 2), lanes = 8)) // K=2 (2x2), inC=2, outC=2. Total w shape = [8, 2]. lanes=8 (tileSize = 8)
+    val b = slave(Tensor(accType, Seq(1, 2), lanes = 1)) // Bias outC=2, lanes=1
+    
+    val y = master(Tensor(accType, Seq(2, 2, 2), lanes = 1)) // 2x2x2 Output, lanes=1
+  }
+
+  io.y <> Conv2D(io.x, io.w, io.b, accType, parallelN = false)
 }
 
 class Conv2DTest extends AnyFunSuite {
@@ -94,8 +103,12 @@ class Conv2DTest extends AnyFunSuite {
   )
 
   for ((name, dt) <- compileTypes) {
+    val accDt = if (name == "I8" || name == "I16") () => I32() else dt
     test(s"Test Conv2D compilation on $name") {
-      SpinalConfig().generateVerilog(Conv2DTestComp(dt(), dt()))
+      SpinalConfig().generateVerilog(Conv2DTestComp(dt(), accDt()))
+    }
+    test(s"Test Conv2DMulti compilation on $name") {
+      SpinalConfig().generateVerilog(Conv2DTestCompMulti(dt(), accDt()))
     }
   }
 }

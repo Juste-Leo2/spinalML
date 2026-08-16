@@ -13,6 +13,8 @@ def get_random_tensor(shape, range_val=5.0, integer=True):
         return [[round(random.uniform(-range_val, range_val)) if integer else random.uniform(-range_val, range_val)] for _ in range(shape[0])]
     elif len(shape) == 2:
         return [[round(random.uniform(-range_val, range_val)) if integer else random.uniform(-range_val, range_val) for _ in range(shape[1])] for _ in range(shape[0])]
+    elif len(shape) == 3:
+        return [[[round(random.uniform(-range_val, range_val)) if integer else random.uniform(-range_val, range_val) for _ in range(shape[2])] for _ in range(shape[1])] for _ in range(shape[0])]
 
 def log_true_math_error(op_name, dtype_name, dtype, is_floatml, C_out, C_true):
     M = len(C_out)
@@ -45,12 +47,9 @@ def log_true_math_error(op_name, dtype_name, dtype, is_floatml, C_out, C_true):
     return log_msg
 
 async def send_tensor(dut, signal_prefix, tensor, shape, lanes, dtype, is_floatml, wait_ready=True):
-    M = shape[0]
-    N = shape[1] if len(shape) > 1 else 1
-    
-    total_elements = M * N
+    total_elements = int(np.prod(shape))
     chunks = (total_elements + lanes - 1) // lanes
-    flattened = [val for row in tensor for val in (row if isinstance(row, list) else [row])]
+    flattened = np.array(tensor).flatten().tolist()
     
     for chunk in range(chunks):
         if is_floatml:
@@ -79,14 +78,9 @@ async def send_tensor(dut, signal_prefix, tensor, shape, lanes, dtype, is_floatm
     getattr(dut, f"{signal_prefix}_valid").value = 0
 
 async def recv_tensor(dut, signal_prefix, shape, dtype, is_floatml, lanes=1):
-    M = shape[0]
-    N = shape[1] if len(shape) > 1 else 1
-    
-    out_tensor = [[0.0] * N for _ in range(M)]
-    out_bits = [[0] * N for _ in range(M)]
+    total_elements = int(np.prod(shape))
     getattr(dut, f"{signal_prefix}_ready").value = 1
     
-    total_elements = M * N
     chunks = (total_elements + lanes - 1) // lanes
     
     flattened_bits = []
@@ -113,12 +107,11 @@ async def recv_tensor(dut, signal_prefix, shape, dtype, is_floatml, lanes=1):
             
         await RisingEdge(dut.clk)
         
-    for m in range(M):
-        for n in range(N):
-            idx = m * N + n
-            if idx < len(flattened_bits):
-                out_bits[m][n] = flattened_bits[idx]
-                out_tensor[m][n] = flattened_vals[idx]
+    for idx in range(min(total_elements, len(flattened_bits))):
+        flattened_bits[idx] = flattened_bits[idx]
+        
+    out_tensor = np.array(flattened_vals[:total_elements]).reshape(shape).tolist()
+    out_bits = np.array(flattened_bits[:total_elements]).reshape(shape).tolist()
                 
     return out_bits, out_tensor
 

@@ -10,21 +10,29 @@ import spinalML.tensors.Tensor
  * Takes a stream `A` of arbitrary shape, and a scalar stream `B`.
  * Loads the scalar `B` once, then adds it to all elements of `A` until the tensor `A` is fully processed.
  */
-case class BiasAddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
-  val elements = shape.product
-  require(elements % lanes == 0, "Total elements must be divisible by lanes")
+case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int) extends Component {
+  val M = if (shapeA.length > 1) shapeA(0) else 1
+  val N = shapeA.last
+  require(shapeB.last == N, "Bias vector length must match the last dimension of A")
+  
+  val elements = shapeA.product
+  require(elements % lanes == 0, "Total elements of A must be divisible by lanes")
   val cycles = elements / lanes
 
   val io = new Bundle {
-    val a = slave(Tensor(dataType, shape, lanes))
-    val b = slave(Tensor(dataType, Seq(1, 1), 1)) // Bias is always a single scalar
-    val c = master(Tensor(dataType, shape, lanes))
+    val a = slave(Tensor(dataType, shapeA, lanes))
+    val b = slave(Tensor(dataType, shapeB, 1)) // Bias arrives sequentially with lanes=1
+    val c = master(Tensor(dataType, shapeA, lanes))
   }
 
-  val biasReg = Reg(dataType)
-  biasReg.init(biasReg.getZero.asInstanceOf[T])
+  // Memory to store the N bias elements
+  // We use Vec(Reg) for async read since N is typically a feature dimension
+  // and we might need to read multiple elements per cycle if lanes > 1.
+  val biasMem = Vec(Reg(dataType), N)
+  biasMem.foreach(_.init(biasMem.head.getZero.asInstanceOf[T]))
   
-  val counter = Counter(cycles)
+  val loadCounter = Counter(N)
+  val aCounter = Counter(cycles)
   
   // Default values
   io.a.stream.ready := False
@@ -37,8 +45,11 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: I
       whenIsActive {
         io.b.stream.ready := True
         when(io.b.stream.valid) {
-          biasReg := io.b.stream.payload(0)
-          goto(stateProcess)
+          biasMem(loadCounter.value) := io.b.stream.payload(0)
+          loadCounter.increment()
+          when(loadCounter.willOverflowIfInc) {
+            goto(stateProcess)
+          }
         }
       }
     }
@@ -49,9 +60,15 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: I
         io.a.stream.ready := io.c.stream.ready
         io.c.stream.valid := io.a.stream.valid
         
+        // Calculate the starting column index for this chunk
+        val startCol = (aCounter.value * lanes) % N
+        
         // Broadcast addition
         for (i <- 0 until lanes) {
-          (io.a.stream.payload(i), biasReg) match {
+          val colIdx = (startCol + i) % N
+          val biasVal = biasMem(colIdx.resized)
+          
+          (io.a.stream.payload(i), biasVal) match {
             case (valA: SInt, valB: SInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
             case (valA: UInt, valB: UInt) => io.c.stream.payload(i).assignFrom((valA + valB).asInstanceOf[T])
             case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => io.c.stream.payload(i).assignFrom(spinalML.utils.Float.add(valA, valB).asInstanceOf[T])
@@ -60,22 +77,29 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: I
         }
         
         when(io.a.stream.fire) {
-          counter.increment()
-          when(counter.willOverflowIfInc) {
-            goto(stateLoadBias)
+          aCounter.increment()
+          when(aCounter.willOverflowIfInc) {
+            goto(stateDone)
           }
         }
       }
+    }
+    
+    val stateDone: State = new State {
+       whenIsActive {
+         aCounter.clear()
+         loadCounter.clear()
+         goto(stateLoadBias)
+       }
     }
   }
 }
 
 object bias_add {
   def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {
-    require(b.shape == Seq(1, 1), "Bias must be a scalar of shape [1, 1]")
-    require(b.lanes == 1, "Bias must have 1 lane")
+    require(b.lanes == 1, "Bias must have 1 lane for BiasAddOp")
     
-    val comp = BiasAddOp(a.dataType, a.shape, a.lanes)
+    val comp = BiasAddOp(a.dataType, a.shape, b.shape, a.lanes)
     comp.io.a <> a
     comp.io.b <> b
     comp.io.c

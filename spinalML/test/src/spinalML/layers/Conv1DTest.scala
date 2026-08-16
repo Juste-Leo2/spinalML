@@ -10,16 +10,27 @@ import org.scalatest.funsuite.AnyFunSuite
 
 // Wrapper component
 case class Conv1DTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
-  val L_in = 3
-  val K = 2
-  val L_out = 2
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(L_in, 1), lanes = 1)) // Input Sequence
-    val w = slave(Tensor(dataType, Seq(K, 1), lanes = K)) // Kernel Weights MUST match seq2col lanes
+    val x = slave(Tensor(dataType, Seq(3, 1), lanes = 1)) // Sequence of 3
+    val w = slave(Tensor(dataType, Seq(2, 1), lanes = 2)) // K=2, C=1, M=1 (Weight)
     val b = slave(Tensor(accType, Seq(1, 1), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(L_out, 1), lanes = 1)) // Output Sequence
+    
+    val y = master(Tensor(accType, Seq(2, 1), lanes = 1))
   }
-  io.y <> Conv1D(io.x, io.w, io.b, accType)
+
+  io.y <> Conv1D(io.x, io.w, io.b, accType, parallelN = false)
+}
+
+case class Conv1DTestCompMulti[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
+  val io = new Bundle {
+    val x = slave(Tensor(dataType, Seq(3, 2), lanes = 1)) // Sequence of 3, C=2, lanes=1
+    val w = slave(Tensor(dataType, Seq(4, 2), lanes = 4)) // K=2, inC=2, outC=2. Total w shape = [4, 2]. lanes=4 (tileSize = 4)
+    val b = slave(Tensor(accType, Seq(1, 2), lanes = 1)) // Bias for outC=2, lanes=1
+    
+    val y = master(Tensor(accType, Seq(2, 2), lanes = 1)) // Output seq 2, outC=2, lanes=1
+  }
+
+  io.y <> Conv1D(io.x, io.w, io.b, accType, parallelN = false)
 }
 
 class Conv1DTest extends AnyFunSuite {
@@ -88,8 +99,12 @@ class Conv1DTest extends AnyFunSuite {
   )
 
   for ((name, dt) <- compileTypes) {
+    val accDt = if (name == "I8" || name == "I16") () => I32() else dt
     test(s"Test Conv1D compilation on $name") {
-      SpinalConfig().generateVerilog(Conv1DTestComp(dt(), dt()))
+      SpinalConfig().generateVerilog(Conv1DTestComp(dt(), accDt()))
+    }
+    test(s"Test Conv1DMulti compilation on $name") {
+      SpinalConfig().generateVerilog(Conv1DTestCompMulti(dt(), accDt()))
     }
   }
 }

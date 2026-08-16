@@ -494,13 +494,14 @@ def build_adder_tree_hw(inputs, is_floatml, dtype, pipeline_tree=True):
             else:
                 sum_val = a + b
                 if hasattr(dtype, 'bit_width'):
+                    acc_bit_width = 32
                     val_bits = sum_val
                     if val_bits < 0:
-                        val_bits = (1 << dtype.bit_width) + val_bits
-                    val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                        val_bits = (1 << acc_bit_width) + val_bits
+                    val_bits = val_bits & ((1 << acc_bit_width) - 1)
                     if hasattr(dtype, 'min_val') and dtype.min_val < 0:
-                        if val_bits & (1 << (dtype.bit_width - 1)):
-                            val_bits -= (1 << dtype.bit_width)
+                        if val_bits & (1 << (acc_bit_width - 1)):
+                            val_bits -= (1 << acc_bit_width)
                     sum_val = val_bits
             next_stage.append(sum_val)
         else:
@@ -528,13 +529,14 @@ def matmul_hw(A, B, dtype):
                 else:
                     prod = a_val * b_val
                     if hasattr(dtype, 'bit_width'):
+                        acc_bit_width = 32
                         val_bits = prod
                         if val_bits < 0:
-                            val_bits = (1 << dtype.bit_width) + val_bits
-                        val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                            val_bits = (1 << acc_bit_width) + val_bits
+                        val_bits = val_bits & ((1 << acc_bit_width) - 1)
                         if hasattr(dtype, 'min_val') and dtype.min_val < 0:
-                            if val_bits & (1 << (dtype.bit_width - 1)):
-                                val_bits -= (1 << dtype.bit_width)
+                            if val_bits & (1 << (acc_bit_width - 1)):
+                                val_bits -= (1 << acc_bit_width)
                         prod = val_bits
                 products.append(prod)
                 
@@ -551,30 +553,38 @@ def linear_hw(A, W, b, dtype):
     for m in range(len(matmul_res)):
         for n in range(len(matmul_res[0])):
             if is_floatml:
-                Y[m][n] = floatml_add(matmul_res[m][n], b[0][0], dtype)
+                Y[m][n] = floatml_add(matmul_res[m][n], b[0][n], dtype)
             else:
-                sum_val = matmul_res[m][n] + b[0][0]
+                sum_val = matmul_res[m][n] + b[0][n]
                 if hasattr(dtype, 'bit_width'):
+                    acc_bit_width = 32
                     val_bits = sum_val
-                    if val_bits < 0: val_bits = (1 << dtype.bit_width) + val_bits
-                    val_bits = val_bits & ((1 << dtype.bit_width) - 1)
+                    if val_bits < 0: val_bits = (1 << acc_bit_width) + val_bits
+                    val_bits = val_bits & ((1 << acc_bit_width) - 1)
                     if hasattr(dtype, 'min_val') and dtype.min_val < 0:
-                        if val_bits & (1 << (dtype.bit_width - 1)):
-                            val_bits -= (1 << dtype.bit_width)
+                        if val_bits & (1 << (acc_bit_width - 1)):
+                            val_bits -= (1 << acc_bit_width)
                     sum_val = val_bits
                 Y[m][n] = sum_val
     return Y
 
 def conv1d_hw(X, W, b, dtype):
     L_in = len(X)
-    K = len(W)
+    C_in = len(X[0]) if isinstance(X[0], list) else 1
+    K = len(W) // C_in
     L_out = L_in - K + 1
     
     # Seq2Col
-    cols = [[0.0] * K for _ in range(L_out)]
+    cols = []
     for i in range(L_out):
+        col = []
         for k in range(K):
-            cols[i][k] = X[i + k][0]
+            if isinstance(X[i+k], list):
+                for c in range(C_in):
+                    col.append(X[i + k][c])
+            else:
+                col.append(X[i + k])
+        cols.append(col)
             
     return linear_hw(cols, W, b, dtype)
 
@@ -582,7 +592,9 @@ def conv2d_hw(X, W, b, dtype):
     import math
     H = len(X)
     W_in = len(X[0])
-    K = int(math.sqrt(len(W)))
+    is_3d = isinstance(X[0][0], list)
+    C_in = len(X[0][0]) if is_3d else 1
+    K = int(math.sqrt(len(W) // C_in))
     
     H_out = H - K + 1
     W_out = W_in - K + 1
@@ -594,7 +606,11 @@ def conv2d_hw(X, W, b, dtype):
             window = []
             for ki in range(K):
                 for kj in range(K):
-                    window.append(X[i + ki][j + kj])
+                    if is_3d:
+                        for c in range(C_in):
+                            window.append(X[i + ki][j + kj][c])
+                    else:
+                        window.append(X[i + ki][j + kj])
             cols.append(window)
             
     return linear_hw(cols, W, b, dtype)

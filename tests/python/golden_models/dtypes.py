@@ -103,3 +103,4 @@ class SIntML:
 I4 = SIntML(4)
 I8 = SIntML(8)
 I16 = SIntML(16)
+I32 = SIntML(32)

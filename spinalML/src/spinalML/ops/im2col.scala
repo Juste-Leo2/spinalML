@@ -34,88 +34,109 @@ case class LineBuffer[T <: Data](dataType: HardType[T], depth: Int) extends Comp
  * Input A: shape [H, W], lanes = 1
  * Output C: shape [H_out * W_out, K * K], lanes = K * K
  */
-case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, K: Int) extends Component {
+case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, outLanes: Int) extends Component {
   require(H >= K && W >= K, "Image dimensions must be >= kernel size")
   val H_out = H - K + 1
   val W_out = W - K + 1
   val totalWindows = H_out * W_out
+  val windowSize = K * K * C
+  require(windowSize % outLanes == 0, "Window size must be divisible by outLanes")
+  val outCycles = windowSize / outLanes
   
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(H, W), lanes = 1))
-    val c = master(Tensor(dataType, Seq(totalWindows, K * K), lanes = K * K))
+    val a = slave(Tensor(dataType, Seq(H, W, C), lanes = 1))
+    val c = master(Tensor(dataType, Seq(totalWindows, windowSize), lanes = outLanes))
   }
   
-  // Register-based Line Buffers for simplicity and async read (perfect for any W)
+  // Line Buffers to hold previous rows of the image.
+  // Each row has W pixels, and each pixel has C channels.
   val lineBuffers = for (i <- 0 until K - 1) yield new Area {
-    val regs = Vec(Reg(dataType), W)
+    val regs = Vec(Reg(dataType), W * C)
     regs.foreach(r => r.init(r.getZero.asInstanceOf[T]))
-    val pop = regs(W - 1) // Oldest element
+    val pop = regs(W * C - 1) // Oldest element
   }
   
-  // 2D Shift Register for the sliding window: window(row)(col)
-  // row 0 is the oldest row (from the last line buffer).
-  // row K-1 is the newest row (from incoming data).
-  // col 0 is the newest column in that row.
-  // col K-1 is the oldest column.
-  val window = Vec.fill(K)(Vec.fill(K)(Reg(dataType)))
-  for (r <- 0 until K) {
-    for (c <- 0 until K) {
-      window(r)(c).init(window(r)(c).getZero.asInstanceOf[T])
-    }
-  }
+  // 1D Shift Register holding the flattened window in row-major order [K, K, C]
+  val shiftReg = Vec(Reg(dataType), windowSize)
+  shiftReg.foreach(r => r.init(r.getZero.asInstanceOf[T]))
   
+  // Temporary buffers to hold a single temporal column of K pixels (each has C channels)
+  // row 0 is oldest (from line buffer K-2), row K-1 is newest (from input)
+  val tempVecs = Vec.fill(K)(Vec(Reg(dataType), C))
+  for (r <- 0 until K; c <- 0 until C) tempVecs(r)(c).init(tempVecs(r)(c).getZero.asInstanceOf[T])
+  
+  val channelCount = Counter(C)
   val x = Counter(W)
   val y = Counter(H)
   val windowCount = Counter(totalWindows)
+  val outChunkCount = Counter(outCycles)
   
   io.a.stream.ready := False
   io.c.stream.valid := False
   
-  // Flatten the window to output payload
-  // Standard PyTorch order: row by row, then col by col.
-  for (r <- 0 until K) {
-    for (c <- 0 until K) {
-      // Oldest elements first (r=0, c=K-1)
-      val flatIndex = r * K + c
-      io.c.stream.payload(flatIndex) := window(r)(K - 1 - c)
-    }
+  // Map output payload directly from shift register based on current chunk
+  for(i <- 0 until outLanes) {
+    val flatIndex = (outChunkCount.value * outLanes) + i
+    io.c.stream.payload(i) := shiftReg(flatIndex.resized)
   }
   
   val isWindowValid = (x.value >= (K - 1)) && (y.value >= (K - 1))
   
   val fsm = new StateMachine {
+    
+    // Combinational vectors for the full column of K pixels (each C channels)
+    // We use tempVecs (registers) for 0 to C-2, and the current payload/pop for C-1
+    val currentPixels = Vec.fill(K)(Vec(dataType, C))
+    for (r <- 0 until K) {
+      for (ch <- 0 until C - 1) {
+        currentPixels(r)(ch) := tempVecs(r)(ch)
+      }
+      if (r == K - 1) {
+        currentPixels(r)(C - 1) := io.a.stream.payload(0)
+      } else {
+        currentPixels(r)(C - 1) := lineBuffers(K - 2 - r).pop
+      }
+    }
+    
     val stateFill: State = new State with EntryPoint {
       whenIsActive {
         io.a.stream.ready := True
         when(io.a.stream.valid) {
-          // 1. Update Line Buffers
+          // Push to tempVecs (only matters for C > 1)
+          tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
+          for (i <- 0 until K - 1) {
+            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).pop
+          }
+          
+          // Shift Line Buffers
           if (K > 1) {
             for (i <- (1 until K - 1).reverse) {
-              for (j <- (1 until W).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
+              for (j <- (1 until W * C).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
               lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
             }
-            for (j <- (1 until W).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
+            for (j <- (1 until W * C).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
             lineBuffers(0).regs(0) := io.a.stream.payload(0)
           }
           
-          // 2. Shift the 2D window
-          for (r <- 0 until K) {
-            for (c <- (1 until K).reverse) {
-              window(r)(c) := window(r)(c - 1)
+          channelCount.increment()
+          when(channelCount.willOverflowIfInc) {
+            // Shift the 2D window by 1 column (C elements) for each row
+            for (r <- 0 until K) {
+              val rowOffset = r * K * C
+              for (i <- 0 until K * C - C) {
+                shiftReg(rowOffset + i) := shiftReg(rowOffset + i + C)
+              }
+              for (ch <- 0 until C) {
+                shiftReg(rowOffset + K * C - C + ch) := currentPixels(r)(ch)
+              }
             }
-          }
-          window(K - 1)(0) := io.a.stream.payload(0)
-          for (i <- 0 until K - 1) {
-             window(K - 2 - i)(0) := lineBuffers(i).pop
-          }
-          
-          // 3. Update Coordinates
-          x.increment()
-          when(x.willOverflowIfInc) { y.increment() }
-          
-          // 4. Check if the CURRENT pixel forms a valid window
-          when(isWindowValid) {
-             goto(stateOutput)
+            
+            x.increment()
+            when(x.willOverflowIfInc) { y.increment() }
+            
+            when(isWindowValid) {
+              goto(stateOutput)
+            }
           }
         }
       }
@@ -126,87 +147,81 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, K: Int) ex
         io.c.stream.valid := True
         
         when(io.c.stream.ready) {
-           windowCount.increment()
-           when(windowCount.willOverflowIfInc) {
+          outChunkCount.increment()
+          when(outChunkCount.willOverflowIfInc) {
+            windowCount.increment()
+            when(windowCount.willOverflowIfInc) {
               goto(stateDone)
-           } otherwise {
-              io.a.stream.ready := True
-              when(io.a.stream.valid) {
-                 if (K > 1) {
-                   for (i <- (1 until K - 1).reverse) {
-                     for (j <- (1 until W).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
-                     lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
-                   }
-                   for (j <- (1 until W).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
-                   lineBuffers(0).regs(0) := io.a.stream.payload(0)
-                 }
-                 for (r <- 0 until K) {
-                   for (c <- (1 until K).reverse) window(r)(c) := window(r)(c - 1)
-                 }
-                 window(K - 1)(0) := io.a.stream.payload(0)
-                 for (i <- 0 until K - 1) window(K - 2 - i)(0) := lineBuffers(i).pop
-                 
-                 x.increment()
-                 when(x.willOverflowIfInc) { y.increment() }
-                 
-                 when(!isWindowValid) {
-                   goto(stateFill)
-                 }
-              } otherwise {
-                 goto(stateWaitA)
-              }
-           }
+            } otherwise {
+              goto(stateWaitA)
+            }
+          }
         }
       }
     }
     
     val stateWaitA: State = new State {
-       whenIsActive {
-          io.a.stream.ready := True
-          when(io.a.stream.valid) {
-             if (K > 1) {
-               for (i <- (1 until K - 1).reverse) {
-                 for (j <- (1 until W).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
-                 lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
-               }
-               for (j <- (1 until W).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
-               lineBuffers(0).regs(0) := io.a.stream.payload(0)
-             }
-             for (r <- 0 until K) {
-               for (c <- (1 until K).reverse) window(r)(c) := window(r)(c - 1)
-             }
-             window(K - 1)(0) := io.a.stream.payload(0)
-             for (i <- 0 until K - 1) window(K - 2 - i)(0) := lineBuffers(i).pop
-             
-             x.increment()
-             when(x.willOverflowIfInc) { y.increment() }
-             
-             when(isWindowValid) {
-               goto(stateOutput)
-             } otherwise {
-               goto(stateFill)
-             }
+      whenIsActive {
+        io.a.stream.ready := True
+        when(io.a.stream.valid) {
+          tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
+          for (i <- 0 until K - 1) {
+            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).pop
           }
-       }
+          
+          if (K > 1) {
+            for (i <- (1 until K - 1).reverse) {
+              for (j <- (1 until W * C).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
+              lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
+            }
+            for (j <- (1 until W * C).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
+            lineBuffers(0).regs(0) := io.a.stream.payload(0)
+          }
+          
+          channelCount.increment()
+          when(channelCount.willOverflowIfInc) {
+            for (r <- 0 until K) {
+              val rowOffset = r * K * C
+              for (i <- 0 until K * C - C) {
+                shiftReg(rowOffset + i) := shiftReg(rowOffset + i + C)
+              }
+              for (ch <- 0 until C) {
+                shiftReg(rowOffset + K * C - C + ch) := currentPixels(r)(ch)
+              }
+            }
+            
+            x.increment()
+            when(x.willOverflowIfInc) { y.increment() }
+            
+            when(isWindowValid) {
+              goto(stateOutput)
+            } otherwise {
+              goto(stateFill)
+            }
+          }
+        }
+      }
     }
     
     val stateDone: State = new State {
        whenIsActive {
-          x.clear()
-          y.clear()
-          windowCount.clear()
-          goto(stateFill)
+         x.clear()
+         y.clear()
+         channelCount.clear()
+         windowCount.clear()
+         outChunkCount.clear()
+         goto(stateFill)
        }
     }
   }
 }
 
 object im2col {
-  def apply[T <: Data](a: Tensor[T], kernelSize: Int): Tensor[T] = {
-    require(a.shape.length == 2, "Im2Col expects a 2D tensor [H, W]")
+  def apply[T <: Data](a: Tensor[T], kernelSize: Int, outLanes: Int): Tensor[T] = {
+    val C = if (a.shape.length == 3) a.shape(2) else 1
     require(a.lanes == 1, "Im2Col input must have lanes = 1")
     
-    val comp = Im2ColOp(a.dataType, a.shape(0), a.shape(1), kernelSize)
+    val comp = Im2ColOp(a.dataType, a.shape(0), a.shape(1), C, kernelSize, outLanes)
     comp.io.a <> a
     comp.io.c
   }

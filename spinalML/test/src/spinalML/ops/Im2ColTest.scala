@@ -11,19 +11,28 @@ import org.scalatest.funsuite.AnyFunSuite
 // Wrapper component for 3x3 image with 2x2 kernel
 case class Im2ColTestComp_3x3_K2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(3, 3), lanes = 1)) // 3x3 image
+    val a = slave(Tensor(dataType, Seq(3, 3, 1), lanes = 1)) // 3x3 image
     val c = master(Tensor(dataType, Seq(4, 4), lanes = 4)) // 4 windows of 2x2
   }
-  io.c <> im2col(io.a, kernelSize = 2)
+  io.c <> im2col(io.a, kernelSize = 2, outLanes = 4)
 }
 
 // Wrapper component for 4x4 image with 3x3 kernel
 case class Im2ColTestComp_4x4_K3[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(4, 4), lanes = 1)) // 4x4 image
+    val a = slave(Tensor(dataType, Seq(4, 4, 1), lanes = 1)) // 4x4 image
     val c = master(Tensor(dataType, Seq(4, 9), lanes = 9)) // 4 windows of 3x3
   }
-  io.c <> im2col(io.a, kernelSize = 3)
+  io.c <> im2col(io.a, kernelSize = 3, outLanes = 9)
+}
+
+// Wrapper component for 3x3 image with 2x2 kernel and 2 channels
+case class Im2ColTestComp_3x3_K2_C2[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(3, 3, 2), lanes = 1)) // 3x3x2 image, lanes=1 (streams sequentially)
+    val c = master(Tensor(dataType, Seq(4, 8), lanes = 8)) // 4 windows of 2x2x2 = 8
+  }
+  io.c <> im2col(io.a, kernelSize = 2, outLanes = 8)
 }
 
 class Im2ColTest extends AnyFunSuite {
@@ -72,6 +81,67 @@ class Im2ColTest extends AnyFunSuite {
           assert(w1 == expectedOutputs(i)(1), s"Window $i element 1: expected ${expectedOutputs(i)(1)}, got $w1")
           assert(w2 == expectedOutputs(i)(2), s"Window $i element 2: expected ${expectedOutputs(i)(2)}, got $w2")
           assert(w3 == expectedOutputs(i)(3), s"Window $i element 3: expected ${expectedOutputs(i)(3)}, got $w3")
+          i += 1
+        }
+      }
+      
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  test("Test Im2Col sliding window logic on 3x3 image with 2x2 kernel and 2 channels") {
+    SimConfig.withWave.compile(Im2ColTestComp_3x3_K2_C2(I8())).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+      
+      // Image 3x3x2
+      // Pixel 0,0: [1, 2]
+      // Pixel 0,1: [3, 4]
+      // Pixel 0,2: [5, 6]
+      // Pixel 1,0: [7, 8]
+      // Pixel 1,1: [9, 10]
+      // Pixel 1,2: [11, 12]
+      // Pixel 2,0: [-1, -2]
+      // Pixel 2,1: [-3, -4]
+      // Pixel 2,2: [-5, -6]
+      val inputs = Seq(
+        Seq(1, 2), Seq(3, 4), Seq(5, 6),
+        Seq(7, 8), Seq(9, 10), Seq(11, 12),
+        Seq(-1, -2), Seq(-3, -4), Seq(-5, -6)
+      )
+      
+      val expectedOutputs = Seq(
+        Seq(1, 2, 3, 4, 7, 8, 9, 10),       // Window 0
+        Seq(3, 4, 5, 6, 9, 10, 11, 12),     // Window 1
+        Seq(7, 8, 9, 10, -1, -2, -3, -4),   // Window 2
+        Seq(9, 10, 11, 12, -3, -4, -5, -6)  // Window 3
+      )
+      
+      fork {
+        var i = 0
+        dut.io.a.stream.valid #= true
+        while (i < 9) {
+          dut.io.a.stream.payload(0) #= inputs(i)(0)
+          dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+          
+          dut.io.a.stream.payload(0) #= inputs(i)(1)
+          dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+          
+          i += 1
+        }
+        dut.io.a.stream.valid #= false
+      }
+      
+      var i = 0
+      while (i < 4) {
+        dut.clockDomain.waitSampling()
+        if (dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean) {
+          for (ch <- 0 until 8) {
+            val w = dut.io.c.stream.payload(ch).toInt
+            assert(w == expectedOutputs(i)(ch), s"Window $i element $ch: expected ${expectedOutputs(i)(ch)}, got $w")
+          }
           i += 1
         }
       }
