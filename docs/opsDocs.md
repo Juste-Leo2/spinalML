@@ -12,6 +12,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | **Sub** | `sub(a, b)` | Element-wise subtraction. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Mul** | `mul(a, b)` | Element-wise multiplication. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Div** | `div(a, b)` | Element-wise division. | `a, b: Tensor[T]` | `Tensor[T]` |
+| **Cast** | `cast(a, dt)` | Casts tensor to a new datatype. | `a: Tensor[T], dt: HardType[U]` | `Tensor[U]` |
 | **Abs** | `abs(a)` | Absolute value. | `a: Tensor[T]` | `Tensor[T]` |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b`. | `x, a, b: Tensor[T]` | `Tensor[T]` |
 
@@ -29,6 +30,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | Operation | Syntax | Description | Inputs | Outputs |
 | :--- | :--- | :--- | :--- | :--- |
 | **MatMul** | `matmul(a, b)` | Matrix multiplication. Uses BRAM for `b` (weights). | `a, b: Tensor[T]` | `Tensor[T]` |
+| **BiasAdd** | `bias_add(a, b)` | Broadcast addition for biases across columns. | `a, b: Tensor[T]` | `Tensor[T]` |
 
 ## 4. Tensor Manipulations
 
@@ -49,9 +51,9 @@ Neural network layers maintain their own state or weights, and typically present
 
 | Layer | Syntax | Description | Inputs | Outputs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Linear** | `Linear(x, w, b)` | Fully Connected Layer (Currently limited to `outFeatures=1`). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
-| **Conv1D** | `Conv1D(x, w, b)` | 1D Convolution (Currently limited to single-channel). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
-| **Conv2D** | `Conv2D(x, w, b)` | 2D Convolution (Currently limited to single-channel). | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Linear** | `Linear(x, w, b)` | Fully Connected Layer. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Conv1D** | `Conv1D(x, w, b)` | 1D Convolution. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Conv2D** | `Conv2D(x, w, b)` | 2D Convolution. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
 
 ## 6. Activations & Normalizations
 

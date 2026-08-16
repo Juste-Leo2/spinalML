@@ -39,8 +39,8 @@ case class Conv2D(
     Seq(hOut, wOut, outChannels)
   }
   
-  override def getWeightShape(): Seq[Int] = Seq(kernelSize * kernelSize * inChannels * outChannels, 1)
-  override def getBiasShape(): Seq[Int] = Seq(outChannels, 1)
+  override def getWeightShape(): Seq[Int] = Seq(kernelSize * kernelSize * inChannels, outChannels)
+  override def getBiasShape(): Seq[Int] = Seq(1, outChannels)
 }
 
 case class ReLU() extends LayerSpec {
@@ -59,8 +59,8 @@ case class Linear(
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = Seq(outFeatures, 1)
-  override def getWeightShape(): Seq[Int] = Seq(inFeatures, 1)
-  override def getBiasShape(): Seq[Int] = Seq(1, 1)
+  override def getWeightShape(): Seq[Int] = Seq(inFeatures, outFeatures)
+  override def getBiasShape(): Seq[Int] = Seq(1, outFeatures)
 }
 
 case class Conv1D(
@@ -80,8 +80,8 @@ case class Conv1D(
     Seq(lOut, outChannels)
   }
   
-  override def getWeightShape(): Seq[Int] = Seq(kernelSize * inChannels * outChannels, 1)
-  override def getBiasShape(): Seq[Int] = Seq(outChannels, 1)
+  override def getWeightShape(): Seq[Int] = Seq(kernelSize * inChannels, outChannels)
+  override def getBiasShape(): Seq[Int] = Seq(1, outChannels)
 }
 
 case class LeakyReLU(shift: Int = 2) extends LayerSpec {

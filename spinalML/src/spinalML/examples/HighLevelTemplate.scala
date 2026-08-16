@@ -20,11 +20,11 @@ case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Acceler
   // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
   // ==========================================
   modelSpec = Seq(
-    Conv1D(inChannels = 1, outChannels = 1, kernelSize = 3),
+    Conv1D(inChannels = 1, outChannels = 4, kernelSize = 3),
     ReLU(),
     MaxPool1D(poolSize = 2, stride = 2),
     Flatten(),
-    Linear(inFeatures = 13, outFeatures = 1)
+    Linear(inFeatures = 52, outFeatures = 10)
   ),
   
   axiConfig = axiConfig

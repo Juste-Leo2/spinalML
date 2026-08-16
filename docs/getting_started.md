@@ -29,11 +29,11 @@ case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Acceler
   // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
   // ==========================================
   modelSpec = Seq(
-    Conv1D(inChannels = 1, outChannels = 1, kernelSize = 3),
+    Conv1D(inChannels = 1, outChannels = 4, kernelSize = 3),
     ReLU(),
     MaxPool1D(poolSize = 2, stride = 2),
     Flatten(),
-    Linear(inFeatures = 13, outFeatures = 1)
+    Linear(inFeatures = 52, outFeatures = 10)
   ),
   
   axiConfig = axiConfig
@@ -48,7 +48,6 @@ object HighLevelTemplateVerilog extends App {
 
 > [!WARNING]
 > **Limitations (V1):** The current High-Level API has a few limitations to keep in mind:
-> - **Hardware Ops Capabilities**: While `LayerSpec` supports multiple channels, the underlying hardware operations for `Conv1D`, `Conv2D`, and `Linear` are currently restricted to a single channel (`inChannels=1, outChannels=1`) or a single output feature (`outFeatures=1`). Passing larger values will cause hardware elaboration shape mismatches.
 > - **Dynamic Mixed Precision**: Casting tensor precision on the fly within the `Sequential` model is not yet supported.
 > - **Manual Repacking**: Changing the bus width (Lanes) dynamically between layers via `Repack` to save transistors is not yet exposed inside the declarative `modelSpec`.
 

@@ -181,10 +181,14 @@ case class Sequential(
         comp.io.y
         
       case mp: MaxPool1D =>
-        maxpool1d(currentTensor, mp.poolSize, mp.stride)
+        val c = if (currentTensor.shape.length > 1) currentTensor.shape(1) else 1
+        val repacked = if (currentTensor.lanes != c) repack(currentTensor, c) else currentTensor
+        maxpool1d(repacked, mp.poolSize, mp.stride)
         
       case ap: AvgPool1D =>
-        avgpool1d(currentTensor, ap.poolSize, ap.stride)
+        val c = if (currentTensor.shape.length > 1) currentTensor.shape(1) else 1
+        val repacked = if (currentTensor.lanes != c) repack(currentTensor, c) else currentTensor
+        avgpool1d(repacked, ap.poolSize, ap.stride)
         
       case _: Flatten =>
         flatten(currentTensor)

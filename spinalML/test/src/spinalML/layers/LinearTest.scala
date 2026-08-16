@@ -19,6 +19,16 @@ case class LinearTestComp[T <: Data](dataType: HardType[T]) extends Component {
   io.y <> Linear(io.a, io.w, io.b, tileSize = 2, parallelN = false)
 }
 
+case class LinearTestCompMulti[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 3), lanes = 3)) // M=2, K=3
+    val w = slave(Tensor(dataType, Seq(3, 4), lanes = 3)) // K=3, N=4
+    val b = slave(Tensor(dataType, Seq(1, 4), lanes = 1)) // 1, 4 bias
+    val y = master(Tensor(dataType, Seq(2, 4), lanes = 1)) // M=2, N=4
+  }
+  io.y <> Linear(io.a, io.w, io.b, tileSize = 2, parallelN = false)
+}
+
 class LinearTest extends AnyFunSuite {
   test("Test Linear Layer: Y = A * W + b on I4 tensors") {
     SimConfig.withWave.compile(LinearTestComp(I4())).doSim { dut =>
@@ -83,6 +93,8 @@ class LinearTest extends AnyFunSuite {
   for ((name, dt) <- compileTypes) {
     test(s"Test Linear compilation on $name") {
       SpinalConfig().generateVerilog(LinearTestComp(dt()))
+      SpinalConfig().generateVerilog(LinearTestCompMulti(dt()))
     }
   }
 }
+
