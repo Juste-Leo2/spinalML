@@ -8,7 +8,9 @@ import spinalML.dtypes.I32
 class StreamDoubleBufferTest extends AnyFunSuite {
   test("Double Buffering Ping-Pong logic") {
     SimConfig.withWave.compile {
-      StreamDoubleBuffer(I32(), depth = 8, lanes = 2) // 4 addresses per bank
+      val dut = StreamDoubleBuffer(I32(), depth = 8, lanes = 2) // 4 addresses per bank
+      dut.setDefinitionName("StreamDoubleBufferTestComp")
+      dut
     }.doSim { dut =>
       dut.clockDomain.forkStimulus(10)
       
@@ -33,8 +35,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       for (i <- 0 until 4) {
         dut.io.readAddr #= i
         dut.clockDomain.waitSampling() // wait for readAddr to register
-        // Since readSync has 1 cycle latency, we need an extra cycle before data is valid
-        dut.clockDomain.waitSampling() 
+        dut.clockDomain.waitSampling() // latency
         assert(dut.io.readData(0).toInt == i * 2)
         assert(dut.io.readData(1).toInt == i * 2 + 1)
       }
@@ -58,6 +59,14 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       dut.clockDomain.waitSampling()
       dut.clockDomain.waitSampling() // latency
       assert(dut.io.readData(0).toInt == 100)
+    }
+  }
+
+  test("Generate Verilog for Python Cocotb") {
+    SpinalConfig().generateVerilog {
+      val dut = StreamDoubleBuffer(I32(), depth = 8, lanes = 2) // 4 addresses per bank
+      dut.setDefinitionName("StreamDoubleBufferTestComp")
+      dut
     }
   }
 }

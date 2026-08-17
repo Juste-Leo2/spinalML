@@ -42,6 +42,7 @@ This document outlines the development steps for the spinalML library. Developme
 ## 6. High-Level AI Abstraction
 - [x] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
 - [x] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
+- [ ] **Automatic Tiling & Double Buffering**: Integrate `StreamDoubleBuffer` and 2D tiling dynamically into `Sequential` or `Accelerator` to automatically segment and double-buffer large input images/tensors that exceed BRAM capacity.
 - [ ] **SoC Integration Testing (Cocotb)**: Implement full system-level testing of the `HighLevelTemplate` (including AXI-Lite and AXI4 memory) using Python, Cocotb, and `cocotbext-axi`, replacing manual Scala simulation.
 - [x] **Support of hardware utilities in LayerSpec**: Expose utility layers in the high-level `LayerSpec` API (e.g. `Repack`, `Concat`) to give users manual control over bus widths and complex topologies.
 - [x] **Mixed Precision (Dynamic Quantization)**: Implement specific conversion layers (e.g. `Requantize`) in `LayerSpec` to dynamically alter the hardware datapath precision in the middle of a `Sequential` model.
