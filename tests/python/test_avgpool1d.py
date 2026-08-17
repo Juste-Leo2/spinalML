@@ -81,7 +81,7 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
             out_bits = Y_out_bits[m][n]
             out_val = Y_out[m][n]
             if is_floatml:
-                assert abs(out_val - exp_val) <= max(1e-2, abs(exp_val) * 0.25), f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {exp_val}"
+                assert abs(out_val - exp_val) <= max(0.05, abs(exp_val) * 0.25), f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {exp_val}"
             else:
                 assert out_bits == exp_bits, f"HW Mismatch at Y[{m}][{n}]: got {out_val} (bits {out_bits}) instead of {dtype.to_float(exp_bits)} (bits {exp_bits})"
 

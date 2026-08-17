@@ -160,6 +160,6 @@ def run_layer_sim(layer_name, dtype_filter, testcase_name, toplevel, request=Non
         simulator="verilator",
         sim_build=build_dir,
         timescale="1ns/1ps",
-        extra_args=["--trace", "-Wno-fatal", "-Wno-WIDTHEXPAND", "-Wno-WIDTH"],
+        extra_args=["--trace", "-Wno-fatal", "-Wno-WIDTH"],
         extra_env={"DEBUG_MATH": debug_flag}
     )
