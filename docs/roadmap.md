@@ -56,8 +56,8 @@ This document outlines the development steps for the spinalML library. Developme
 
 Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assume`/`cover` properties proven for all input combinations by SAT/SMT solvers). Complements the sampled-vector coverage of the Python/Cocotb co-simulation.
 
-- [ ] **Environment**: Install `yosys` + `symbiyosys` (local WSL + CI runner) and validate the SpinalHDL 1.14.2 formal API.
-- [ ] **Onboarding Spike**: Write `MulFP8Formal.scala` — prove bit-exact equivalence vs the golden model for all inputs, and inject a deliberate bug to validate that the workflow catches counterexamples. Document the pattern in `docs/formal.md`.
+- [x] **Environment**: Install `yosys` + `symbiyosys` (local WSL + CI runner) and validate the SpinalHDL 1.14.2 formal API.
+- [x] **Onboarding Spike**: Write `AddFormal.scala` — prove bit-exact equivalence of `AddOp` (I8, streamed `m2sPipe`) against the golden model for all inputs (k-induction proof passed, ~0s runtime), and validated that a deliberately broken assertion is caught with a VCD counterexample. Pattern documented in `docs/symbolicTest.md`.
 - [ ] **Combinational Ops**: Roll out formal proofs to all primitive ops (`ops/`), dtype by dtype (8/16-bit first), reusing the translated golden models from `tests/python/golden_models/`.
 - [ ] **Memory & Flow Invariants**: Prove stream invariants on `StreamDoubleBuffer` (no data loss under any `valid`/`ready` pattern, no deadlock) and reachability checks (`cover`/`bmc`) on `DMAReader`/`DMAReader2D`.
 - [ ] **CI Integration & Verification Map**: Add a formal-verification workflow to CI and track module-by-module status (formally proven / simulated / uncovered) in the verification map.

@@ -10,6 +10,9 @@ simWorkspace/
 *.bin
 unnamed.*
 
+# SpinalHDL Formal (SymbiYosys workspace at repo root)
+/formal/
+
 # IDEs & Metals
 .bsp/
 .bloop/

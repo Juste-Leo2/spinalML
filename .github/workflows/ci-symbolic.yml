@@ -1,0 +1,67 @@
+name: CI - Symbolic Verification
+
+on:
+  push:
+    branches: [ "main" ] 
+  workflow_dispatch: 
+
+jobs:
+  symbolic-proofs:
+    runs-on: [self-hosted, arm64, radxa]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check and Install System Dependencies
+        run: |
+          if ! command -v javac &> /dev/null || ! command -v yosys &> /dev/null || ! command -v z3 &> /dev/null; then
+            echo "Dependencies missing, installing yosys, z3 and sby runtime deps..."
+            sudo apt-get update
+            sudo apt-get install -y default-jdk yosys z3 python3-click python3-yaml
+          else
+            echo "System dependencies already installed."
+          fi
+
+      - name: Check and install SymbiYosys
+        run: |
+          if ! command -v sby &> /dev/null; then
+            echo "sby not found, installing v0.68..."
+            git clone --depth 1 --branch v0.68 https://github.com/YosysHQ/symbiyosys.git /tmp/symbiyosys
+            make -C /tmp/symbiyosys install PREFIX=$HOME/.local
+          else
+            echo "sby is already installed."
+          fi
+          export PATH="$HOME/.local/bin:$PATH"
+          yosys --version
+          z3 --version
+          sby --version
+
+      - name: Run Formal Proofs
+        env:
+          COURSIER_JVM: system
+          JAVA_HOME: /usr/lib/jvm/default-java
+          JAVA_OPTS: "-Xmx8G"
+          MAKEFLAGS: "-j 1"
+        run: |
+          set -e
+          # System Python first: the sby launcher needs click/yaml from the
+          # system python3 (a venv shadows it -> ModuleNotFoundError).
+          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
+          echo "Starting formal proofs for all spinalML.symbolicTest specs."
+          for FILE in $(find spinalML/test/src/spinalML/symbolicTest -name "*Formal.scala" | sort); do
+            GRP=$(dirname "$FILE" | sed 's|spinalML/test/src/spinalML/||' | tr '/' '.')
+            CLASS="spinalML.$GRP.$(basename "$FILE" .scala)"
+            echo "=========================================================="
+            echo "Running proof on LITTLE cores: $CLASS"
+            echo "=========================================================="
+            taskset -c 0,1,2,3 mill --no-server --disable-ticker spinalML.test.runMain "$CLASS"
+            echo "Cooling down for 1 second..."
+            sleep 1
+          done
+
+      - name: Upload counterexamples (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-counterexamples
+          path: formal/
+          retention-days: 7
