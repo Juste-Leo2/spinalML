@@ -13,12 +13,33 @@ jobs:
 
       - name: Check and Install System Dependencies
         run: |
-          if ! command -v javac &> /dev/null || ! command -v yosys &> /dev/null || ! command -v z3 &> /dev/null; then
-            echo "Dependencies missing, installing yosys, z3 and sby runtime deps..."
+          if ! command -v javac &> /dev/null || ! command -v z3 &> /dev/null; then
+            echo "Dependencies missing, installing jdk, z3 and sby runtime deps..."
             sudo apt-get update
-            sudo apt-get install -y default-jdk yosys z3 python3-click python3-yaml
+            sudo apt-get install -y default-jdk z3 python3-click python3-yaml
           else
             echo "System dependencies already installed."
+          fi
+
+      - name: Check and install Yosys (build from source if too old)
+        run: |
+          set -e
+          export PATH="$HOME/.local/bin:$PATH"
+          # SBY v0.68 needs yosys features missing before 0.28 (formalff -ff2anyinit,
+          # hierarchy -smtcheck, write_smt2 -stbv). Debian bookworm ships yosys 0.23
+          # -> build the same version as the WSL dev setup (yosys-0.33), once:
+          # the self-hosted runner keeps $HOME/.local, so later runs skip this.
+          if yosys -p 'help formalff' 2>&1 | grep -q ff2anyinit; then
+            echo "Yosys OK: $(yosys --version)"
+          else
+            echo "Yosys too old for SBY v0.68, building yosys-0.33 from source..."
+            sudo apt-get install -y build-essential clang bison flex libreadline-dev tcl-dev libffi-dev git gawk pkg-config python3 zlib1g-dev
+            git clone --depth 1 --branch yosys-0.33 https://github.com/YosysHQ/yosys.git /tmp/yosys-build
+            make -C /tmp/yosys-build config-gcc
+            make -C /tmp/yosys-build -j4
+            make -C /tmp/yosys-build install PREFIX=$HOME/.local
+            rm -rf /tmp/yosys-build
+            echo "Yosys installed: $(yosys --version)"
           fi
 
       - name: Check and install SymbiYosys
@@ -57,11 +78,3 @@ jobs:
             echo "Cooling down for 1 second..."
             sleep 1
           done
-
-      - name: Upload counterexamples (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: formal-counterexamples
-          path: formal/
-          retention-days: 7
