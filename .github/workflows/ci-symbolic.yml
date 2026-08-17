@@ -25,14 +25,18 @@ jobs:
         run: |
           set -e
           export PATH="$HOME/.local/bin:$PATH"
-          # SBY v0.68 needs yosys features missing before 0.28 (formalff -ff2anyinit,
-          # hierarchy -smtcheck, write_smt2 -stbv). Debian bookworm ships yosys 0.23
-          # -> build the same version as the WSL dev setup (yosys-0.33), once:
-          # the self-hosted runner keeps $HOME/.local, so later runs skip this.
-          if yosys -p 'help formalff' 2>&1 | grep -q ff2anyinit; then
+          # SBY v0.68's prep flow runs `formalff ... -hierarchy`, an option added
+          # in Yosys 0.24. Debian bookworm ships yosys 0.23, which fails with an
+          # opaque `SymbiYosys failure`. Require >= 0.33 (the tested combo, same
+          # as the WSL dev setup): otherwise build yosys-0.33 from source, once.
+          # The self-hosted runner keeps $HOME/.local, so later runs skip this.
+          YOSYS_VER=$(yosys --version 2>/dev/null | sed -n 's/^Yosys \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+          NEED="0.33"
+          if [ -n "$YOSYS_VER" ] && [ "$(printf '%s\n%s\n' "$YOSYS_VER" "$NEED" | sort -V | tail -1)" = "$YOSYS_VER" ]; then
             echo "Yosys OK: $(yosys --version)"
           else
-            echo "Yosys too old for SBY v0.68, building yosys-0.33 from source..."
+            echo "Yosys ${YOSYS_VER:-<none>} too old for SBY v0.68, building yosys-0.33 from source..."
+            sudo apt-get update
             sudo apt-get install -y build-essential clang bison flex libreadline-dev tcl-dev libffi-dev git gawk pkg-config python3 zlib1g-dev
             git clone --depth 1 --branch yosys-0.33 https://github.com/YosysHQ/yosys.git /tmp/yosys-build
             make -C /tmp/yosys-build config-gcc
@@ -44,6 +48,7 @@ jobs:
 
       - name: Check and install SymbiYosys
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           if ! command -v sby &> /dev/null; then
             echo "sby not found, installing v0.68..."
             git clone --depth 1 --branch v0.68 https://github.com/YosysHQ/symbiyosys.git /tmp/symbiyosys
@@ -51,7 +56,6 @@ jobs:
           else
             echo "sby is already installed."
           fi
-          export PATH="$HOME/.local/bin:$PATH"
           yosys --version
           z3 --version
           sby --version
@@ -64,9 +68,10 @@ jobs:
           MAKEFLAGS: "-j 1"
         run: |
           set -e
-          # System Python first: the sby launcher needs click/yaml from the
-          # system python3 (a venv shadows it -> ModuleNotFoundError).
-          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
+          # $HOME/.local/bin first: the built yosys 0.33 must shadow the system
+          # yosys 0.23. No venv in this job, so the sby launcher's python3 still
+          # resolves to the system one (which has click/yaml).
+          export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
           echo "Starting formal proofs for all spinalML.symbolicTest specs."
           for FILE in $(find spinalML/test/src/spinalML/symbolicTest -name "*Formal.scala" | sort); do
             GRP=$(dirname "$FILE" | sed 's|spinalML/test/src/spinalML/||' | tr '/' '.')

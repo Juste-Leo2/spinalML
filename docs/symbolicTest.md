@@ -56,15 +56,15 @@ sby --version     # SBY v0.68+
 > (or install `click`/`pyyaml` into the venv).
 
 > [!WARNING]
-> **SBY v0.68 needs a recent Yosys.** Its prep flow uses features that do not
-> exist before Yosys 0.28 (`formalff -ff2anyinit`, `hierarchy -smtcheck`,
-> `write_smt2 -stbv`); with an older Yosys, sby aborts with an opaque
-> `SymbiYosys failure` in `engine_0`. Debian bookworm (and the radxa self-hosted
-> runner) ship Yosys 0.23, which is too old. The CI workflow detects this by
-> probing `yosys -p 'help formalff' | grep ff2anyinit` and, if missing, builds
-> `yosys-0.33` from source once into `$HOME/.local` (persistent on the
-> self-hosted runner). Keep local/CI versions aligned with the tested combo
-> (Yosys 0.33 / Z3 4.8.12 / SBY v0.68).
+> **SBY v0.68 needs Yosys >= 0.24.** Its prep flow runs
+> `formalff -setundef -clk2ff -ff2anyinit -hierarchy`, and the `-hierarchy`
+> option only exists from Yosys 0.24 onwards. Debian bookworm (and the radxa
+> self-hosted runner) ship Yosys 0.23, with which sby aborts with an opaque
+> `SymbiYosys failure` (see `prep: ERROR: Command syntax error: Unknown option`
+> in the sby logfile). The CI workflow requires the tested combo (>= 0.33):
+> if the installed version is older it builds `yosys-0.33` from source once
+> into `$HOME/.local` (persistent on the self-hosted runner). Keep local/CI
+> versions aligned with Yosys 0.33 / Z3 4.8.12 / SBY v0.68.
 
 ## Testing Architecture
 
