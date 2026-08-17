@@ -64,7 +64,9 @@ sby --version     # SBY v0.68+
 > in the sby logfile). The CI workflow requires the tested combo (>= 0.33):
 > if the installed version is older it builds `yosys-0.33` from source once
 > into `$HOME/.local` (persistent on the self-hosted runner). Keep local/CI
-> versions aligned with Yosys 0.33 / Z3 4.8.12 / SBY v0.68.
+> versions aligned with Yosys 0.33 / Z3 4.8.12 / SBY v0.68. The CI build runs
+> with `ENABLE_ABC := 0` (ABC is not used by the formal smtbmc/Z3 flow, and
+> building it from source is slow and heats up the passively-cooled radxa).
 
 ## Testing Architecture
 

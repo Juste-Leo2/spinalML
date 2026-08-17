@@ -45,7 +45,13 @@ jobs:
             rm -rf "$BUILD_DIR"
             git clone --depth 1 --branch yosys-0.33 https://github.com/YosysHQ/yosys.git "$BUILD_DIR"
             make -C "$BUILD_DIR" config-gcc
-            make -C "$BUILD_DIR" -j4
+            # ABC is not used by the sby smtbmc/Z3 formal flow (only synth_*);
+            # building it from source takes ~20 min and heats up the passively
+            # cooled radxa. Keep it disabled for this build.
+            echo 'ENABLE_ABC := 0' >> "$BUILD_DIR/Makefile.conf"
+            # Build single-threaded on the 4 LITTLE cores only: slower but
+            # keeps the passively-cooled radxa well under thermal limits.
+            taskset -c 0,1,2,3 make -C "$BUILD_DIR" -j1
             make -C "$BUILD_DIR" install PREFIX=$HOME/.local
             rm -rf "$BUILD_DIR"
             echo "Yosys installed: $(yosys --version)"
