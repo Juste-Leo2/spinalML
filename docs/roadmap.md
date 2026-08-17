@@ -48,7 +48,11 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] **Mixed Precision (Dynamic Quantization)**: Implement specific conversion layers (e.g. `Requantize`) in `LayerSpec` to dynamically alter the hardware datapath precision in the middle of a `Sequential` model.
 - [ ] **ONNX One-Liner Importer**: Develop a parser that reads an ONNX model file and automatically generates a fully functional SpinalML hardware accelerator in a single line of Scala code.
 
-## 7. Formal Verification (Yosys + SymbiYosys)
+## 7. Simulation & CI Infrastructure
+- [x] **Hybrid Co-simulation (Python/Cocotb)**: Implement a robust dual-simulator testing architecture using Cocotb. Use Icarus Verilog for control-heavy flow tests (DMA, streams) for maximum stability, and Verilator 5 for mathematically intensive layers (Conv, Linear) for maximum speed.
+- [x] **Continuous Integration (CI)**: Setup GitHub Actions to run the full Python and Scala test suite autonomously on Linux runners, ensuring non-regression of the SpinalHDL and Verilog generated code.
+
+## 8. Formal Verification (Yosys + SymbiYosys)
 
 Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assume`/`cover` properties proven for all input combinations by SAT/SMT solvers). Complements the sampled-vector coverage of the Python/Cocotb co-simulation.
 

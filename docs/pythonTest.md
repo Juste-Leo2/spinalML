@@ -20,7 +20,7 @@ uv pip install -r requirements.txt
 ```
 
 > [!NOTE]
-> SpinalHDL requires the `mill` build tool to compile Scala into Verilog. Ensure that the `./mill` script at the repository root is executable. Verilator must also be installed on your system (`sudo apt install verilator`).
+> SpinalHDL requires the `mill` build tool to compile Scala into Verilog. Ensure that the `./mill` script at the repository root is executable. Icarus Verilog (`sudo apt install iverilog`) and Verilator (`sudo apt install verilator`) must also be installed on your system for co-simulation.
 
 ## Testing Architecture
 
@@ -60,8 +60,3 @@ pytest tests/python/test_rsqrt.py -s
 3. Verilator compiles the `.v` file into C++.
 4. Cocotb injects the test stimuli (e.g., $1.0, 4.0, 10.0$) bit by bit into the module ports via the simulator.
 5. Cocotb reads the calculated hardware result and asserts it against the Python Golden Model (`ops.py`).
-
-> [!WARNING]
-> **PWL (Piecewise Linear) Approximation on Integers**
-> For wide datatypes (like `I16` or `BF16`), the FPGA uses a piecewise linear approximation (PWL).
-> On extremely steep curves (like $1/\sqrt{x}$ near $0$), the mathematical error with integers can be massive due to the large uniform segment sizes. The Python Golden Model is intentionally coded to reproduce this *exact* hardware interpolation error to validate the correctness of the logic architecture (and not the absolute mathematical truth of the function).

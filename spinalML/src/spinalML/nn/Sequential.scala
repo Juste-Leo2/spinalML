@@ -69,8 +69,20 @@ case class Sequential(
   allAxiMasters += dmaImg.io.axiMaster
   triggerIdx += 1
 
+  // Use Automatic Double Buffering instead of a simple queue
+  val imgBufferSize = 1024 // e.g. 1024 elements per bank
+  val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = 1)
+  imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream
+  
+  val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = 1)
+  imgStreamer.io.readData := imgDoubleBuffer.io.readData
+  imgStreamer.io.tileReady := imgDoubleBuffer.io.tileReady
+  imgDoubleBuffer.io.readAddr := imgStreamer.io.readAddr
+  imgDoubleBuffer.io.nextTile := imgStreamer.io.nextTile
+
   val imgQueue = Tensor(inputDataType, inputShape, 1)
-  imgQueue.stream << dmaImg.io.outStream.stream.queue(64)
+  imgQueue.stream << imgStreamer.io.streamOut
+  
   var currentTensor = imgQueue
   var currentShape = inputShape
   var currentType = globalDataType
@@ -115,8 +127,18 @@ case class Sequential(
       triggerIdx += 1
       currentMemoryOffset += elements * (wType.getBitsWidth / 8)
       
+      val wBufferSize = Math.max(16, elements) // Double buffer size for weights
+      val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
+      wDoubleBuffer.io.streamIn << dmaW.io.outStream.stream
+      
+      val wStreamer = DoubleBufferStreamer(wType, wBufferSize, requiredLanes)
+      wStreamer.io.readData := wDoubleBuffer.io.readData
+      wStreamer.io.tileReady := wDoubleBuffer.io.tileReady
+      wDoubleBuffer.io.readAddr := wStreamer.io.readAddr
+      wDoubleBuffer.io.nextTile := wStreamer.io.nextTile
+      
       layerWeights = Tensor(wType, wShape, requiredLanes)
-      layerWeights.stream << dmaW.io.outStream.stream.queue(16) // FIFO to prevent deadlocks
+      layerWeights.stream << wStreamer.io.streamOut
     }
     
     // Fetch Bias
@@ -143,8 +165,18 @@ case class Sequential(
       triggerIdx += 1
       currentMemoryOffset += elements * (lType.getBitsWidth / 8)
       
+      val bBufferSize = Math.max(16, elements)
+      val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
+      bDoubleBuffer.io.streamIn << dmaB.io.outStream.stream
+      
+      val bStreamer = DoubleBufferStreamer(lType, bBufferSize, requiredBiasLanes)
+      bStreamer.io.readData := bDoubleBuffer.io.readData
+      bStreamer.io.tileReady := bDoubleBuffer.io.tileReady
+      bDoubleBuffer.io.readAddr := bStreamer.io.readAddr
+      bDoubleBuffer.io.nextTile := bStreamer.io.nextTile
+      
       layerBias = Tensor(lType, bShape, requiredBiasLanes)
-      layerBias.stream << dmaB.io.outStream.stream.queue(16) // FIFO to prevent deadlocks
+      layerBias.stream << bStreamer.io.streamOut
     }
     
     // Instantiate computation block

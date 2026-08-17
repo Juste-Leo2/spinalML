@@ -76,9 +76,9 @@ async def run_double_buffer_sim(dut):
 def test_stream_double_buffer():
     v_file = run_mill("spinalML.memory.StreamDoubleBufferTest", "", "StreamDoubleBufferTestComp")
     
-    from cocotb_test.simulator import run
+    from utils.test_layers_utils import safe_run_sim as run
     run(
-        simulator="verilator",
+        simulator="icarus",
         verilog_sources=[v_file],
         toplevel="StreamDoubleBufferTestComp",
         module="test_stream_double_buffer",

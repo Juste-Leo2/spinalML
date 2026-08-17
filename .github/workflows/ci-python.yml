@@ -16,10 +16,10 @@ jobs:
       
       - name: Install System Dependencies (uv & verilator)
         run: |
-          if ! command -v verilator &> /dev/null; then
-            echo "Installing Verilator..."
+          if ! command -v verilator &> /dev/null || ! command -v iverilog &> /dev/null; then
+            echo "Installing Verilator and Icarus Verilog..."
             sudo apt-get update
-            sudo apt-get install -y verilator
+            sudo apt-get install -y verilator iverilog
           fi
           if ! command -v uv &> /dev/null; then
             echo "Installing uv..."
