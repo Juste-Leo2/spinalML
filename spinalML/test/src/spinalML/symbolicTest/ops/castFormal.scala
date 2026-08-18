@@ -37,7 +37,7 @@ object castFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
-      .withProve(2)
+      .withProve(15)
       .withTimeout(600)
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
