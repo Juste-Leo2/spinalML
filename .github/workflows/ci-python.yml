@@ -19,7 +19,7 @@ jobs:
           if ! command -v verilator &> /dev/null || ! command -v iverilog &> /dev/null; then
             echo "Installing Verilator and Icarus Verilog..."
             sudo apt-get update
-            sudo apt-get install -y verilator iverilog
+            sudo apt-get install -y verilator iverilog python3-dev
           fi
           if ! command -v uv &> /dev/null; then
             echo "Installing uv..."
