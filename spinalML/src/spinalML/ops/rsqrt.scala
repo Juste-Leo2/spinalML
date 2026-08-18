@@ -6,14 +6,14 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
 
-case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
     val c = master(Tensor(dataType, shape, lanes))
   }
 
-  if (bitWidth <= 8) {
+  if (bitWidth <= 8 && !forceAlg) {
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
@@ -132,8 +132,8 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
 }
 
 object rsqrt {
-  def apply[T <: Data](a: Tensor[T]): Tensor[T] = {
-    val comp = RsqrtOp(a.dataType, a.shape, a.lanes)
+  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false): Tensor[T] = {
+    val comp = RsqrtOp(a.dataType, a.shape, a.lanes, forceAlg)
     comp.io.a <> a
     comp.io.c
   }

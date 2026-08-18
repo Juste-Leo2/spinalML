@@ -11,17 +11,17 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Basic Arithmetic
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise addition of two tensors. |
-| `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise subtraction of two tensors. |
-| `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise multiplication (Hadamard product). |
-| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise division (Mul + Reciprocal). |
-| `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ❌ | Exponential. |
+| `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
+| `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
+| `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
+| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
+| `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
-| `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Element-wise absolute value. |
-| `Reciprocal` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ❌ | Reciprocal (1/X). |
-| `Rsqrt` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ❌ | Inverse Square Root. |
-| `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ❌ | Square Root. |
-| `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
+| `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
+| `Reciprocal` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Reciprocal (1/X). |
+| `Rsqrt` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Inverse Square Root. |
+| `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Square Root. |
+| `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
 
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |

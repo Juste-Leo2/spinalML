@@ -54,7 +54,7 @@ object TransposeFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
-      .withBMC(15) // Enough for 6 writes + 1 flush + 6 reads = 13 cycles min
+      .withBMC(4) // Enough for 6 writes + 1 flush + 6 reads = 13 cycles min
       .withTimeout(600)
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))

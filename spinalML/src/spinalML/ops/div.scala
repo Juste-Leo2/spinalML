@@ -12,15 +12,19 @@ case class DivOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val c = master(Tensor(dataType, shape, lanes))
   }
 
-  // 1. Calculate Reciprocal of B
+  // 1. Synchronize inputs
+  val syncStream = StreamJoin.arg(io.a.stream, io.b.stream)
+  val (syncStreamForB, syncStreamForA) = StreamFork2(syncStream)
+
+  // 2. Calculate Reciprocal of B
   val invBComp = ReciprocalOp(dataType, shape, lanes)
-  invBComp.io.a <> io.b
+  invBComp.io.a.stream << syncStreamForB.translateWith(io.b.stream.payload)
   
-  // 2. Pipeline A to match the 1-cycle latency of ReciprocalOp
-  val pipelinedA = io.a.stream.m2sPipe()
+  // 3. Pipeline A to match the 1-cycle latency of ReciprocalOp
+  val pipelinedA = syncStreamForA.translateWith(io.a.stream.payload).m2sPipe()
   val invBStream = invBComp.io.c.stream
   
-  // 3. Join streams
+  // 4. Join streams at output (safety net, they should arrive together)
   val joined = StreamJoin.arg(pipelinedA, invBStream)
   
   val outValid = RegInit(False)

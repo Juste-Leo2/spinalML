@@ -6,7 +6,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
 
-case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
@@ -16,7 +16,7 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
   // mathFn with divide-by-zero protection
   val mathFn = (x: Double) => 1.0 / (x + (if (x >= 0) 1e-9 else -1e-9))
 
-  if (bitWidth <= 8) {
+  if (bitWidth <= 8 && !forceAlg) {
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
@@ -111,8 +111,8 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
 }
 
 object reciprocal {
-  def apply[T <: Data](a: Tensor[T]): Tensor[T] = {
-    val comp = ReciprocalOp(a.dataType, a.shape, a.lanes)
+  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false): Tensor[T] = {
+    val comp = ReciprocalOp(a.dataType, a.shape, a.lanes, forceAlg)
     comp.io.a <> a
     comp.io.c
   }

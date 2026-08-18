@@ -4,10 +4,10 @@ import spinal.core._
 import spinal.core.formal._
 import spinal.lib._
 import spinalML.dtypes.{I8, FP4_E2M1, FloatML}
-import spinalML.ops.AddTestComp
+import spinalML.ops.MulTestComp
 
-class AddFormal_I8 extends Component {
-  val dut = FormalDut(AddTestComp(I8()))
+class MulFormal_I8 extends Component {
+  val dut = FormalDut(MulTestComp(I8()))
 
   anyseq(dut.io.a.stream.valid)
   anyseq(dut.io.a.stream.payload)
@@ -22,7 +22,7 @@ class AddFormal_I8 extends Component {
 
   val expectedPayload = Vec(I8(), 2)
   for(i <- 0 until 2) {
-    expectedPayload(i).assignFrom((dut.io.a.stream.payload(i) + dut.io.b.stream.payload(i)).resized)
+    expectedPayload(i).assignFrom((dut.io.a.stream.payload(i) * dut.io.b.stream.payload(i)).resized)
   }
 
   val trackedExpected = Reg(Vec(I8(), 2))
@@ -38,14 +38,14 @@ class AddFormal_I8 extends Component {
   val fireOut = dut.io.c.stream.valid && dut.io.c.stream.ready
   when(fireOut && track && !hasChecked) {
     for(i <- 0 until 2) {
-      assert(dut.io.c.stream.payload(i) === trackedExpected(i), s"Add I8 mismatch on lane $i")
+      assert(dut.io.c.stream.payload(i) === trackedExpected(i), s"Mul I8 mismatch on lane $i")
     }
     hasChecked := True
   }
 }
 
-class AddFormal_FP4 extends Component {
-  val dut = FormalDut(AddTestComp(FP4_E2M1()))
+class MulFormal_FP4 extends Component {
+  val dut = FormalDut(MulTestComp(FP4_E2M1()))
 
   anyseq(dut.io.a.stream.valid)
   anyseq(dut.io.a.stream.payload)
@@ -60,7 +60,7 @@ class AddFormal_FP4 extends Component {
 
   val expectedPayload = Vec(FP4_E2M1(), 2)
   for(i <- 0 until 2) {
-    expectedPayload(i).assignFrom(spinalML.utils.Float.add(dut.io.a.stream.payload(i), dut.io.b.stream.payload(i)).asInstanceOf[FloatML])
+    expectedPayload(i).assignFrom(spinalML.utils.Float.mul(dut.io.a.stream.payload(i), dut.io.b.stream.payload(i)).asInstanceOf[FloatML])
   }
 
   val trackedExpected = Reg(Vec(FP4_E2M1(), 2))
@@ -76,13 +76,13 @@ class AddFormal_FP4 extends Component {
   val fireOut = dut.io.c.stream.valid && dut.io.c.stream.ready
   when(fireOut && track && !hasChecked) {
     for(i <- 0 until 2) {
-      assert(dut.io.c.stream.payload(i) === trackedExpected(i), s"Add FP4 mismatch on lane $i")
+      assert(dut.io.c.stream.payload(i) === trackedExpected(i), s"Mul FP4 mismatch on lane $i")
     }
     hasChecked := True
   }
 }
 
-object AddFormal {
+object MulFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
@@ -91,7 +91,7 @@ object AddFormal {
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
-      .doVerify(new AddFormal_I8, "add_i8")
+      .doVerify(new MulFormal_I8, "mul_i8")
 
     FormalConfig
       .withSymbiYosys
@@ -100,6 +100,6 @@ object AddFormal {
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
-      .doVerify(new AddFormal_FP4, "add_fp4")
+      .doVerify(new MulFormal_FP4, "mul_fp4")
   }
 }

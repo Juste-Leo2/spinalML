@@ -7,12 +7,12 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3}
 
-case class RsqrtTestComp[T <: Data](dataType: HardType[T]) extends Component {
+case class RsqrtTestComp[T <: Data](dataType: HardType[T], forceAlg: Boolean = false) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2), lanes = 2))
     val c = master(Tensor(dataType, Seq(2), lanes = 2))
   }
-  io.c <> rsqrt(io.a)
+  io.c <> rsqrt(io.a, forceAlg)
 }
 
 class RsqrtTest extends AnyFunSuite {

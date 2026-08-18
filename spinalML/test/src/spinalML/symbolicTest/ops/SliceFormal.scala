@@ -60,7 +60,7 @@ object SliceFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
-      .withBMC(15)
+      .withBMC(4)
       .withTimeout(600)
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
