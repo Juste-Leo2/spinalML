@@ -26,7 +26,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `MatMul` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Matrix multiplication of 2D tensors. *(Requires BRAM)* |
+| `MatMul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Matrix multiplication of 2D tensors. *(Requires BRAM)* |
 | `Dot` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Dot product of two 1D vectors. |
 
 ## Tensor Manipulations
@@ -44,9 +44,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Neural Network Layers
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Linear` (Dense) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Fully connected layer. *(Requires BRAM)* |
-| `Conv1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 1D convolution over an input signal. |
-| `Conv2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 2D convolution over an input image. *(Requires BRAM)* |
+| `Linear` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Fully connected dense layer. |
+| `Conv1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D Convolution over sequence. |
+| `Conv2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D Convolution over image. *(Requires BRAM)* |
 | `DepthwiseConv` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Depthwise separable convolution. *(Requires BRAM)* |
 
 ## Attention Mechanisms
