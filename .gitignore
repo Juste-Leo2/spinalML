@@ -12,6 +12,7 @@ unnamed.*
 
 # SpinalHDL Formal (SymbiYosys workspace at repo root)
 /formal/
+run_all_formal.sh
 
 # IDEs & Metals
 .bsp/
