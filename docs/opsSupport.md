@@ -59,8 +59,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Activation Functions
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Rectified Linear Unit. |
-| `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Leaky Rectified Linear Unit. |
+| `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Rectified Linear Unit. |
+| `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
 | `Sigmoid` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
 | `Tanh` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
 | `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ❌ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
@@ -74,9 +74,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 1D max pooling. |
+| `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D max pooling. |
 | `MaxPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2D max pooling. *(Requires BRAM)* |
-| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 1D average pooling. |
+| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
 | `AvgPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2D average pooling. *(Requires BRAM)* |
 
 ## Methodology Notes
