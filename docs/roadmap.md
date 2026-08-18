@@ -14,15 +14,15 @@ This document outlines the development steps for the spinalML library. Developme
 - [x] Implement scalar operations (Broadcast add/mul).
 - [x] Implement basic Matrix Multiplication (MatMul). (Accumulator data type selection and Tiling/Double-Buffering system for large matrices are complete)
 - [ ] Implement Dot Product for 1D Tensors.
-- [ ] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
+- [x] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
 
 ## 3. Advanced Operations
 - [x] Implement Dense (Linear) layers.
 - [x] Implement Convolutional layers (1D and 2D) using `seq2col` and `im2col` strategies..
 - [x] Implement Activation functions (ReLU, Sigmoid, Tanh).
 - [x] Implement Pooling layers (MaxPool, AvgPool).
-- [ ] **Multi-Channel Convolutions**: Upgrade `Conv1DLayer` and `Conv2DLayer` hardware implementations to support `inChannels > 1` and `outChannels > 1` (requires cross-channel accumulation).
-- [ ] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
+- [x] **Multi-Channel Convolutions**: Upgrade `Conv1DLayer` and `Conv2DLayer` hardware implementations to support `inChannels > 1` and `outChannels > 1` (requires cross-channel accumulation).
+- [x] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
 - [x] Implement Normalization layers (BatchNorm, LayerNorm).
 - [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
 
@@ -42,8 +42,8 @@ This document outlines the development steps for the spinalML library. Developme
 ## 6. High-Level AI Abstraction
 - [x] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
 - [x] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
-- [ ] **Automatic Tiling & Double Buffering**: Integrate `StreamDoubleBuffer` and 2D tiling dynamically into `Sequential` or `Accelerator` to automatically segment and double-buffer large input images/tensors that exceed BRAM capacity.
-- [ ] **SoC Integration Testing (Cocotb)**: Implement full system-level testing of the `HighLevelTemplate` (including AXI-Lite and AXI4 memory) using Python, Cocotb, and `cocotbext-axi`, replacing manual Scala simulation.
+- [x] **Automatic Tiling & Double Buffering**: Integrate `StreamDoubleBuffer` and 2D tiling dynamically into `Sequential` or `Accelerator` to automatically segment and double-buffer large input images/tensors that exceed BRAM capacity.
+- [x] **SoC Integration Testing (Cocotb)**: Implement full system-level testing of the `HighLevelTemplate` (including AXI-Lite and AXI4 memory) using Python, Cocotb, and `cocotbext-axi`, replacing manual Scala simulation.
 - [x] **Support of hardware utilities in LayerSpec**: Expose utility layers in the high-level `LayerSpec` API (e.g. `Repack`, `Concat`) to give users manual control over bus widths and complex topologies.
 - [x] **Mixed Precision (Dynamic Quantization)**: Implement specific conversion layers (e.g. `Requantize`) in `LayerSpec` to dynamically alter the hardware datapath precision in the middle of a `Sequential` model.
 - [ ] **ONNX One-Liner Importer**: Develop a parser that reads an ONNX model file and automatically generates a fully functional SpinalML hardware accelerator in a single line of Scala code.
@@ -58,6 +58,7 @@ Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assum
 
 - [x] **Environment**: Install `yosys` + `symbiyosys` (local WSL + CI runner) and validate the SpinalHDL 1.14.2 formal API.
 - [x] **Onboarding Spike**: Write `AddFormal.scala` — prove bit-exact equivalence of `AddOp` (I8, streamed `m2sPipe`) against the golden model for all inputs (k-induction proof passed, ~0s runtime), and validated that a deliberately broken assertion is caught with a VCD counterexample. Pattern documented in `docs/symbolicTest.md`.
+- [x] **DType Units**: Prove the arithmetic/quantization units **once per concrete dtype** (`utils.Float.*` add/sub/mul, `requantize` rounding/saturation, `cast` wrap-vs-clip) as certified lemmas — a proven unit isolates bugs in the glue of every dependent op proof afterwards.
 - [ ] **Combinational Ops**: Roll out formal proofs to all primitive ops (`ops/`), dtype by dtype (8/16-bit first), reusing the translated golden models from `tests/python/golden_models/`.
 - [ ] **Memory & Flow Invariants**: Prove stream invariants on `StreamDoubleBuffer` (no data loss under any `valid`/`ready` pattern, no deadlock) and reachability checks (`cover`/`bmc`) on `DMAReader`/`DMAReader2D`.
-- [ ] **CI Integration & Verification Map**: Add a formal-verification workflow to CI and track module-by-module status (formally proven / simulated / uncovered) in the verification map.
+- [x] **CI Integration & Verification Map**: Add a formal-verification workflow to CI and track module-by-module status (formally proven / simulated / uncovered) in the verification map.

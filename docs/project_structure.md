@@ -7,7 +7,7 @@ spinalML is a Machine Learning library for hardware synthesis and simulation, wr
 ## Repository overview
 
 - **`spinalML/src/`** — the hardware library itself (Scala/SpinalHDL) and its examples.
-- **`spinalML/test/`** — ScalaTest unit tests, mirroring the layout of `src/`.
+- **`spinalML/test/`** — ScalaTest unit tests, mirroring the layout of `src/`, plus the symbolic (formal) specifications in `symbolicTest/`.
 - **`tests/python/`** — Python co-simulation (Cocotb + Verilator) validating hardware models against NumPy golden models.
 - **`docs/`** — all project documentation.
 
@@ -26,6 +26,7 @@ spinalML/
 ├── .github/workflows/
 │   ├── ci-simulations.yml    # runs the hardware simulations (Verilator) on push to main
 │   ├── ci-python.yml         # runs the Python/Cocotb co-sim, after the HW sims pass
+│   ├── ci-symbolic.yml       # symbolic (formal) proofs: Yosys + SymbiYosys + Z3
 │   └── ci-sentrux.yml        # code-health checks (Sentrux)
 ├── .sentrux/
 │   └── rules.toml            # no cyclic deps, no god files, max cyclomatic complexity,
@@ -36,6 +37,8 @@ spinalML/
 │   ├── opsDocs.md            # API reference of all hardware operations
 │   ├── opsSupport.md         # ops x hardware-validation-status matrix
 │   ├── pythonTest.md         # docs of the Python/Cocotb/Verilator test framework
+│   ├── symbolicTest.md       # symbolic (formal) testing: install, architecture, results
+│   ├── symbolicTestPlaybook.md # hands-on guide to write any formal spec (templates, API)
 │   ├── roadmap.md            # development phases checklist
 │   └── scratch/              # WIP scratch space (empty)
 ├── spinalML/
@@ -122,6 +125,8 @@ spinalML/
 │       ├── memory/             # DMAReaderTest, DMAReader2DTest, StreamDoubleBufferTest,
 │       │                       #   AxiArbiterStressTest
 │       ├── ops/                # one *Test.scala per file in src/ops
+│       ├── symbolicTest/       # formal (symbolic) specs, mirroring src/ packages
+│       │   └── ops/AddFormal.scala  # proof of the I8 add op (k-induction, Z3)
 │       ├── poolings/           # AvgPool1DTest, MaxPool1DTest
 │       ├── accelerator/        # MLAcceleratorTest
 │       ├── tensors/            # TensorSim.scala (simulation driver)
@@ -144,4 +149,5 @@ spinalML/
 ## Conventions
 
 - **Scala tests** mirror the source: `spinalML/test/src/spinalML/<pkg>/XxxTest.scala` tests `spinalML/src/spinalML/<pkg>/xxx.scala`.
+- **Symbolic tests** live in `spinalML/test/src/spinalML/symbolicTest/<pkg>/XxxFormal.scala` (one formal proof per component, discovered by the `*Formal.scala` glob in `ci-symbolic.yml`).
 - **Python tests** pair each operation/layer with a NumPy golden model in `golden_models/`, verified bit-exactly through Cocotb + Verilator.

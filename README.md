@@ -19,6 +19,7 @@ To understand the direction and the capabilities of this project, please refer t
 *   [API Reference](docs/opsDocs.md): The detailed technical documentation and signatures for all supported hardware operations.
 *   [Roadmap](docs/roadmap.md): The step-by-step checklist of the project's development phases.
 *   [Python Co-Simulation](docs/pythonTest.md): Documentation on the Python/Cocotb/Verilator testing framework used to validate mathematical hardware models.
+*   [Formal Verification](docs/symbolicTest.md): Documentation on the symbolic tests and formal verification infrastructure using SymbiYosys.
 
 ## Acknowledgements
 

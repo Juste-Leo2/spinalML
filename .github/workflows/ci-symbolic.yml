@@ -13,10 +13,10 @@ jobs:
 
       - name: Check and Install System Dependencies
         run: |
-          if ! command -v javac &> /dev/null || ! command -v z3 &> /dev/null; then
-            echo "Dependencies missing, installing jdk, z3 and sby runtime deps..."
+          if ! command -v javac &> /dev/null || ! command -v z3 &> /dev/null || ! command -v cvc4 &> /dev/null; then
+            echo "Dependencies missing, installing jdk, z3, cvc4 and sby runtime deps..."
             sudo apt-get update
-            sudo apt-get install -y default-jdk z3 python3-click python3-yaml
+            sudo apt-get install -y default-jdk z3 cvc4 python3-click python3-yaml
           else
             echo "System dependencies already installed."
           fi
@@ -73,6 +73,7 @@ jobs:
           fi
           yosys --version
           z3 --version
+          cvc4 --version
           sby --version
 
       - name: Run Formal Proofs

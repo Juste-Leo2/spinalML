@@ -77,6 +77,10 @@ the `tests/python/` golden models are described — but in Scala. The production
 RTL is **never** modified: the specification reuses the existing test components
 (`AddTestComp`, ...) as a black box.
 
+> [!TIP]
+> To *write* a new spec (recipe, templates, API reference, checklist), see
+> [symbolicTestPlaybook.md](symbolicTestPlaybook.md) — the complete hands-on guide.
+
 ### Anatomy of a formal specification (`AddFormal.scala`)
 
 ```scala

@@ -49,10 +49,10 @@ object AddFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
-      .withProve(10)
+      .withProve(2)
       .withTimeout(600)
       .withDebug
-      .withEngies(List(SmtBmc(solver = SmtBmcSolver.Z3)))
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
       .doVerify(new AddFormal, "add_i8")
   }
