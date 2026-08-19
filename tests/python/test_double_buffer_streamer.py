@@ -2,7 +2,7 @@ import os
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer, ReadOnly
-import pytest
+from utils.tb_utils import run_mill
 import random
 
 @cocotb.test()
@@ -77,18 +77,16 @@ async def cocotb_test_double_buffer_streamer(dut):
     # Because there is a FIFO in between. 
     # Let's just assure it doesn't crash and outputs the right data.
 
-@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Verilator tests fail in CI")
 def test_double_buffer_streamer_runner():
     """Pytest runner for test_double_buffer_streamer"""
     # 1. Compile the Scala code to Verilog
-    os.system("bash ./mill spinalML.test.testOnly spinalML.memory.DoubleBufferStreamerTest -- -z")
+    v_file = run_mill("spinalML.memory.DoubleBufferStreamerTest", "", "DoubleBufferStreamer")
     
     from utils.test_layers_utils import safe_run_sim as run
     run(
         simulator="icarus",
-        verilog_sources=["sim_build/py_double_buffer_streamer/DoubleBufferStreamer.v"],
+        verilog_sources=[v_file],
         toplevel="DoubleBufferStreamer",
         module="test_double_buffer_streamer",
-        testcase="cocotb_test_double_buffer_streamer",
-        sim_build="sim_build/py_double_buffer_streamer"
+        testcase="cocotb_test_double_buffer_streamer"
     )

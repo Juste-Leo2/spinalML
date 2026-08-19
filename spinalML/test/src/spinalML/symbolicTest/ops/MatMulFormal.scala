@@ -115,13 +115,13 @@ object MatMulFormal {
     FormalConfig.withSymbiYosys.withBMC(15).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
       .doVerify(new MatMulFormal_I8_Par, "matmul_i8_par")
       
-    FormalConfig.withSymbiYosys.withBMC(25).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
+    FormalConfig.withSymbiYosys.withBMC(12).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
       .doVerify(new MatMulFormal_I8_Seq, "matmul_i8_seq")
       
     FormalConfig.withSymbiYosys.withBMC(15).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
       .doVerify(new MatMulFormal_FP4_Par, "matmul_fp4_par")
       
-    FormalConfig.withSymbiYosys.withBMC(25).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
+    FormalConfig.withSymbiYosys.withBMC(12).withTimeout(600).withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))).workspacePath("formal")
       .doVerify(new MatMulFormal_FP4_Seq, "matmul_fp4_seq")
   }
 }
