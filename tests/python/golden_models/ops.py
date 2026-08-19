@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from golden_models.dtypes import FloatML
 
@@ -205,6 +206,58 @@ def exp(x: float, dtype: FloatML = None) -> float:
     if dtype is None:
         return exact
     return dtype.to_float(dtype.from_float(exact))
+
+def log_b(x: float, base: float = math.e) -> float:
+    """Golden model for Log with variable base. Domain: x <= 0 -> 0.0 (industry convention)."""
+    if x <= 0:
+        return 0.0
+    return math.log(x) / math.log(base)
+
+def pwl_log_int(x_val: float, bit_width: int, base: float = math.e, index_bits: int = 8) -> int:
+    def log_fn(x):
+        return 0.0 if x <= 0 else math.log(x) / math.log(base)
+    return pwl_int(x_val, bit_width, log_fn, index_bits)
+
+def pwl_log_float(x_val: float, dtype, base: float = math.e, index_bits: int = 8) -> int:
+    """Golden model replicating exactly the LogOp algebraic separation branch for FloatML > 8 bits:
+    log_b(x) = log2(x) * ln(2)/ln(b), with Q8.8 fixed point, Q0.16 constant and LZD re-quantization."""
+    x_bits = dtype.from_float(x_val)
+    exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    mant = x_bits & ((1 << dtype.mant_bits) - 1)
+    sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+
+    if exp == 0 or sign:
+        return 0
+
+    log2ToBase = round(math.log(2.0) / math.log(base) * 65536.0)
+
+    expTrueSInt = exp - dtype.bias
+    frac = round(math.log(1.0 + mant / (1 << dtype.mant_bits)) / math.log(2.0) * 256.0)
+    log2Fixed = (expTrueSInt << 8) | frac
+
+    yFixedFull = log2Fixed * log2ToBase
+
+    if yFixedFull == 0:
+        return 0
+
+    W = 32
+    absV = abs(yFixedFull)
+    lz = W - absV.bit_length()
+    posSInt = (W - 1) - lz
+    expSInt = dtype.bias + posSInt - 24
+
+    aligned = absV << lz
+    aligned &= (1 << W) - 1
+    mant_out = (aligned >> (W - 1 - dtype.mant_bits)) & ((1 << dtype.mant_bits) - 1)
+
+    if expSInt <= 0:
+        return 0
+    if expSInt >= ((1 << dtype.exp_bits) - 1):
+        # Overflow: saturate to Infinity (sign preserved)
+        return ((1 if yFixedFull < 0 else 0) << (dtype.exp_bits + dtype.mant_bits)) | (((1 << dtype.exp_bits) - 1) << dtype.mant_bits)
+
+    out_sign = 1 if yFixedFull < 0 else 0
+    return (out_sign << (dtype.exp_bits + dtype.mant_bits)) | (expSInt << dtype.mant_bits) | mant_out
 
 def softmax(x: np.ndarray, dtype: FloatML = None) -> np.ndarray:
     """Golden model for Softmax1D pipeline."""
@@ -480,6 +533,76 @@ def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
     newExpSInt = 2 * dtype.bias - exp - shift
     
     return floatml_algebraic_pack(dtype, sign, newExpSInt, readMant)
+
+def _wrap_signed(bits_val: int, bits: int) -> int:
+    """Replicates SpinalHDL resize() truncation of a signed value to `bits` bits (wraps around)."""
+    bits_val &= (1 << bits) - 1
+    if bits_val & (1 << (bits - 1)):
+        bits_val -= (1 << bits)
+    return bits_val
+
+def _clamp_int(val: int, bits: int) -> int:
+    minV = -(1 << (bits - 1))
+    maxV = (1 << (bits - 1)) - 1
+    return max(minV, min(maxV, val))
+
+def _signed_from_bits(bits_val: int, bits: int) -> int:
+    return _wrap_signed(bits_val, bits)
+
+def sigmoid_hw(x: float, dtype) -> int:
+    """Golden model replicating exactly the SigmoidOp composition: neg -> exp -> +1 -> reciprocal."""
+    if hasattr(dtype, "exp_bits"):
+        # 1. Negation: sign flip
+        v = -x
+        # 2. Exp (LUT <= 8 bits, Alg+LUT otherwise)
+        v_in = dtype.to_float(dtype.from_float(v))
+        if dtype.exp_bits + dtype.mant_bits + 1 <= 8:
+            exp_bits = dtype.from_float(exp(v_in, dtype))
+        else:
+            exp_bits = pwl_exp_float(v_in, dtype)
+        v_exp = dtype.to_float(exp_bits)
+        # 3. +1 (Float.add HW)
+        v_add = floatml_add(v_exp, 1.0, dtype)
+        # 4. Reciprocal (LUT <= 8 bits, Alg+LUT otherwise)
+        return pwl_reciprocal_float(v_add, dtype)
+    else:
+        bit_width = dtype.bit_width
+        minV = -(1 << (bit_width - 1))
+        maxV = (1 << (bit_width - 1)) - 1
+        # 1. Negation: 0 - x with only lower clamp, then resize() wrap (8/16 bits)
+        neg = max(minV, -int(x))
+        neg = _wrap_signed(neg, bit_width)
+        # 2. Exp (degenerate PWL = LUT for <= 8 bits, real PWL for 16 bits)
+        exp_bits = pwl_exp_int(neg, bit_width)
+        v_exp = _signed_from_bits(exp_bits, bit_width)
+        # 3. +1 saturating
+        v_add = min(maxV, v_exp + 1)
+        # 4. Reciprocal
+        return pwl_reciprocal_int(v_add, bit_width)
+
+def tanh_hw(x: float, dtype) -> int:
+    """Golden model replicating exactly the TanhOp composition: x*2 -> sigmoid -> 2*sig - 1."""
+    if hasattr(dtype, "exp_bits"):
+        # 1. MulOp by 2.0
+        x2 = floatml_mul(x, 2.0, dtype)
+        # 2. Sigmoid(2x)
+        sig_bits = sigmoid_hw(x2, dtype)
+        vsig = dtype.to_float(sig_bits)
+        # 3. Combinational 2*sig - 1
+        v2 = floatml_mul(vsig, 2.0, dtype)
+        vout = floatml_add(v2, -1.0, dtype)
+        return dtype.from_float(vout)
+    else:
+        bit_width = dtype.bit_width
+        # 1. MulOp: (x * 2) truncated by resize()
+        x2 = _wrap_signed(int(x) * 2, bit_width)
+        # 2. Sigmoid(2x)
+        sig_bits = sigmoid_hw(x2, dtype)
+        vsig = _signed_from_bits(sig_bits, bit_width)
+        # 3. Combinational: clamp(2*sig), then clamp(-1)
+        twice = _clamp_int(2 * vsig, bit_width)
+        minus = _clamp_int(twice - 1, bit_width)
+        return minus & ((1 << bit_width) - 1)
 
 def build_adder_tree_hw(inputs, is_floatml, dtype, pipeline_tree=True):
     if len(inputs) == 1:

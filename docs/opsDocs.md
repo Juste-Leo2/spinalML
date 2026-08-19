@@ -16,6 +16,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | **Cast** | `cast(a, dt)` | Casts tensor to a new datatype (SInt -> FloatML, only this direction). | `a: Tensor[T], dt: HardType[U]` | `Tensor[U]` |
 | **Requantize** | `requantize(a, dt, shift)` | Shift + saturate to a smaller SInt type (e.g. I32 -> I8). | `a: Tensor[T], dt: HardType[U], shift: Int` | `Tensor[U]` |
 | **Abs** | `abs(a)` | Absolute value. | `a: Tensor[T]` | `Tensor[T]` |
+| **Log** | `log(a, base = Math.E)` | Element-wise logarithm. Default `base = e` (ln); `base = 10.0` gives log10. Domain `x <= 0 -> 0` (industry convention, same as `rsqrt`). | `a: Tensor[T]` | `Tensor[T]` |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b`. | `x, a, b: Tensor[T]` | `Tensor[T]` |
 
 ## 2. Non-Linear Mathematics
@@ -63,6 +64,8 @@ Neural network layers maintain their own state or weights, and typically present
 | :--- | :--- | :--- | :--- | :--- |
 | **ReLU** | `relu(a)` | Rectified Linear Unit. | `a: Tensor[T]` | `Tensor[T]` |
 | **LeakyReLU** | `leaky_relu(a, alpha)` | Leaky ReLU. | `a: Tensor[T]` | `Tensor[T]` |
+| **Sigmoid** | `sigmoid(a)` | Sigmoid = 1 / (1 + e^(-x)). Composition: Negation -> Exp -> +1 -> Reciprocal. | `a: Tensor[T]` | `Tensor[T]` |
+| **Tanh** | `tanh(a)` | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition: Mul(×2) -> Sigmoid -> ×2 - 1. | `a: Tensor[T]` | `Tensor[T]` |
 | **Softmax** | `Softmax1D(dt, c, L)` | Component: Probabilities over final dimension. | `x: Tensor[T]` | `y: Tensor[T]` |
 | **BatchNorm** | `BatchNorm1D(x, g, b)` | Inference-only Folded Scale & Shift. | `x, gamma, beta` | `y: Tensor[T]` |
 | **LayerNorm** | `LayerNorm1D(x, g, b)` | Dynamic mean and standard deviation. | `x, gamma, beta` | `y: Tensor[T]` |

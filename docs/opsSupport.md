@@ -17,7 +17,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
 | `BiasAdd` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Broadcast add of a bias vector over the last dimension (columns). |
 | `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
-| `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
+| `Log` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Element-wise logarithm, compile-time base (default `e` = ln, `10` = log10). Domain `x <= 0 -> 0` (industry convention, like `Rsqrt`). |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
 | `Reciprocal` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Reciprocal (1/X). |
 | `Rsqrt` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Inverse Square Root. |
@@ -68,8 +68,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Rectified Linear Unit. |
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
-| `Sigmoid` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Sigmoid activation function. |
-| `Tanh` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Hyperbolic tangent activation function. |
+| `Sigmoid` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). Composition of Negation -> Exp -> +1 -> Reciprocal (ints ⚠️: PWL chain, degenerate for large |x|). |
+| `Tanh` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition of Mul(×2) -> Sigmoid -> ×2 - 1. |
 | `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
@@ -86,8 +86,23 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
 | `AvgPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2D average pooling. *(Requires BRAM)* |
 
+## Infrastructure Modules
+
+Non-operator modules (streaming, memory, numeric units) are verified with the same dual approach (Python/Cocotb co-sim + Scala formal proofs).
+
+| Module | Python Co-sim | Symbolically Verified | Notes |
+| :--- | :---: | :---: | :--- |
+| `StreamDoubleBuffer` | ✅ | ✅ | No data loss / no deadlock under any valid/ready pattern. |
+| `DoubleBufferStreamer` | ✅ | ✅ | Double-buffered streaming engine. |
+| `DMAReader` | ✅ | ✅ | AXI-style reader (BMC reachability). |
+| `DMAReader2D` | ✅ | ✅ | 2D tiled reader over external memory. |
+| `Tensor` (pack/unpack) | ✅ | ✅ | Tensor framing + lane packaging contract. |
+| `Float` unit (fromSInt) | — | ✅ | `FloatFormal` : SInt -> FloatML conversion (FP8 E4M3), plus `Float.zero`. |
+| DTypes (I4/I8/I16/I32/U4/U8/FP4) | ✅ | ✅ | Quantization round-trip per dtype. |
+| PWL / Math LUTs | ✅ | ✅ | `PWLFormal`, `math_lutsFormal` (exp/rsqrt/sqrt/reciprocal units). |
+
 ## Methodology Notes
 
-* **Alg+LUT**: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa).
+* **Alg+LUT**: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa). `Log` uses the same idea: `log_b(x) = log2(x) * ln(2)/ln(b)` with a fixed-point `Q8.8` mantissa LUT, a `Q0.16` constant (`ln(2)/ln(b)`), and LZD re-quantization.
 * **⚠️**: Supported via PWL or LUT approximation, but mathematically meaningless for unquantized integers (results in 0 or overflow).
 
