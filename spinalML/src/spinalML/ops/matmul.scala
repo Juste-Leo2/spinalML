@@ -346,14 +346,38 @@ case class MatmulOp[T <: Data, TAcc <: Data](
 
 object matmul {
   def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false): Tensor[TAcc] = {
-    require(a.shape.length == 2 && b.shape.length == 2, "Matmul requires 2D tensors")
-    require(a.shape(1) == b.shape(0), "Inner dimensions must match (A.cols == B.rows)")
-    require(a.lanes == b.lanes, "Tensors must have the same lanes")
+    val rankA = a.shape.length
+    val rankB = b.shape.length
+    require(rankA >= 2 && rankB >= 2, "Matmul requires at least 2D tensors")
     
-    val matmulComp = MatmulOp(a.dataType, accType, a.shape, b.shape, a.lanes, parallelN = parallelN)
-    matmulComp.io.a <> a
-    matmulComp.io.b <> b
-    matmulComp.io.c
+    val M = a.shape(rankA - 2)
+    val K_A = a.shape(rankA - 1)
+    val K_B = b.shape(rankB - 2)
+    val N = b.shape(rankB - 1)
+    
+    require(K_A == K_B, s"Inner dimensions must match (A.cols=$K_A == B.rows=$K_B)")
+    require(a.lanes == b.lanes, s"Tensors must have the same lanes (${a.lanes} != ${b.lanes})")
+    
+    val batchDimsA = a.shape.dropRight(2)
+    val batchDimsB = b.shape.dropRight(2)
+    
+    // For now, require batch dimensions to match exactly for Batched Matmul.
+    // E.g., [Heads, SeqLen, Dim] x [Heads, Dim, SeqLen].
+    require(batchDimsA == batchDimsB, s"Batch dimensions must match ($batchDimsA != $batchDimsB). Broadcasting stream B is not supported natively here.")
+    
+    val outShape = batchDimsA ++ Seq(M, N)
+    
+    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN)
+    
+    // Connect the continuous batched streams directly to the 2D MatmulOp.
+    // MatmulOp natively loops back to stateWaitTile after each 2D matrix, allowing zero-overhead batching.
+    matmulComp.io.a.stream << a.stream
+    matmulComp.io.b.stream << b.stream
+    
+    // Reconstruct a Tensor with the proper 3D/4D shape
+    val outTensor = Tensor(accType, outShape, 1)
+    outTensor.stream << matmulComp.io.c.stream
+    outTensor
   }
 
   def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {

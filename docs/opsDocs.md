@@ -18,6 +18,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | **Abs** | `abs(a)` | Absolute value. | `a: Tensor[T]` | `Tensor[T]` |
 | **Log** | `log(a, base = Math.E)` | Element-wise logarithm. Default `base = e` (ln); `base = 10.0` gives log10. Domain `x <= 0 -> 0` (industry convention, same as `rsqrt`). | `a: Tensor[T]` | `Tensor[T]` |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b`. | `x, a, b: Tensor[T]` | `Tensor[T]` |
+| **CumSum** | `cumsum(a)` | Cumulative Sum over the sequence dimension (L). Essential for Linear Attention and Mamba. | `a: Tensor[T]` | `Tensor[T]` |
 
 ## 2. Non-Linear Mathematics
 
@@ -32,7 +33,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 
 | Operation | Syntax | Description | Inputs | Outputs |
 | :--- | :--- | :--- | :--- | :--- |
-| **MatMul** | `matmul(a, b)` | Matrix multiplication. Uses BRAM for `b` (weights). | `a, b: Tensor[T]` | `Tensor[T]` |
+| **MatMul** | `matmul(a, b)` | Matrix multiplication. Uses BRAM for `b` (weights). Supports 3D/4D batched tensors natively with zero-overhead streaming. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Dot** | `dot(a, b)` | Dot product of two 1D vectors (wraps `matmul` M=1, N=1). Length must be a multiple of `lanes`. | `a, b: Tensor[T]` | `Tensor[T]` |
 
 ## 4. Tensor Manipulations

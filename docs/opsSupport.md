@@ -23,6 +23,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Rsqrt` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Inverse Square Root. |
 | `Sqrt` | ✅ (LUT) | ✅ (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Square Root. |
 | `Scale Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Fused Multiply-Add (A*X + B). Mapped to DSP48. |
+| `CumSum` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Cumulative Sum over sequence dimension (L). |
 
 ## Matrix and Vector Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |

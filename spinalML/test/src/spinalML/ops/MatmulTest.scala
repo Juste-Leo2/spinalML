@@ -48,9 +48,19 @@ case class MatmulTest_DynamicPadding[T <: Data](dataType: HardType[T]) extends C
   io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
 }
 
+// Component for testing Batched Matmul: A[2, 1, 2] x B[2, 2, 1]
+case class MatmulTest_Batched[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 1, 2), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(2, 2, 1), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 1, 1), lanes = 1))
+  }
+  io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
+}
+
 class MatmulTest extends AnyFunSuite {
-  test("Test streaming matmul Vector operation on I4 tensors") {
-    SimConfig.withWave.compile(MatmulTest_Vector(I4())).doSim { dut =>
+  test("Test streaming matmul Vector operation on I8 tensors") {
+    SimConfig.withWave.compile(MatmulTest_Vector(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       dut.io.a.stream.valid #= false
@@ -161,6 +171,7 @@ class MatmulTest extends AnyFunSuite {
       SpinalConfig().generateVerilog(MatmulTest_GEMM_Parallel(dt()))
       SpinalConfig().generateVerilog(MatmulTest_GEMM_Sequential(dt()))
       SpinalConfig().generateVerilog(MatmulTest_DynamicPadding(dt()))
+      SpinalConfig().generateVerilog(MatmulTest_Batched(dt()))
     }
   }
 }
