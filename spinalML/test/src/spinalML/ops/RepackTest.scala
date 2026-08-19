@@ -5,14 +5,14 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.I8
+import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing repack: converting lanes=2 to lanes=4
-case class RepackTestComp() extends Component {
+case class RepackTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(I8(), Seq(4), lanes = 2))
-    val c = master(Tensor(I8(), Seq(4), lanes = 4))
+    val a = slave(Tensor(dataType, Seq(4), lanes = 2))
+    val c = master(Tensor(dataType, Seq(4), lanes = 4))
   }
   
   // Use repack to reshape from 2 lanes to 4 lanes
@@ -21,7 +21,7 @@ case class RepackTestComp() extends Component {
 
 class RepackTest extends AnyFunSuite {
   test("Test streaming repack operation (Gearbox) from 2 lanes to 4 lanes") {
-    SimConfig.withWave.compile(RepackTestComp()).doSim { dut =>
+    SimConfig.withWave.compile(RepackTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
       // Initialize Stream signals
@@ -55,6 +55,19 @@ class RepackTest extends AnyFunSuite {
       
       dut.io.a.stream.valid #= false
       dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Repack compilation on $name") {
+      SpinalConfig().generateVerilog(RepackTestComp(dt()))
     }
   }
 }

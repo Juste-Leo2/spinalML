@@ -27,7 +27,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `MatMul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Matrix multiplication of 2D tensors. *(Requires BRAM)* |
-| `Dot` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Dot product of two 1D vectors. |
+| `Dot` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Dot product of two 1D vectors (wrapper over `matmul`). |
 
 ## Tensor Manipulations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
@@ -39,7 +39,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Flatten` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Flatten a multi-dimensional tensor into a 1D tensor. |
 | `Seq2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 1D sequence into sliding windows. |
 | `Im2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 2D image into sliding windows. *(Requires BRAM)* |
-| `Repack` | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | Hardware gearbox to alter the number of lanes (e.g., from 1 to 4 lanes). |
+| `Repack` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Hardware gearbox to alter the number of lanes (e.g., from 1 to 4 lanes). |
 
 ## Neural Network Layers
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |

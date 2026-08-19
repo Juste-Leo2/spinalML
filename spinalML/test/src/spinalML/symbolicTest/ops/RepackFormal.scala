@@ -7,7 +7,7 @@ import spinalML.dtypes.I8
 import spinalML.ops.RepackTestComp
 
 class RepackFormal extends Component {
-  val dut = FormalDut(new RepackTestComp())
+  val dut = FormalDut(new RepackTestComp(I8()))
 
   val goldenInput = Vec.fill(4)(I8())
   anyconst(goldenInput)
