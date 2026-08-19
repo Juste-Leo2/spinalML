@@ -5,13 +5,13 @@ import spinal.core.sim._
 import spinal.lib._
 import spinal.lib.sim._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{BF16, FloatML}
+import spinalML.dtypes.{BF16, FloatML, I8, I16, I32}
 import spinalML.dtypes.BF16Sim
 import org.scalatest.funsuite.AnyFunSuite
 
-case class CastTestComp() extends Component {
+case class CastTestComp[TIn <: Data](dataTypeIn: HardType[TIn]) extends Component {
   val io = new Bundle {
-    val a = slave(Tensor(SInt(8 bits), Seq(4), lanes = 4))
+    val a = slave(Tensor(dataTypeIn, Seq(4), lanes = 4))
     val c = master(Tensor(BF16(), Seq(4), lanes = 4))
   }
   
@@ -21,7 +21,7 @@ case class CastTestComp() extends Component {
 
 class CastTest extends AnyFunSuite {
   test("Test streaming Cast operation SInt -> BF16") {
-    SimConfig.withWave.compile(CastTestComp()).doSim { dut =>
+    SimConfig.withWave.compile(CastTestComp(I8())).doSim { dut =>
       
       dut.clockDomain.forkStimulus(period = 10)
       
@@ -80,6 +80,18 @@ class CastTest extends AnyFunSuite {
       // Wait for all outputs to be checked
       dut.clockDomain.waitSamplingWhere(outputIndex == numExpectedOutputs)
       dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("I16", () => I16()),
+    ("I32", () => I32())
+  )
+
+  for ((name, dt) <- compileTypes) {
+    test(s"Test Cast compilation on $name") {
+      SpinalConfig().generateVerilog(CastTestComp(dt()))
     }
   }
 }

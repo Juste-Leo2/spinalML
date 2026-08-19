@@ -12,7 +12,9 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | **Sub** | `sub(a, b)` | Element-wise subtraction. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Mul** | `mul(a, b)` | Element-wise multiplication. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Div** | `div(a, b)` | Element-wise division. | `a, b: Tensor[T]` | `Tensor[T]` |
-| **Cast** | `cast(a, dt)` | Casts tensor to a new datatype. | `a: Tensor[T], dt: HardType[U]` | `Tensor[U]` |
+| **BiasAdd** | `bias_add(a, b)` | Broadcast add of a bias vector over the last dimension (columns). | `a, b: Tensor[T]` | `Tensor[T]` |
+| **Cast** | `cast(a, dt)` | Casts tensor to a new datatype (SInt -> FloatML, only this direction). | `a: Tensor[T], dt: HardType[U]` | `Tensor[U]` |
+| **Requantize** | `requantize(a, dt, shift)` | Shift + saturate to a smaller SInt type (e.g. I32 -> I8). | `a: Tensor[T], dt: HardType[U], shift: Int` | `Tensor[U]` |
 | **Abs** | `abs(a)` | Absolute value. | `a: Tensor[T]` | `Tensor[T]` |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b`. | `x, a, b: Tensor[T]` | `Tensor[T]` |
 
@@ -31,7 +33,6 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | :--- | :--- | :--- | :--- | :--- |
 | **MatMul** | `matmul(a, b)` | Matrix multiplication. Uses BRAM for `b` (weights). | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Dot** | `dot(a, b)` | Dot product of two 1D vectors (wraps `matmul` M=1, N=1). Length must be a multiple of `lanes`. | `a, b: Tensor[T]` | `Tensor[T]` |
-| **BiasAdd** | `bias_add(a, b)` | Broadcast addition for biases across columns. | `a, b: Tensor[T]` | `Tensor[T]` |
 
 ## 4. Tensor Manipulations
 

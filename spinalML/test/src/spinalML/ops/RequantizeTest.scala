@@ -73,4 +73,8 @@ class RequantizeTest extends AnyFunSuite {
       dut.clockDomain.waitSampling(5)
     }
   }
+
+  test("Test Requantize compilation on I32_I8_shift2") {
+    SpinalConfig().generateVerilog(RequantizeTestComp(shift = 2))
+  }
 }

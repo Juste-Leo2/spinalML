@@ -801,3 +801,60 @@ def layernorm_hw(X, gamma, beta, dtype):
             
         Y.append(y_row)
     return Y
+
+
+def requantize_hw(x, in_bits, out_bits, shift):
+    """Golden model of RequantizeOp: arithmetic shift right then saturation clamp."""
+    shifted = x >> shift
+    max_val = (1 << (out_bits - 1)) - 1
+    min_val = -(1 << (out_bits - 1))
+    return max(min_val, min(max_val, shifted))
+
+
+def cast_hw(x, in_bits, out_dtype):
+    """Golden model of CastOp (SInt -> FloatML), bit-exact with Float.fromSInt.
+    Replicates the LZD normalization and truncated mantissa rounding."""
+    exp_bits = out_dtype.exp_bits
+    mant_bits = out_dtype.mant_bits
+    bias = (1 << (exp_bits - 1)) - 1
+
+    if x == 0:
+        return 0
+
+    sign = 1 if x < 0 else 0
+    absv = abs(x)
+
+    lz = in_bits - absv.bit_length()          # leading zeros (bit_length = 1-based pos of MSB)
+    exp_val = bias + (in_bits - 1 - lz)       # bias + floor(log2(absv))
+
+    width = max(in_bits, mant_bits + 1)
+    aligned = absv << (lz + (width - in_bits))  # MSB (leading 1) now at bit width-1
+
+    if exp_val >= ((1 << exp_bits) - 1):
+        exp_out = (1 << exp_bits) - 1
+        mant_out = 0
+    else:
+        exp_out = exp_val
+        mant_out = (aligned >> (width - 1 - mant_bits)) & ((1 << mant_bits) - 1)
+
+    return (sign << (exp_bits + mant_bits)) | (exp_out << mant_bits) | mant_out
+
+
+def bias_add_hw(a_elements, bias, dtype):
+    """Golden model of BiasAddOp: broadcast add of a bias vector (lanes=1 input)
+    over A. A is a flat row-major list of elements; col(i) = i % len(bias)."""
+    is_floatml = hasattr(dtype, 'exp_bits')
+    n = len(bias)
+
+    def add(a, b):
+        if is_floatml:
+            return floatml_add(a, b, dtype)
+        def sign_extend_val(val, bits):
+            if val >= (1 << (bits - 1)):
+                val -= (1 << bits)
+            return val
+        va = sign_extend_val(dtype.from_float(a), dtype.bit_width)
+        vb = sign_extend_val(dtype.from_float(b), dtype.bit_width)
+        return dtype.to_float((va + vb) & ((1 << dtype.bit_width) - 1))
+
+    return [add(v, bias[i % n]) for i, v in enumerate(a_elements)]

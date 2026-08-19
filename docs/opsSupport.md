@@ -15,6 +15,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
 | `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
+| `BiasAdd` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Broadcast add of a bias vector over the last dimension (columns). |
 | `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
 | `Log` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Element-wise natural logarithm. |
 | `Abs` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise absolute value. |
@@ -40,6 +41,12 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Seq2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 1D sequence into sliding windows. |
 | `Im2Col` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Convert a 2D image into sliding windows. *(Requires BRAM)* |
 | `Repack` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Hardware gearbox to alter the number of lanes (e.g., from 1 to 4 lanes). |
+
+## Data Conversion
+| Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| `Cast` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | SInt -> FloatML conversion (any SInt width, any float format). Only one direction for now; UInt not supported yet. |
+| `Requantize` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | Shift + saturate larger SInt (e.g. I32) to smaller SInt (I8/I16). SInt -> SInt only; no float, no UInt. |
 
 ## Neural Network Layers
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |

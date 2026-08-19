@@ -5,15 +5,25 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I4, I16, FP4_E2M1, BF16}
+import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component
+// Wrapper component (lanes = 1, scalar bias)
 case class BiasAddTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 1), lanes = 1))
     val b = slave(Tensor(dataType, Seq(1, 1), lanes = 1))
     val c = master(Tensor(dataType, Seq(4, 1), lanes = 1))
+  }
+  io.c <> bias_add(io.a, io.b)
+}
+
+// Wrapper component (lanes = 2, 2-column bias broadcast)
+case class BiasAddTestComp2[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 2), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(1, 2), lanes = 1))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 2))
   }
   io.c <> bias_add(io.a, io.b)
 }
@@ -54,15 +64,17 @@ class BiasAddTest extends AnyFunSuite {
     }
   }
 
-  test("Test BiasAdd compilation on I16") {
-    SpinalConfig().generateVerilog(BiasAddTestComp(I16()))
-  }
+  val compileTypes = Seq(
+    ("I8", () => I8()),
+    ("FP8", () => FP8_E4M3()),
+    ("I16", () => I16()),
+    ("BF16", () => BF16())
+  )
 
-  test("Test BiasAdd compilation on FP4") {
-    SpinalConfig().generateVerilog(BiasAddTestComp(FP4_E2M1()))
-  }
-
-  test("Test BiasAdd compilation on BF16") {
-    SpinalConfig().generateVerilog(BiasAddTestComp(BF16()))
+  for ((name, dt) <- compileTypes) {
+    test(s"Test BiasAdd compilation on $name") {
+      SpinalConfig().generateVerilog(BiasAddTestComp(dt()))
+      SpinalConfig().generateVerilog(BiasAddTestComp2(dt()))
+    }
   }
 }
