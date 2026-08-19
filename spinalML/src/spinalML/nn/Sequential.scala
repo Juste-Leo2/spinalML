@@ -9,6 +9,7 @@ import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => Linear
 import spinalML.ops.{reshape, repack, flatten}
 import spinalML.activations.{relu, leaky_relu}
 import spinalML.poolings.{maxpool1d, avgpool1d}
+import spinalML.attention._
 
 case class Sequential(
   globalDataType: HardType[Data],
@@ -110,6 +111,7 @@ case class Sequential(
         case l: Linear => l.inFeatures
         case bn: BatchNorm1D => bn.features
         case ln: LayerNorm1D => ln.features
+        case a: ClassicalAttention => a.embedDim
         case _ => 1
       }
       
@@ -236,6 +238,30 @@ case class Sequential(
         
       case rp: Repack =>
         repack(currentTensor, rp.newLanes)
+        
+      case a: ClassicalAttention =>
+        val seqLen = currentTensor.shape(0)
+        val comp = ClassicalAttentionHW(currentType, lType, seqLen, a.embedDim, a.numHeads, currentTensor.lanes, layerWeights.lanes)
+        comp.io.x <> currentTensor
+        
+        // Fork and slice the weights stream into 4 parts
+        val wForks = StreamFork(layerWeights.stream, 4)
+        
+        val w0 = Tensor(layerWeights.dataType, layerWeights.shape, layerWeights.lanes)
+        val w1 = Tensor(layerWeights.dataType, layerWeights.shape, layerWeights.lanes)
+        val w2 = Tensor(layerWeights.dataType, layerWeights.shape, layerWeights.lanes)
+        val w3 = Tensor(layerWeights.dataType, layerWeights.shape, layerWeights.lanes)
+        w0.stream << wForks(0)
+        w1.stream << wForks(1)
+        w2.stream << wForks(2)
+        w3.stream << wForks(3)
+        
+        comp.io.wq <> spinalML.ops.slice(w0, 0, a.embedDim, axis = 0)
+        comp.io.wk <> spinalML.ops.slice(w1, a.embedDim, 2 * a.embedDim, axis = 0)
+        comp.io.wv <> spinalML.ops.slice(w2, 2 * a.embedDim, 3 * a.embedDim, axis = 0)
+        comp.io.wo <> spinalML.ops.slice(w3, 3 * a.embedDim, 4 * a.embedDim, axis = 0)
+        
+        comp.io.y
     }
     
     // Update state for next layer

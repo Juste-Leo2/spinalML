@@ -653,7 +653,7 @@ def matmul_hw(A, B, dtype):
                     prod = a_val * b_val
                     if hasattr(dtype, 'bit_width'):
                         acc_bit_width = 32
-                        val_bits = prod
+                        val_bits = int(prod)
                         if val_bits < 0:
                             val_bits = (1 << acc_bit_width) + val_bits
                         val_bits = val_bits & ((1 << acc_bit_width) - 1)
@@ -981,3 +981,25 @@ def bias_add_hw(a_elements, bias, dtype):
         return dtype.to_float((va + vb) & ((1 << dtype.bit_width) - 1))
 
     return [add(v, bias[i % n]) for i, v in enumerate(a_elements)]
+
+def classical_attention_hw(X, Wq, Wk, Wv, Wo, dtype):
+    """Golden model for Classical Attention."""
+    Q = matmul_hw(X, Wq, dtype)
+    K = matmul_hw(X, Wk, dtype)
+    V = matmul_hw(X, Wv, dtype)
+    
+    # K_T
+    K_T = np.array(K).T.tolist()
+    
+    Scores = matmul_hw(Q, K_T, dtype)
+    
+    # Softmax over rows
+    Probs = []
+    for row in Scores:
+        p = softmax(np.array(row), dtype)
+        Probs.append(p.tolist() if isinstance(p, np.ndarray) else p)
+        
+    Context = matmul_hw(Probs, V, dtype)
+    
+    Y = matmul_hw(Context, Wo, dtype)
+    return Y
