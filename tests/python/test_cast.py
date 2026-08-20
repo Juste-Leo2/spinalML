@@ -6,7 +6,9 @@ import random
 
 from golden_models.dtypes import BF16, I8, I16, I32
 from golden_models.ops import cast_hw
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random
+
+seed_random()
 
 
 async def run_cast_test(dut, op_name, dtype_name, in_dtype, lanes=4):

@@ -6,7 +6,9 @@ import random
 
 from golden_models.dtypes import I32
 from golden_models.ops import requantize_hw
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random
+
+seed_random()
 
 
 def to_signed(bits, width):

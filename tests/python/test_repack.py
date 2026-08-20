@@ -7,7 +7,9 @@ import os
 import random
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random
+
+seed_random()
 
 async def run_repack_test(dut, op_name, dtype_name, dtype, num_transfers_in, in_lanes, out_lanes, is_floatml):
     clock = Clock(dut.clk, 10, units="ns")

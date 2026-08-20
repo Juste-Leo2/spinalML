@@ -60,3 +60,25 @@ pytest tests/python/test_rsqrt.py -s
 3. Verilator compiles the `.v` file into C++.
 4. Cocotb injects the test stimuli (e.g., $1.0, 4.0, 10.0$) bit by bit into the module ports via the simulator.
 5. Cocotb reads the calculated hardware result and asserts it against the Python Golden Model (`ops.py`).
+
+### Debugging Math: `--debug-math`
+
+To inspect how close hardware results are to the golden models (even when not bit-exact, e.g., for floating-point types like `FP8`/`BF16`), run with:
+
+```bash
+pytest tests/python/test_matmul.py -s --debug-math
+```
+
+Each op x dtype then logs a single aggregated metrics line, for example:
+
+```
+[MatmulBatched][BF16] Test | MAE: 0.0151 | MAPE: 1.20% | NMSE: 0.001 | Cosine: 0.999 (2x1x2 @ 2x1, lanes=2, trials=3, seed=42)
+```
+
+- **MAE** (absolute mean error, on dequantized values) and **MAPE** (floats, true != 0) or **MAE %FS** (integers, relative to full scale `2^(bits-1)-1`)
+- **NMSE** = `MSE / Var(true)` and **Cosine** similarity over flattened vectors
+- For softmax-like outputs (e.g., attention) the true values are tiny, so MAPE/NMSE/Cosine can look extreme even when the absolute error is small — trust MAE / MAE %FS there
+- The `(...)` suffix gives the tested geometry and the random seed; `trials` is the number of random draws (3 for random inputs, 1 for fixed values)
+- All lines are aggregated into a single file: `tests/true_math_errors.log` (truncated at start of each run, only written when `--debug-math` is passed)
+
+Random inputs are reproducible: the seed defaults to `42` and can be overridden via the `SPINALML_SEED` environment variable.

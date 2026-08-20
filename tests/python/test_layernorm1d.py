@@ -9,10 +9,12 @@ import numpy as np
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
 from golden_models.ops import layernorm_hw
-from utils.tb_utils import run_mill, copy_roms
-from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error
+from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, DEFAULT_NUM_TRIALS
 
-async def run_layernorm1d_test(dut, op_name, dtype_name, dtype, X, gamma, beta, is_floatml):
+seed_random()
+
+async def run_layernorm1d_test(dut, op_name, dtype_name, dtype, X, gamma, beta, is_floatml, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
     dut.reset.value = 1
@@ -53,8 +55,12 @@ async def run_layernorm1d_test(dut, op_name, dtype_name, dtype, X, gamma, beta, 
             y_r.append(((row[i] - mean) * inv_std * gamma[i][0]) + beta[i][0])
         Y_true.append(y_r)
     
-    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
-    dut._log.info(log_msg)
+    if collect is not None:
+        collect["out"].append(Y_out)
+        collect["true"].append(Y_true)
+    else:
+        log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+        dut._log.info(log_msg)
     
     # Exact HW Math
     Y_expected = layernorm_hw(X, gamma, beta, dtype)
@@ -83,23 +89,43 @@ def prepare_ln_data(channels, seqLen, max_val, is_integer):
 # ----------------- COCOTB TESTS -----------------
 @cocotb.test()
 async def cocotb_layernorm1d_i8(dut):
-    X, gamma, beta = prepare_ln_data(4, 16, 5.0, True)
-    await run_layernorm1d_test(dut, "LayerNorm1D", "I8", I8, X, gamma, beta, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X, gamma, beta = prepare_ln_data(4, 16, 5.0, True)
+        await run_layernorm1d_test(dut, "LayerNorm1D", "I8", I8, X, gamma, beta, False, collect=collect)
+    details = f"ch=4, seq=16, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LayerNorm1D", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_layernorm1d_fp8(dut):
-    X, gamma, beta = prepare_ln_data(4, 16, 2.0, False)
-    await run_layernorm1d_test(dut, "LayerNorm1D", "FP8", FP8_E4M3, X, gamma, beta, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X, gamma, beta = prepare_ln_data(4, 16, 2.0, False)
+        await run_layernorm1d_test(dut, "LayerNorm1D", "FP8", FP8_E4M3, X, gamma, beta, True, collect=collect)
+    details = f"ch=4, seq=16, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LayerNorm1D", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_layernorm1d_i16(dut):
-    X, gamma, beta = prepare_ln_data(4, 16, 50.0, True)
-    await run_layernorm1d_test(dut, "LayerNorm1D", "I16", I16, X, gamma, beta, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X, gamma, beta = prepare_ln_data(4, 16, 50.0, True)
+        await run_layernorm1d_test(dut, "LayerNorm1D", "I16", I16, X, gamma, beta, False, collect=collect)
+    details = f"ch=4, seq=16, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LayerNorm1D", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_layernorm1d_bf16(dut):
-    X, gamma, beta = prepare_ln_data(4, 16, 5.0, False)
-    await run_layernorm1d_test(dut, "LayerNorm1D", "BF16", BF16, X, gamma, beta, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X, gamma, beta = prepare_ln_data(4, 16, 5.0, False)
+        await run_layernorm1d_test(dut, "LayerNorm1D", "BF16", BF16, X, gamma, beta, True, collect=collect)
+    details = f"ch=4, seq=16, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LayerNorm1D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 
 # ----------------- PYTEST RUNNERS -----------------

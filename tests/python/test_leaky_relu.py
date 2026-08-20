@@ -9,10 +9,12 @@ import numpy as np
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
 from golden_models.ops import leaky_relu_hw
-from utils.tb_utils import run_mill, copy_roms
-from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error
+from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, DEFAULT_NUM_TRIALS
 
-async def run_leaky_relu_test(dut, op_name, dtype_name, dtype, X, shift, is_floatml):
+seed_random()
+
+async def run_leaky_relu_test(dut, op_name, dtype_name, dtype, X, shift, is_floatml, collect=None):
     # Combinatorial circuit, no clk/reset needed
     dut.io_x_stream_valid.value = 0
     dut.io_y_stream_ready.value = 1
@@ -92,8 +94,12 @@ async def run_leaky_relu_test(dut, op_name, dtype_name, dtype, X, shift, is_floa
                     Y_true.append([float(x_int >> shift)])
 
     
-    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
-    dut._log.info(log_msg)
+    if collect is not None:
+        collect["out"].append(Y_out)
+        collect["true"].append(Y_true)
+    else:
+        log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+        dut._log.info(log_msg)
     
     # Exact HW Math
     Y_expected = leaky_relu_hw(X, shift, dtype)
@@ -114,23 +120,43 @@ async def run_leaky_relu_test(dut, op_name, dtype_name, dtype, X, shift, is_floa
 # ----------------- COCOTB TESTS -----------------
 @cocotb.test()
 async def cocotb_leaky_relu_i8(dut):
-    X = get_random_tensor((4, 1), 10.0, True)
-    await run_leaky_relu_test(dut, "LeakyReLU", "I8", I8, X, 1, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 1), 10.0, True)
+        await run_leaky_relu_test(dut, "LeakyReLU", "I8", I8, X, 1, False, collect=collect)
+    details = f"N=4, shift=1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LeakyReLU", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_leaky_relu_fp8(dut):
-    X = get_random_tensor((4, 1), 5.0, False)
-    await run_leaky_relu_test(dut, "LeakyReLU", "FP8", FP8_E4M3, X, 1, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 1), 5.0, False)
+        await run_leaky_relu_test(dut, "LeakyReLU", "FP8", FP8_E4M3, X, 1, True, collect=collect)
+    details = f"N=4, shift=1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LeakyReLU", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_leaky_relu_i16(dut):
-    X = get_random_tensor((4, 1), 100.0, True)
-    await run_leaky_relu_test(dut, "LeakyReLU", "I16", I16, X, 1, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 1), 100.0, True)
+        await run_leaky_relu_test(dut, "LeakyReLU", "I16", I16, X, 1, False, collect=collect)
+    details = f"N=4, shift=1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LeakyReLU", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_leaky_relu_bf16(dut):
-    X = get_random_tensor((4, 1), 10.0, False)
-    await run_leaky_relu_test(dut, "LeakyReLU", "BF16", BF16, X, 1, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 1), 10.0, False)
+        await run_leaky_relu_test(dut, "LeakyReLU", "BF16", BF16, X, 1, True, collect=collect)
+    details = f"N=4, shift=1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("LeakyReLU", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 
 # ----------------- PYTEST RUNNERS -----------------

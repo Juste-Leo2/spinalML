@@ -7,7 +7,10 @@ import os
 import random
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
+from utils.math_metrics import compute_metrics, format_metrics_line, log_math_line
+
+seed_random()
 
 async def run_cumsum_test(dut, op_name, dtype_name, dtype, test_sequence, is_floatml):
     clock = Clock(dut.clk, 10, units="ns")
@@ -76,7 +79,7 @@ async def run_cumsum_test(dut, op_name, dtype_name, dtype, test_sequence, is_flo
     
     current_sum_val = [0.0, 0.0]
     
-    errors = []
+    results = []
     
     for i, row in enumerate(test_sequence):
         for l in range(2):
@@ -97,26 +100,15 @@ async def run_cumsum_test(dut, op_name, dtype_name, dtype, test_sequence, is_flo
                 
             out_val = out_rows[i][l]
             true_expected = current_sum_val[l]
+            results.append((out_val, true_expected))
             
-            if is_floatml:
-                if true_expected != 0:
-                    err = abs((out_val - true_expected) / true_expected) * 100
-                else:
-                    err = abs(out_val) * 100
-                errors.append(err)
-            else:
-                fs_val = (1 << (dtype.bit_width - 1)) - 1
-                err = abs(out_val - true_expected) / fs_val * 100
-                errors.append(err)
-                
             if not is_floatml:
                 assert int(out_val) == int(true_expected), f"Mismatch at row {i} lane {l}: got {out_val} exp {true_expected}"
 
-    avg_err = sum(errors) / len(errors) if errors else 0.0
-    error_str = f"{avg_err:.2f}%" if is_floatml else f"{avg_err:.2f}% FS"
-    
-    log_msg = f"[{op_name}][{dtype_name}] Test L={len(test_sequence)}x2 | Avg Error: {error_str}"
+    details = f"L={len(test_sequence)}x2, trials=1, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
     dut._log.info(log_msg)
+    log_math_line(log_msg)
 
 @cocotb.test()
 async def cocotb_cumsum_i8(dut):

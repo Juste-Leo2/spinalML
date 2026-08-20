@@ -3,12 +3,16 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 import numpy as np
 import pytest
+import os
 
 from golden_models.dtypes import FP8_E4M3, I8, I16, BF16
 from golden_models.ops import classical_attention_hw
-from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim, DEFAULT_NUM_TRIALS
+from utils.tb_utils import seed_random, SEED
 
-async def run_attention_test(dut, op_name, dtype_name, dtype, X, Wq, Wk, Wv, Wo, is_floatml, seqLen, embedDim, xLanes, wLanes):
+seed_random()
+
+async def run_attention_test(dut, op_name, dtype_name, dtype, X, Wq, Wk, Wv, Wo, is_floatml, seqLen, embedDim, xLanes, wLanes, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
     dut.reset.value = 1
@@ -43,8 +47,12 @@ async def run_attention_test(dut, op_name, dtype_name, dtype, X, Wq, Wk, Wv, Wo,
     # Hardware exact math
     Y_expected = classical_attention_hw(X, Wq, Wk, Wv, Wo, dtype)
     
-    log_msg = log_true_math_error("ClassicalAttention", dtype_name, dtype, is_floatml, Y_out, Y_expected)
-    print(log_msg)
+    if collect is not None:
+        collect["out"].append(Y_out)
+        collect["true"].append(Y_expected)
+    else:
+        log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, collect["out"] if collect else Y_out, collect["true"] if collect else Y_expected)
+        dut._log.info(log_msg)
     
     # We allow a relaxed margin for Softmax PWL approximations
     for m in range(seqLen):
@@ -72,13 +80,18 @@ async def cocotb_attention_fp8(dut):
     wLanes = 2
     
     # Attention requires scale to not explode the Exp LUT. We use very small random weights.
-    X = get_random_tensor((seqLen, embedDim), 1.0, False)
-    Wq = get_random_tensor((embedDim, embedDim), 0.5, False)
-    Wk = get_random_tensor((embedDim, embedDim), 0.5, False)
-    Wv = get_random_tensor((embedDim, embedDim), 0.5, False)
-    Wo = get_random_tensor((embedDim, embedDim), 0.5, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((seqLen, embedDim), 1.0, False)
+        Wq = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wk = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wv = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wo = get_random_tensor((embedDim, embedDim), 0.5, False)
+        await run_attention_test(dut, "ClassicalAttention", "FP8", FP8_E4M3, X, Wq, Wk, Wv, Wo, True, seqLen, embedDim, xLanes, wLanes, collect=collect)
     
-    await run_attention_test(dut, "ClassicalAttention", "FP8", FP8_E4M3, X, Wq, Wk, Wv, Wo, True, seqLen, embedDim, xLanes, wLanes)
+    details = f"seq={seqLen}, emb={embedDim}, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("ClassicalAttention", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def test_pytest_attention_fp8(request): run_layer_sim("ClassicalAttention", "FP8", "cocotb_attention_fp8", "AttentionTestComp", request)
 
@@ -89,13 +102,18 @@ async def cocotb_attention_i8(dut):
     xLanes = 2
     wLanes = 2
     
-    X = get_random_tensor((seqLen, embedDim), 1.0, True)
-    Wq = get_random_tensor((embedDim, embedDim), 1.0, True)
-    Wk = get_random_tensor((embedDim, embedDim), 1.0, True)
-    Wv = get_random_tensor((embedDim, embedDim), 1.0, True)
-    Wo = get_random_tensor((embedDim, embedDim), 1.0, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((seqLen, embedDim), 1.0, True)
+        Wq = get_random_tensor((embedDim, embedDim), 1.0, True)
+        Wk = get_random_tensor((embedDim, embedDim), 1.0, True)
+        Wv = get_random_tensor((embedDim, embedDim), 1.0, True)
+        Wo = get_random_tensor((embedDim, embedDim), 1.0, True)
+        await run_attention_test(dut, "ClassicalAttention", "I8", I8, X, Wq, Wk, Wv, Wo, False, seqLen, embedDim, xLanes, wLanes, collect=collect)
     
-    await run_attention_test(dut, "ClassicalAttention", "I8", I8, X, Wq, Wk, Wv, Wo, False, seqLen, embedDim, xLanes, wLanes)
+    details = f"seq={seqLen}, emb={embedDim}, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("ClassicalAttention", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def test_pytest_attention_i8(request): run_layer_sim("ClassicalAttention", "I8", "cocotb_attention_i8", "AttentionTestComp", request)
 
@@ -106,13 +124,18 @@ async def cocotb_attention_i16(dut):
     xLanes = 2
     wLanes = 2
     
-    X = get_random_tensor((seqLen, embedDim), 3.0, True)
-    Wq = get_random_tensor((embedDim, embedDim), 3.0, True)
-    Wk = get_random_tensor((embedDim, embedDim), 3.0, True)
-    Wv = get_random_tensor((embedDim, embedDim), 3.0, True)
-    Wo = get_random_tensor((embedDim, embedDim), 3.0, True)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((seqLen, embedDim), 3.0, True)
+        Wq = get_random_tensor((embedDim, embedDim), 3.0, True)
+        Wk = get_random_tensor((embedDim, embedDim), 3.0, True)
+        Wv = get_random_tensor((embedDim, embedDim), 3.0, True)
+        Wo = get_random_tensor((embedDim, embedDim), 3.0, True)
+        await run_attention_test(dut, "ClassicalAttention", "I16", I16, X, Wq, Wk, Wv, Wo, False, seqLen, embedDim, xLanes, wLanes, collect=collect)
     
-    await run_attention_test(dut, "ClassicalAttention", "I16", I16, X, Wq, Wk, Wv, Wo, False, seqLen, embedDim, xLanes, wLanes)
+    details = f"seq={seqLen}, emb={embedDim}, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("ClassicalAttention", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def test_pytest_attention_i16(request): run_layer_sim("ClassicalAttention", "I16", "cocotb_attention_i16", "AttentionTestComp", request)
 
@@ -123,12 +146,17 @@ async def cocotb_attention_bf16(dut):
     xLanes = 2
     wLanes = 2
     
-    X = get_random_tensor((seqLen, embedDim), 1.0, False)
-    Wq = get_random_tensor((embedDim, embedDim), 1.0, False)
-    Wk = get_random_tensor((embedDim, embedDim), 1.0, False)
-    Wv = get_random_tensor((embedDim, embedDim), 1.0, False)
-    Wo = get_random_tensor((embedDim, embedDim), 1.0, False)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((seqLen, embedDim), 1.0, False)
+        Wq = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wk = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wv = get_random_tensor((embedDim, embedDim), 0.5, False)
+        Wo = get_random_tensor((embedDim, embedDim), 0.5, False)
+        await run_attention_test(dut, "ClassicalAttention", "BF16", BF16, X, Wq, Wk, Wv, Wo, True, seqLen, embedDim, xLanes, wLanes, collect=collect)
     
-    await run_attention_test(dut, "ClassicalAttention", "BF16", BF16, X, Wq, Wk, Wv, Wo, True, seqLen, embedDim, xLanes, wLanes)
+    details = f"seq={seqLen}, emb={embedDim}, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("ClassicalAttention", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def test_pytest_attention_bf16(request): run_layer_sim("ClassicalAttention", "BF16", "cocotb_attention_bf16", "AttentionTestComp", request)

@@ -1,10 +1,17 @@
 import os
 import glob
+import random
 import shutil
 import subprocess
 import pytest
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+SEED = 42
+
+def seed_random(seed=None):
+    """Seed the random module for reproducible tests (overridable via SPINALML_SEED)."""
+    random.seed(seed if seed is not None else int(os.environ.get("SPINALML_SEED", SEED)))
 
 def run_mill(test_class, dtype_filter, toplevel):
     os.makedirs(f"sim_build/{toplevel.lower()}", exist_ok=True)

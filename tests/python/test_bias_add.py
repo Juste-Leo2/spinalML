@@ -7,7 +7,9 @@ import random
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
 from golden_models.ops import bias_add_hw
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random
+
+seed_random()
 
 
 def to_signed(bits, width):

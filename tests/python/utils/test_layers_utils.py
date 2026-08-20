@@ -6,9 +6,21 @@ import os
 import random
 import numpy as np
 
-from utils.tb_utils import run_mill, copy_roms
+from utils.tb_utils import run_mill, copy_roms, seed_random
+from utils.math_metrics import compute_metrics, format_metrics_line, log_math_line
+
+DEFAULT_NUM_TRIALS = 3
+
+_seeded = False
+
+def _ensure_seeded():
+    global _seeded
+    if not _seeded:
+        seed_random()
+        _seeded = True
 
 def get_random_tensor(shape, range_val=5.0, integer=True):
+    _ensure_seeded()
     if len(shape) == 1:
         return [[round(random.uniform(-range_val, range_val)) if integer else random.uniform(-range_val, range_val)] for _ in range(shape[0])]
     elif len(shape) == 2:
@@ -16,34 +28,9 @@ def get_random_tensor(shape, range_val=5.0, integer=True):
     elif len(shape) == 3:
         return [[[round(random.uniform(-range_val, range_val)) if integer else random.uniform(-range_val, range_val) for _ in range(shape[2])] for _ in range(shape[1])] for _ in range(shape[0])]
 
-def log_true_math_error(op_name, dtype_name, dtype, is_floatml, C_out, C_true):
-    M = len(C_out)
-    N = len(C_out[0])
-    errors = []
-    for m in range(M):
-        for n in range(N):
-            out_val = C_out[m][n]
-            true_expected = float(C_true[m][n])
-            if is_floatml:
-                if true_expected != 0:
-                    err = abs((out_val - true_expected) / true_expected) * 100
-                else:
-                    err = abs(out_val) * 100
-                errors.append(err)
-            else:
-                fs_val = (1 << (dtype.bit_width - 1)) - 1
-                err = abs(out_val - true_expected) / fs_val * 100
-                errors.append(err)
-                
-    avg_err = sum(errors) / len(errors) if errors else 0.0
-    error_str = f"{avg_err:.2f}%" if is_floatml else f"{avg_err:.2f}% FS"
-    
-    log_msg = f"[{op_name}][{dtype_name}] Test | Avg Error: {error_str}"
-    
-    if os.environ.get("DEBUG_MATH") == "1":
-        log_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "true_math_errors.log")
-        with open(log_path, "a") as f:
-            f.write(log_msg + "\n")
+def log_true_math_error(op_name, dtype_name, dtype, is_floatml, C_out, C_true, details=""):
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics(C_out, C_true, is_floatml, dtype), is_floatml, details=details)
+    log_math_line(log_msg)
     return log_msg
 
 async def send_tensor(dut, signal_prefix, tensor, shape, lanes, dtype, is_floatml, wait_ready=True):
@@ -101,6 +88,9 @@ async def recv_tensor(dut, signal_prefix, shape, dtype, is_floatml, lanes=1):
                 bits = (out_sign << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
             else:
                 bits = int(getattr(dut, f"{signal_prefix}_payload_{l}").value)
+                bit_width = getattr(dtype, 'bit_width', 0)
+                if bit_width:
+                    bits &= (1 << bit_width) - 1
                 
             flattened_bits.append(bits)
             flattened_vals.append(dtype.to_float(bits))

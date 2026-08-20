@@ -3,10 +3,13 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 from cocotb_test.simulator import run
 import numpy as np
+import os
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
-from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error
-from utils.tb_utils import run_mill, copy_roms
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, DEFAULT_NUM_TRIALS
+from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
+
+seed_random()
 
 # AvgPool1D golden model
 def avgpool1d_hw(X, poolSize, stride, dtype):
@@ -38,7 +41,7 @@ def avgpool1d_hw(X, poolSize, stride, dtype):
         Y.append(y_row)
     return Y
 
-async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, stride, is_floatml):
+async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, stride, is_floatml, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
     dut.reset.value = 1
@@ -67,8 +70,12 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
         window = X_np[start:start+poolSize, :]
         Y_true.append(np.mean(window, axis=0).tolist())
         
-    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
-    dut._log.info(log_msg)
+    if collect is not None:
+        collect["out"].append(Y_out)
+        collect["true"].append(Y_true)
+    else:
+        log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+        dut._log.info(log_msg)
     
     # Exact HW Math
     Y_expected = avgpool1d_hw(X, poolSize, stride, dtype)
@@ -87,29 +94,49 @@ async def run_avgpool1d_test(dut, op_name, dtype_name, dtype, X, poolSize, strid
 
 @cocotb.test()
 async def cocotb_avgpool1d_i8(dut):
-    X = get_random_tensor((4, 2), 50.0, True)
+    collect = {"out": [], "true": []}
     setattr(I8, 'is_floatml', False)
     setattr(I8, 'signed', True)
-    await run_avgpool1d_test(dut, "AvgPool1D", "I8", I8, X, 2, 2, False)
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 2), 50.0, True)
+        await run_avgpool1d_test(dut, "AvgPool1D", "I8", I8, X, 2, 2, False, collect=collect)
+    details = f"L=4x2, pool=2, stride=2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("AvgPool1D", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_avgpool1d_fp8(dut):
-    X = get_random_tensor((4, 2), 5.0, False)
+    collect = {"out": [], "true": []}
     setattr(FP8_E4M3, 'is_floatml', True)
-    await run_avgpool1d_test(dut, "AvgPool1D", "FP8", FP8_E4M3, X, 2, 2, True)
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 2), 5.0, False)
+        await run_avgpool1d_test(dut, "AvgPool1D", "FP8", FP8_E4M3, X, 2, 2, True, collect=collect)
+    details = f"L=4x2, pool=2, stride=2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("AvgPool1D", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_avgpool1d_i16(dut):
-    X = get_random_tensor((4, 2), 500.0, True)
+    collect = {"out": [], "true": []}
     setattr(I16, 'is_floatml', False)
     setattr(I16, 'signed', True)
-    await run_avgpool1d_test(dut, "AvgPool1D", "I16", I16, X, 2, 2, False)
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 2), 500.0, True)
+        await run_avgpool1d_test(dut, "AvgPool1D", "I16", I16, X, 2, 2, False, collect=collect)
+    details = f"L=4x2, pool=2, stride=2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("AvgPool1D", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_avgpool1d_bf16(dut):
-    X = get_random_tensor((4, 2), 5.0, False)
+    collect = {"out": [], "true": []}
     setattr(BF16, 'is_floatml', True)
-    await run_avgpool1d_test(dut, "AvgPool1D", "BF16", BF16, X, 2, 2, True)
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((4, 2), 5.0, False)
+        await run_avgpool1d_test(dut, "AvgPool1D", "BF16", BF16, X, 2, 2, True, collect=collect)
+    details = f"L=4x2, pool=2, stride=2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("AvgPool1D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def run_pool_sim(layer_name, dtype_filter, testcase_name, toplevel, request=None):
     v_file = run_mill(f"spinalML.poolings.{layer_name}Test", dtype_filter, toplevel)

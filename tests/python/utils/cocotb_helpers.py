@@ -2,9 +2,9 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-import os
+from utils.math_metrics import compute_metrics, format_metrics_line, log_math_line
 
-async def run_unary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None):
+async def run_unary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None, details=""):
     """
     Generic Cocotb test method for Unary Operators (Rsqrt, Exp, etc).
     Performs bit-exact verification against expected_bits_fn (HW golden model).
@@ -18,6 +18,7 @@ async def run_unary_test(dut, op_name, dtype_name, dtype, test_values, is_floatm
     dut.reset.value = 0
     await RisingEdge(dut.clk)
     
+    results = []
     for val in test_values:
         val_bits = dtype.from_float(val)
         
@@ -63,30 +64,7 @@ async def run_unary_test(dut, op_name, dtype_name, dtype, test_values, is_floatm
             
         out_val = dtype.to_float(out_bits)
         
-        # True Math Error Logging
-        true_expected = true_math_fn(val)
-        if is_floatml:
-            if true_expected != 0:
-                error_val = abs((out_val - true_expected) / true_expected) * 100
-            else:
-                error_val = abs(out_val) * 100
-            error_str = f"{error_val:.2f}%"
-        else:
-            # Full Scale (FS) Error for Integers to avoid "choux vs carottes" massive percentages
-            # FS is the maximum positive value of the datatype
-            fs_val = (1 << (dtype.bit_width - 1)) - 1
-            error_val = abs(out_val - true_expected) / fs_val * 100
-            error_str = f"{error_val:.2f}% FS"
-            
-        edge_str = " (Edge Case)" if edge_cases and val in edge_cases else ""
-        log_msg = f"[{op_name}][{dtype_name}] Test x={val} | Error: {error_str}{edge_str} (HW: {out_val}, True Math: {true_expected})"
-        dut._log.info(log_msg)
-        
-        # Write to file only if DEBUG_MATH environment variable is set
-        if os.environ.get("DEBUG_MATH") == "1":
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "true_math_errors.log")
-            with open(log_path, "a") as f:
-                f.write(log_msg + "\n")
+        results.append((out_val, true_math_fn(val)))
         
         # HW Exact Assertion
         expected_bits = expected_bits_fn(val)
@@ -98,8 +76,16 @@ async def run_unary_test(dut, op_name, dtype_name, dtype, test_values, is_floatm
             assert abs(out_bits - expected_bits) <= 1, f"HW Mismatch for {val}: got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
         else:
             assert out_bits == expected_bits, f"HW Mismatch for {val}: got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
+    
+    if not details:
+        details = f"n={len(test_values)}"
+        if edge_cases:
+            details += f", edge={len(edge_cases)}"
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
+    dut._log.info(log_msg)
+    log_math_line(log_msg)
 
-async def run_binary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None):
+async def run_binary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None, details=""):
     """
     Generic Cocotb test method for Binary Operators (Add, Sub, Mul, Div).
     test_values is a list of tuples: [(a1, b1), (a2, b2), ...]
@@ -112,6 +98,7 @@ async def run_binary_test(dut, op_name, dtype_name, dtype, test_values, is_float
     dut.reset.value = 0
     await RisingEdge(dut.clk)
     
+    results = []
     for val_a, val_b in test_values:
         val_a_bits = dtype.from_float(val_a)
         val_b_bits = dtype.from_float(val_b)
@@ -172,27 +159,7 @@ async def run_binary_test(dut, op_name, dtype_name, dtype, test_values, is_float
             
         out_val = dtype.to_float(out_bits)
         
-        # True Math Error Logging
-        true_expected = true_math_fn(val_a, val_b)
-        if is_floatml:
-            if true_expected != 0:
-                error_val = abs((out_val - true_expected) / true_expected) * 100
-            else:
-                error_val = abs(out_val) * 100
-            error_str = f"{error_val:.2f}%"
-        else:
-            fs_val = (1 << (dtype.bit_width - 1)) - 1
-            error_val = abs(out_val - true_expected) / fs_val * 100
-            error_str = f"{error_val:.2f}% FS"
-            
-        edge_str = " (Edge Case)" if edge_cases and (val_a, val_b) in edge_cases else ""
-        log_msg = f"[{op_name}][{dtype_name}] Test A={val_a}, B={val_b} | Error: {error_str}{edge_str} (HW: {out_val}, True Math: {true_expected})"
-        dut._log.info(log_msg)
-        
-        if os.environ.get("DEBUG_MATH") == "1":
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "true_math_errors.log")
-            with open(log_path, "a") as f:
-                f.write(log_msg + "\n")
+        results.append((out_val, true_math_fn(val_a, val_b)))
         
         # HW Exact Assertion
         expected_bits = expected_bits_fn(val_a, val_b)
@@ -204,8 +171,16 @@ async def run_binary_test(dut, op_name, dtype_name, dtype, test_values, is_float
             assert abs(out_bits - expected_bits) <= 1, f"HW Mismatch for ({val_a}, {val_b}): got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
         else:
             assert out_bits == expected_bits, f"HW Mismatch for ({val_a}, {val_b}): got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
+    
+    if not details:
+        details = f"n={len(test_values)}"
+        if edge_cases:
+            details += f", edge={len(edge_cases)}"
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
+    dut._log.info(log_msg)
+    log_math_line(log_msg)
 
-async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None):
+async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None, details=""):
     """
     Generic Cocotb test method for Ternary Operators (ScaleAdd).
     test_values is a list of tuples: [(x1, a1, b1), (x2, a2, b2), ...]
@@ -218,6 +193,7 @@ async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floa
     dut.reset.value = 0
     await RisingEdge(dut.clk)
     
+    results = []
     for val_x, val_a, val_b in test_values:
         val_x_bits = dtype.from_float(val_x)
         val_a_bits = dtype.from_float(val_a)
@@ -276,27 +252,7 @@ async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floa
             
         out_val = dtype.to_float(out_bits)
         
-        # True Math Error Logging
-        true_expected = true_math_fn(val_x, val_a, val_b)
-        if is_floatml:
-            if true_expected != 0:
-                error_val = abs((out_val - true_expected) / true_expected) * 100
-            else:
-                error_val = abs(out_val) * 100
-            error_str = f"{error_val:.2f}%"
-        else:
-            fs_val = (1 << (dtype.bit_width - 1)) - 1
-            error_val = abs(out_val - true_expected) / fs_val * 100
-            error_str = f"{error_val:.2f}% FS"
-            
-        edge_str = " (Edge Case)" if edge_cases and (val_x, val_a, val_b) in edge_cases else ""
-        log_msg = f"[{op_name}][{dtype_name}] Test X={val_x}, A={val_a}, B={val_b} | Error: {error_str}{edge_str} (HW: {out_val}, True Math: {true_expected})"
-        dut._log.info(log_msg)
-        
-        if os.environ.get("DEBUG_MATH") == "1":
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "true_math_errors.log")
-            with open(log_path, "a") as f:
-                f.write(log_msg + "\n")
+        results.append((out_val, true_math_fn(val_x, val_a, val_b)))
         
         # HW Exact Assertion
         expected_bits = expected_bits_fn(val_x, val_a, val_b)
@@ -307,7 +263,15 @@ async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floa
             assert abs(out_bits - expected_bits) <= 1, f"HW Mismatch for ({val_x}, {val_a}, {val_b}): got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
         else:
             assert out_bits == expected_bits, f"HW Mismatch for ({val_x}, {val_a}, {val_b}): got {out_val} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
-async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None):
+    
+    if not details:
+        details = f"n={len(test_values)}"
+        if edge_cases:
+            details += f", edge={len(edge_cases)}"
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
+    dut._log.info(log_msg)
+    log_math_line(log_msg)
+async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None, details=""):
     """
     Generic Cocotb test method for Softmax1D (lanes=4).
     test_values is a list of 4-element tuples/lists: [(x0, x1, x2, x3), ...]
@@ -320,6 +284,7 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
     dut.reset.value = 0
     await RisingEdge(dut.clk)
     
+    results = []
     for val_arr in test_values:
         val_bits_arr = [dtype.from_float(v) for v in val_arr]
         
@@ -366,33 +331,8 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
             
         # True Math Error Logging
         true_expected_arr = true_math_fn(val_arr)
-        
-        errors = []
         for i in range(4):
-            out_val = out_val_arr[i]
-            true_expected = true_expected_arr[i]
-            if is_floatml:
-                if true_expected != 0:
-                    err = abs((out_val - true_expected) / true_expected) * 100
-                else:
-                    err = abs(out_val) * 100
-                errors.append(err)
-            else:
-                fs_val = (1 << (dtype.bit_width - 1)) - 1
-                err = abs(out_val - true_expected) / fs_val * 100
-                errors.append(err)
-        
-        avg_err = sum(errors) / len(errors)
-        error_str = f"{avg_err:.2f}%" if is_floatml else f"{avg_err:.2f}% FS"
-        
-        edge_str = " (Edge Case)" if edge_cases and val_arr in edge_cases else ""
-        log_msg = f"[{op_name}][{dtype_name}] Test X={val_arr} | Avg Error: {error_str}{edge_str} (HW: {out_val_arr}, True: {true_expected_arr})"
-        dut._log.info(log_msg)
-        
-        if os.environ.get("DEBUG_MATH") == "1":
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "true_math_errors.log")
-            with open(log_path, "a") as f:
-                f.write(log_msg + "\n")
+            results.append((out_val_arr[i], true_expected_arr[i]))
         
         # HW Exact Assertion
         expected_bits_arr = expected_bits_fn(val_arr)
@@ -406,4 +346,12 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
                 assert abs(out_bits - expected_bits) <= 1, f"HW Mismatch for {val_arr} at index {i}: got {out_val_arr[i]} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
             else:
                 assert out_bits == expected_bits, f"HW Mismatch for {val_arr} at index {i}: got {out_val_arr[i]} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
+    
+    if not details:
+        details = f"n={len(test_values) * 4}"
+        if edge_cases:
+            details += f", edge={len(edge_cases)}"
+    log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
+    dut._log.info(log_msg)
+    log_math_line(log_msg)
 

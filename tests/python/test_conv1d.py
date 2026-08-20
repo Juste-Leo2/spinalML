@@ -2,15 +2,19 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 import numpy as np
+import os
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16, I32
 from golden_models.ops import conv1d_hw
-from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim
+from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim, DEFAULT_NUM_TRIALS
+from utils.tb_utils import seed_random, SEED
+
+seed_random()
 
 # ==========================================
 # CONV1D LAYER
 # ==========================================
-async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, W_shape, W_lanes, X_shape, X_lanes, Y_shape, Y_lanes):
+async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, W_shape, W_lanes, X_shape, X_lanes, Y_shape, Y_lanes, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
     dut.reset.value = 1
@@ -44,7 +48,6 @@ async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, 
     Y_expected = conv1d_hw(X, W, b, dtype)
     
     # True Pure Math (for logging true error)
-    import numpy as np
     L_in = len(X)
     C_in = len(X[0]) if isinstance(X[0], list) else 1
     K = len(W) // C_in
@@ -60,11 +63,12 @@ async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, 
         res = np.dot(window, W_np) + b_np
         Y_true.append(res.tolist())
     
-    log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
-    dut._log.info(log_msg)
-    
-    # Exact HW Math
-    Y_expected = conv1d_hw(X, W, b, dtype)
+    if collect is not None:
+        collect["out"].append(Y_out)
+        collect["true"].append(Y_true)
+    else:
+        log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
+        dut._log.info(log_msg)
     
     bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
     for m in range(2):
@@ -81,64 +85,100 @@ async def run_conv1d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, 
 
 @cocotb.test()
 async def cocotb_conv1d_i8(dut):
-    X = get_random_tensor((3, 1), 10.0, True)
-    W = get_random_tensor((2, 1), 10.0, True)
-    b = get_random_tensor((1, 1), 10.0, True)
-    from golden_models.dtypes import I8
-    await run_conv1d_test(dut, "Conv1D", "I8", I8, X, W, b, False, (2, 1), 2, (3, 1), 1, (2, 1), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 1), 10.0, True)
+        W = get_random_tensor((2, 1), 10.0, True)
+        b = get_random_tensor((1, 1), 10.0, True)
+        await run_conv1d_test(dut, "Conv1D", "I8", I8, X, W, b, False, (2, 1), 2, (3, 1), 1, (2, 1), 1, collect=collect)
+    details = f"X=3x1, W=2x1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1D", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
     
 @cocotb.test()
 async def cocotb_conv1d_fp8(dut):
-    X = get_random_tensor((3, 1), 5.0, False)
-    W = get_random_tensor((2, 1), 5.0, False)
-    b = get_random_tensor((1, 1), 5.0, False)
-    from golden_models.dtypes import FP8_E4M3
-    await run_conv1d_test(dut, "Conv1D", "FP8", FP8_E4M3, X, W, b, True, (2, 1), 2, (3, 1), 1, (2, 1), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 1), 5.0, False)
+        W = get_random_tensor((2, 1), 5.0, False)
+        b = get_random_tensor((1, 1), 5.0, False)
+        await run_conv1d_test(dut, "Conv1D", "FP8", FP8_E4M3, X, W, b, True, (2, 1), 2, (3, 1), 1, (2, 1), 1, collect=collect)
+    details = f"X=3x1, W=2x1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1D", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_conv1d_i16(dut):
-    X = get_random_tensor((3, 1), 100.0, True)
-    W = get_random_tensor((2, 1), 10.0, True)
-    b = get_random_tensor((1, 1), 100.0, True)
-    await run_conv1d_test(dut, "Conv1D", "I16", I16, X, W, b, False, (2, 1), 2, (3, 1), 1, (2, 1), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 1), 100.0, True)
+        W = get_random_tensor((2, 1), 10.0, True)
+        b = get_random_tensor((1, 1), 100.0, True)
+        await run_conv1d_test(dut, "Conv1D", "I16", I16, X, W, b, False, (2, 1), 2, (3, 1), 1, (2, 1), 1, collect=collect)
+    details = f"X=3x1, W=2x1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1D", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_conv1d_bf16(dut):
-    X = get_random_tensor((3, 1), 10.0, False)
-    W = get_random_tensor((2, 1), 5.0, False)
-    b = get_random_tensor((1, 1), 5.0, False)
-    await run_conv1d_test(dut, "Conv1D", "BF16", BF16, X, W, b, True, (2, 1), 2, (3, 1), 1, (2, 1), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 1), 10.0, False)
+        W = get_random_tensor((2, 1), 5.0, False)
+        b = get_random_tensor((1, 1), 5.0, False)
+        await run_conv1d_test(dut, "Conv1D", "BF16", BF16, X, W, b, True, (2, 1), 2, (3, 1), 1, (2, 1), 1, collect=collect)
+    details = f"X=3x1, W=2x1, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 # Multi-channel tests
 @cocotb.test()
 async def cocotb_conv1dmulti_i8(dut):
-    X = get_random_tensor((3, 2), 10.0, True)
-    W = get_random_tensor((4, 2), 10.0, True) # K=2, C_in=2 -> flattened K*C_in=4
-    b = get_random_tensor((1, 2), 10.0, True)
-    from golden_models.dtypes import I8
-    await run_conv1d_test(dut, "Conv1DMulti", "I8", I8, X, W, b, False, (4, 2), 4, (3, 2), 1, (2, 2), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 2), 10.0, True)
+        W = get_random_tensor((4, 2), 10.0, True) # K=2, C_in=2 -> flattened K*C_in=4
+        b = get_random_tensor((1, 2), 10.0, True)
+        await run_conv1d_test(dut, "Conv1DMulti", "I8", I8, X, W, b, False, (4, 2), 4, (3, 2), 1, (2, 2), 1, collect=collect)
+    details = f"X=3x2, W=4x2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1DMulti", "I8", I8, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_conv1dmulti_fp8(dut):
-    X = get_random_tensor((3, 2), 5.0, False)
-    W = get_random_tensor((4, 2), 5.0, False)
-    b = get_random_tensor((1, 2), 5.0, False)
-    from golden_models.dtypes import FP8_E4M3
-    await run_conv1d_test(dut, "Conv1DMulti", "FP8", FP8_E4M3, X, W, b, True, (4, 2), 4, (3, 2), 1, (2, 2), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 2), 5.0, False)
+        W = get_random_tensor((4, 2), 5.0, False)
+        b = get_random_tensor((1, 2), 5.0, False)
+        await run_conv1d_test(dut, "Conv1DMulti", "FP8", FP8_E4M3, X, W, b, True, (4, 2), 4, (3, 2), 1, (2, 2), 1, collect=collect)
+    details = f"X=3x2, W=4x2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1DMulti", "FP8", FP8_E4M3, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_conv1dmulti_i16(dut):
-    X = get_random_tensor((3, 2), 100.0, True)
-    W = get_random_tensor((4, 2), 10.0, True)
-    b = get_random_tensor((1, 2), 100.0, True)
-    await run_conv1d_test(dut, "Conv1DMulti", "I16", I16, X, W, b, False, (4, 2), 4, (3, 2), 1, (2, 2), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 2), 100.0, True)
+        W = get_random_tensor((4, 2), 10.0, True)
+        b = get_random_tensor((1, 2), 100.0, True)
+        await run_conv1d_test(dut, "Conv1DMulti", "I16", I16, X, W, b, False, (4, 2), 4, (3, 2), 1, (2, 2), 1, collect=collect)
+    details = f"X=3x2, W=4x2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1DMulti", "I16", I16, False, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 @cocotb.test()
 async def cocotb_conv1dmulti_bf16(dut):
-    X = get_random_tensor((3, 2), 10.0, False)
-    W = get_random_tensor((4, 2), 5.0, False)
-    b = get_random_tensor((1, 2), 5.0, False)
-    await run_conv1d_test(dut, "Conv1DMulti", "BF16", BF16, X, W, b, True, (4, 2), 4, (3, 2), 1, (2, 2), 1)
+    collect = {"out": [], "true": []}
+    for _ in range(DEFAULT_NUM_TRIALS):
+        X = get_random_tensor((3, 2), 10.0, False)
+        W = get_random_tensor((4, 2), 5.0, False)
+        b = get_random_tensor((1, 2), 5.0, False)
+        await run_conv1d_test(dut, "Conv1DMulti", "BF16", BF16, X, W, b, True, (4, 2), 4, (3, 2), 1, (2, 2), 1, collect=collect)
+    details = f"X=3x2, W=4x2, trials={DEFAULT_NUM_TRIALS}, seed={int(os.environ.get('SPINALML_SEED', SEED))}"
+    log_msg = log_true_math_error("Conv1DMulti", "BF16", BF16, True, collect["out"], collect["true"], details=details)
+    dut._log.info(log_msg)
 
 def test_pytest_conv1d_i8(request): run_layer_sim("Conv1D", "I8", "cocotb_conv1d_i8", "Conv1DTestComp", request)
 def test_pytest_conv1d_fp8(request): run_layer_sim("Conv1D", "FP8", "cocotb_conv1d_fp8", "Conv1DTestComp", request)

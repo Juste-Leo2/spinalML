@@ -133,14 +133,14 @@ spinalML/
 │       └── test/               # SequentialTest, SequentialCNNTest, Comprehensive1DCNNTest
 └── tests/
     └── python/
-        ├── conftest.py         # pytest options (--debug-math -> true_math_errors.log)
+        ├── conftest.py         # pytest options (--debug-math -> tests/true_math_errors.log)
         ├── golden_models/      # NumPy bit-exact reference of the hardware
         │   ├── dtypes.py       # FloatML format in Python
         │   └── ops.py          # golden model of each HW operation
         ├── utils/              # cocotb testbench helpers
         │   ├── tb_utils.py         # runs Mill to generate Verilog into sim_build/, copies ROMs
+        │   ├── math_metrics.py     # metrics (MAPE/MAE %FS/NMSE/cosine) + true_math_errors.log writer
         │   ├── cocotb_helpers.py   # generic unary-op test runner (bit-exact checks)
-        │   ├── softmax_helper.py   # softmax (lanes=4) test runner
         │   └── test_layers_utils.py# layer-level test helpers
         └── test_*.py           # one per op/layer: test_add, test_mul, test_conv2d,
                                 #   test_softmax, test_dtypes, test_reshape_flatten, ...
