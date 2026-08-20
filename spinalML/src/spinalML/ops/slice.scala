@@ -16,18 +16,26 @@ case class SliceAxis0Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
   }
   
   val counter = Counter(L_in)
+  val startU = U(start, log2Up(L_in) bits)
   
   io.a.stream.ready := False
   io.c.stream.valid := False
   io.c.stream.payload := io.a.stream.payload
   
-  when(counter.value < start) {
+  // `end` may equal L_in: everything from start onward is then kept.
+  val inRange = if (end >= L_in) {
+    counter.value >= startU
+  } else {
+    counter.value >= startU && counter.value < U(end, log2Up(L_in) bits)
+  }
+  
+  when(counter.value < startU) {
     // Drop
     io.a.stream.ready := True
     when(io.a.stream.valid) {
       counter.increment()
     }
-  } elsewhen(counter.value >= start && counter.value < end) {
+  } elsewhen(inRange) {
     // Forward
     io.c.stream.valid := io.a.stream.valid
     io.a.stream.ready := io.c.stream.ready

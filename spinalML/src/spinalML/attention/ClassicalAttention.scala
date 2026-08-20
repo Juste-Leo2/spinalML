@@ -38,8 +38,16 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
   embedDim: Int,
   numHeads: Int,
   xLanes: Int,
-  wLanes: Int
+  wLanes: Int,
+  projLanes: Int = 1
 ) extends Component {
+  require(projLanes >= 1, "projLanes must be >= 1")
+  require(numHeads >= 1, "numHeads must be >= 1")
+  require(isPow2(numHeads), "numHeads must be a power of 2 (V1 head splitting)")
+  require(embedDim % numHeads == 0, s"embedDim ($embedDim) must be divisible by numHeads ($numHeads)")
+  require(wLanes == embedDim, "Attention weight lanes must equal embedDim so each stream chunk holds one weight row")
+  val headDim = embedDim / numHeads
+
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(seqLen, embedDim), xLanes))
     val wq = slave(Tensor(dataType, Seq(embedDim, embedDim), wLanes))
@@ -49,49 +57,88 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
     val y = master(Tensor(accType, Seq(seqLen, embedDim), lanes = 1))
   }
   
-  // 1. Projections: Q = X * Wq, K = X * Wk, V = X * Wv
-  // Fork X into 3 streams to compute Q, K, V in parallel
-  val xForks = StreamFork(io.x.stream, 3)
-  val xQ = Tensor(dataType, io.x.shape, xLanes)
-  val xK = Tensor(dataType, io.x.shape, xLanes)
-  val xV = Tensor(dataType, io.x.shape, xLanes)
-  xQ.stream << xForks(0)
-  xK.stream << xForks(1)
-  xV.stream << xForks(2)
-
-  val q = matmul(xQ, io.wq, dataType)
-  val k = matmul(xK, io.wk, dataType)
-  val v = matmul(xV, io.wv, dataType)
-
-  // 2. Transpose K: K_T (Requires BRAM buffering)
-  val k_t = transpose(k)
+  // 1. Projections per head: Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
+  // Weight streams are column-major (each stream transaction = one weight column),
+  // so head h owns the transaction block [h*headDim, (h+1)*headDim) = columns of Wq/Wk/Wv.
+  // The projection stage runs at `projLanes` parallelism (transistor/speed knob).
+  val xForks = StreamFork(io.x.stream, 3 * numHeads)
+  val wqForks = StreamFork(io.wq.stream, numHeads)
+  val wkForks = StreamFork(io.wk.stream, numHeads)
+  val wvForks = StreamFork(io.wv.stream, numHeads)
   
-  // 3. Dot Product: Q * K_T
-  // Add queues to prevent StreamFork deadlocks!
-  // k_t must be fully buffered in matmul's BRAM before it can consume q.
-  // So q must be buffered until k_t is fully loaded.
-  val q_fifo = Tensor(dataType, q.shape, q.lanes)
-  q_fifo.stream << q.stream.queue(seqLen * embedDim)
-  val scores = matmul(q_fifo, k_t, dataType)
+  def combineContexts(ctxs: Seq[Tensor[T]]): Tensor[T] = {
+    if (ctxs.length == 1) ctxs.head
+    else {
+      val combined = ctxs.grouped(2).map {
+        case Seq(a, b) => concatenate(a, b, axis = 1)
+        case Seq(a)    => a
+      }.toSeq
+      combineContexts(combined)
+    }
+  }
   
-  // 4. Scale: scores / sqrt(embedDim)
-  // Currently approximated or skipped since it's just a constant scale
-  // For V1, we pass the scores directly to softmax
+  val contexts: Seq[Tensor[T]] = for (h <- 0 until numHeads) yield {
+    val xQ = Tensor(dataType, io.x.shape, xLanes)
+    xQ.stream << xForks(3 * h)
+    val xK = Tensor(dataType, io.x.shape, xLanes)
+    xK.stream << xForks(3 * h + 1)
+    val xV = Tensor(dataType, io.x.shape, xLanes)
+    xV.stream << xForks(3 * h + 2)
+    
+    val wqHW = Tensor(dataType, io.wq.shape, wLanes)
+    wqHW.stream << wqForks(h)
+    val wkHW = Tensor(dataType, io.wk.shape, wLanes)
+    wkHW.stream << wkForks(h)
+    val wvHW = Tensor(dataType, io.wv.shape, wLanes)
+    wvHW.stream << wvForks(h)
+    
+    // Keep transactions [h*headDim, (h+1)*headDim) of the column-major weight stream,
+    // then re-declare the shape as [embedDim, headDim] (K rows x N=headDim columns).
+    val wqH = Tensor(dataType, Seq(embedDim, headDim), wLanes)
+    wqH.stream << slice(wqHW, h * headDim, (h + 1) * headDim, axis = 0).stream
+    val wkH = Tensor(dataType, Seq(embedDim, headDim), wLanes)
+    wkH.stream << slice(wkHW, h * headDim, (h + 1) * headDim, axis = 0).stream
+    val wvH = Tensor(dataType, Seq(embedDim, headDim), wLanes)
+    wvH.stream << slice(wvHW, h * headDim, (h + 1) * headDim, axis = 0).stream
+    
+    val q = matmul(repack(xQ, projLanes), repack(wqH, projLanes), dataType)
+    val k = matmul(repack(xK, projLanes), repack(wkH, projLanes), dataType)
+    val v = matmul(repack(xV, projLanes), repack(wvH, projLanes), dataType)
+    
+    // 2. Transpose K per head: K_T (Requires BRAM buffering)
+    val k_t = transpose(k)
+    
+    // 3. Dot Product per head: Q * K_T
+    // Add queues to prevent StreamFork deadlocks!
+    // k_t must be fully buffered in matmul's BRAM before it can consume q.
+    // So q must be buffered until k_t is fully loaded.
+    val q_fifo = Tensor(dataType, q.shape, q.lanes)
+    q_fifo.stream << q.stream.queue(seqLen * headDim)
+    val scores = matmul(q_fifo, k_t, dataType)
+    
+    // 4. Scale: scores / sqrt(headDim)
+    // Currently approximated or skipped since it's just a constant scale.
+    // For V1, we pass the scores directly to softmax.
+    // NOTE: if pretrained weights without rescaling are ever reused, this
+    // constant multiplication must be implemented to stay faithful to the model.
+    
+    // 5. Softmax per head (Softmax1D operates over seqLen rows)
+    val scores_repacked = repack(scores, seqLen)
+    val probs = spinalML.activations.Softmax1D(dataType, seqLen, seqLen)
+    probs.io.x <> scores_repacked
+    
+    // 6. Attention per head: probs * V
+    val v_fifo = Tensor(dataType, v.shape, v.lanes)
+    v_fifo.stream << v.stream.queue(seqLen * headDim)
+    val v_repacked = repack(v_fifo, seqLen)
+    val context = matmul(probs.io.y, v_repacked, dataType)
+    
+    // Repack to one row per chunk so the axis-1 concatenation aligns rows block-wise
+    repack(context, headDim)
+  }
   
-  // 5. Softmax (Requires Softmax1D to operate over seqLen)
-  // Softmax operates on the last dimension by default.
-  // Wait, scores is [seqLen, seqLen]. Softmax over dim=1 (the rows).
-  val scores_repacked = repack(scores, seqLen)
-  val probs = spinalML.activations.Softmax1D(dataType, seqLen, seqLen)
-  probs.io.x <> scores_repacked
-  
-  // 6. Attention: probs * V
-  val v_fifo = Tensor(dataType, v.shape, v.lanes)
-  v_fifo.stream << v.stream.queue(seqLen * embedDim)
-  val v_repacked = repack(v_fifo, seqLen)
-  val context = matmul(probs.io.y, v_repacked, dataType)
-  
-  // 7. Output Projection: context * Wo
+  // 7. Concatenate heads along embedDim, then Output Projection: context * Wo
+  val context = combineContexts(contexts)
   val context_repacked = repack(context, wLanes)
   val y_out = matmul(context_repacked, io.wo, accType)
   

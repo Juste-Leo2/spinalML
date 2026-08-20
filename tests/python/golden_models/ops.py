@@ -1003,3 +1003,45 @@ def classical_attention_hw(X, Wq, Wk, Wv, Wo, dtype):
     
     Y = matmul_hw(Context, Wo, dtype)
     return Y
+
+def multi_head_attention_hw(X, Wq, Wk, Wv, Wo, dtype, numHeads):
+    """Golden model for Multi-Head Attention (classical attention + head slicing).
+
+    Mirrors the hardware: full Q/K/V projections, then per-head column slicing
+    [h*headDim, (h+1)*headDim), per-head transpose/softmax/context, context
+    concatenation along axis 1, and the final output projection Wo.
+    """
+    Q = matmul_hw(X, Wq, dtype)
+    K = matmul_hw(X, Wk, dtype)
+    V = matmul_hw(X, Wv, dtype)
+    
+    embedDim = len(Q[0])
+    headDim = embedDim // numHeads
+    
+    contexts = []
+    for h in range(numHeads):
+        c0 = h * headDim
+        c1 = (h + 1) * headDim
+        Q_h = [row[c0:c1] for row in Q]
+        K_h = [row[c0:c1] for row in K]
+        V_h = [row[c0:c1] for row in V]
+        
+        # K_T per head
+        K_T = np.array(K_h).T.tolist()
+        
+        Scores = matmul_hw(Q_h, K_T, dtype)
+        
+        # Softmax over rows
+        Probs = []
+        for row in Scores:
+            p = softmax(np.array(row), dtype)
+            Probs.append(p.tolist() if isinstance(p, np.ndarray) else p)
+            
+        Context_h = matmul_hw(Probs, V_h, dtype)
+        contexts.append(Context_h)
+    
+    # Concatenate heads along embedding dimension
+    Context = np.concatenate([np.array(c) for c in contexts], axis=1).tolist()
+    
+    Y = matmul_hw(Context, Wo, dtype)
+    return Y

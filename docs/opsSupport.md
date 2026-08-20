@@ -61,7 +61,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `Classical Attention` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Scaled dot-product attention (Q, K, V). |
-| `Multi-Head Attention`| ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Multiple parallel attention heads. |
+| `Multi-Head Attention`| ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Multiple parallel attention heads (heads processed in parallel, `1/sqrt(d_k)` scaling folded into weights). |
 | `Mamba2` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Advanced state space models for sequence processing. |
 
 ## Activation Functions
