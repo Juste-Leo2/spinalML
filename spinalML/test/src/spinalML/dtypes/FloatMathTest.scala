@@ -152,6 +152,46 @@ class FloatMathTest extends AnyFunSuite {
       testFromSInt(42)
     }
   }
+
+  test("Test fromDouble field conversion (golden model mirror)") {
+    // (value, expBits, mantBits) -> expected (sign, biasedExp, mantissa)
+    def check(value: Double, expBits: Int, mantBits: Int, eSign: Boolean, eExp: Int, eMant: Long): Unit = {
+      val (sign, exp, mant) = spinalML.utils.Float.doubleToFields(value, expBits, mantBits)
+      assert(sign == eSign && exp == eExp && mant == eMant,
+        s"fromDouble($value, E$expBits M$mantBits): got ($sign, $exp, $mant), expected ($eSign, $eExp, $eMant)")
+    }
+
+    // Zero / NaN
+    check(0.0, 8, 7, false, 0, 0)
+    check(-0.0, 8, 7, false, 0, 0)
+    check(Double.NaN, 8, 7, false, 0, 0)
+
+    // BF16 (E8 M7)
+    check(1.0, 8, 7, false, 127, 0)
+    check(-1.0, 8, 7, true, 127, 0)
+    check(2.5, 8, 7, false, 128, 32)
+    check(-2.5, 8, 7, true, 128, 32)
+
+    // Half-to-even rounding: 1 + 129/256 -> (mant-1)*128 = 64.5 -> rounds to 64 (even)
+    check(1.0 + 129.0 / 256.0, 8, 7, false, 127, 64)
+    // Half-to-even upward: 1 + 131/256 -> 65.5 -> rounds to 66 (even)
+    check(1.0 + 131.0 / 256.0, 8, 7, false, 127, 66)
+
+    // FP8 (E4 M3): bias = 7
+    check(1.5, 4, 3, false, 7 + 0, 4)
+    check(-1.5, 4, 3, true, 7 + 0, 4)
+    check(10.0, 4, 3, false, 7 + 3, 2)
+
+    // FP4 (E2 M1): bias = 1
+    check(1.0, 2, 1, false, 1, 0)
+    check(1.5, 2, 1, false, 1, 1)
+    check(2.0, 2, 1, false, 2, 0)
+    check(3.0, 2, 1, false, 2, 1)   // max normal
+    check(4.0, 2, 1, false, 3, 0)   // saturate to infinity encoding
+    check(-6.0, 2, 1, true, 3, 0)   // negative saturation
+    check(0.75, 2, 1, false, 0, 0)  // underflow -> zero (no subnormals)
+    check(-0.4, 2, 1, true, 0, 0)   // underflow -> zero
+  }
 }
 
 // Component to test purely combinatorial addition
@@ -169,4 +209,56 @@ case class FloatMathFromSIntTestComp() extends Component {
   val c = out(BF16())
   
   c := Float.fromSInt(a, 8, 7) // BF16 parameters
+}
+
+// Anti-wrap regression component: exponent arithmetic must never wrap
+// before the saturation checks (see Float.mul / Float.add widening fix)
+case class FloatMathSaturateComp() extends Component {
+  val io = new Bundle {
+    val a4 = in(FP4_E2M1())
+    val b4 = in(FP4_E2M1())
+    val mul4 = out(FP4_E2M1())
+    val a8 = in(FP8_E4M3())
+    val b8 = in(FP8_E4M3())
+    val add8 = out(FP8_E4M3())
+    val mul8 = out(FP8_E4M3())
+  }
+  io.mul4 := Float.mul(io.a4, io.b4)
+  io.add8 := Float.add(io.a8, io.b8)
+  io.mul8 := Float.mul(io.a8, io.b8)
+}
+
+class FloatMathSaturateTest extends AnyFunSuite {
+  test("Test exponent saturation (no wrap to zero/underflow)") {
+    SimConfig.compile(FloatMathSaturateComp()).doSim { dut =>
+      def set4(p: FloatML, sign: Boolean, exp: Int, mant: Int): Unit = { p.sign #= sign; p.exponent #= exp; p.mantissa #= mant }
+      def getBits(p: FloatML): Int =
+        ((if (p.sign.toBoolean) 1 else 0) << (p.exponent.getWidth + p.mantissa.getWidth)) |
+         ((p.exponent.toInt << p.mantissa.getWidth)) | p.mantissa.toInt
+
+      // FP4: 3.0 * 3.0 = 9.0 -> saturate +inf (expSum 2+2-1+1 = 4 wrapped to -4 before the fix)
+      set4(dut.io.a4, false, 2, 1)
+      set4(dut.io.b4, false, 2, 1)
+      sleep(1)
+      assert(getBits(dut.io.mul4) == 0x6, s"FP4 3*3 should saturate to +inf, got ${getBits(dut.io.mul4).toBinaryString}")
+
+      // FP4: 2.0 * -inf -> -inf
+      set4(dut.io.a4, false, 2, 0)
+      set4(dut.io.b4, true, 3, 0)
+      sleep(1)
+      assert(getBits(dut.io.mul4) == 0xE, s"FP4 2*-inf should be -inf, got ${getBits(dut.io.mul4).toBinaryString}")
+
+      // FP8: inf + inf -> +inf (newExp 15+1 wrapped negative before the fix)
+      dut.io.a8.sign #= false; dut.io.a8.exponent #= 15; dut.io.a8.mantissa #= 0
+      dut.io.b8.sign #= false; dut.io.b8.exponent #= 15; dut.io.b8.mantissa #= 0
+      sleep(1)
+      assert(getBits(dut.io.add8) == 0x78, s"FP8 inf+inf should be +inf, got ${getBits(dut.io.add8).toBinaryString}")
+
+      // FP8: max normal * max normal -> saturate +inf
+      dut.io.a8.sign #= false; dut.io.a8.exponent #= 14; dut.io.a8.mantissa #= 7
+      dut.io.b8.sign #= false; dut.io.b8.exponent #= 14; dut.io.b8.mantissa #= 7
+      sleep(1)
+      assert(getBits(dut.io.mul8) == 0x78, s"FP8 240*240 should saturate to +inf, got ${getBits(dut.io.mul8).toBinaryString}")
+    }
+  }
 }

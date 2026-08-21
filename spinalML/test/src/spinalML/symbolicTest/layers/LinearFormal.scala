@@ -23,7 +23,7 @@ case class LinearTestComp[T <: Data, TAcc <: Data](
     val y = master(Tensor(accType, Seq(M, N), lanes = 1))
   }
   
-  val dut = LinearLayer(dataType, accType, Seq(M, K), Seq(K, N), lanes, tileSize = 4, parallelN = parallelN)
+  val dut = LinearLayer(dataType, dataType, accType, Seq(M, K), Seq(K, N), lanes, tileSize = 4, parallelN = parallelN)
   dut.io.a <> io.a
   dut.io.w <> io.w
   dut.io.b <> io.b

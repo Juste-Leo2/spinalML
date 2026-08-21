@@ -81,6 +81,28 @@ RTL is **never** modified: the specification reuses the existing test components
 > To *write* a new spec (recipe, templates, API reference, checklist), see
 > [symbolicTestPlaybook.md](symbolicTestPlaybook.md) — the complete hands-on guide.
 
+### Limitations of self-comparison oracles
+
+Several formal specs (e.g. `FP4Formal`) assert `dut_output === expected` where
+`expected` is computed by calling the **same Scala function as the DUT** in the
+harness. Such proofs certify *netlist fidelity* — the generated Verilog matches
+what the Scala elaboration produced — but they are **tautological at the
+algorithm level**: if the algorithm itself is wrong, both copies share the bug
+and the proof passes. This is exactly how an exponent-wrap bug in
+`Float.mul/add` (spurious zero instead of saturation to infinity near max
+exponents) escaped formal verification in 2026.
+
+Rule of thumb:
+
+| Goal | Right tool |
+| :--- | :--- |
+| Verilog matches the Scala generator | self-comparison formal (current specs) |
+| Algorithm is mathematically correct | **independent oracle**: exhaustive simulation sweeps (`FloatSweepTest`, ~72k bit-exact pairs for FP4/FP8/BF16-sampled) against an unbounded-arithmetic reference, Python golden co-sim, or formal with widened-arithmetic / property-based oracles |
+
+Until independent formal oracles exist for the float units (see roadmap),
+`FloatSweepTest` is the guard of record for `Float.mul`/`Float.add`
+mathematical correctness.
+
 ### Anatomy of a formal specification (`AddFormal.scala`)
 
 ```scala

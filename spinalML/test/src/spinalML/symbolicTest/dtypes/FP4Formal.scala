@@ -28,6 +28,11 @@ class FP4Formal extends Component {
   // solvers (CVC4/Z3) suffer from combinatorial explosion on 16-bit multipliers.
   // By proving the logic on FP4, we guarantee the generic Scala RTL generator is correct,
   // while we use dynamic Python simulation to verify bit-accurate edge cases for BF16.
+  //
+  // SCOPE CAVEAT: `expected_*` below call the SAME functions as the DUT, so these
+  // assertions prove netlist fidelity only (they cannot catch algorithmic bugs,
+  // e.g. the exponent-wrap fixed in Float.mul/add). Mathematical correctness is
+  // guarded by spinalML.dtypes.FloatSweepTest (exhaustive independent sweeps).
   val dut = new FP4MathComp()
 
   anyseq(dut.io.a)

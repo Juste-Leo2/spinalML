@@ -46,7 +46,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Data Conversion
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Cast` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | SInt -> FloatML conversion (any SInt width, any float format). Only one direction for now; UInt not supported yet. |
+| `Cast` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | SInt -> FloatML conversion (any SInt width, any float format). Only one direction for now; UInt not supported yet. Optional compile-time `scales` turns it into the weight dequantizer for wXaY (`W_float = FloatML(W_int) * scale`, per-tensor or per-channel). |
 | `Requantize` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | Shift + saturate larger SInt (e.g. I32) to smaller SInt (I8/I16). SInt -> SInt only; no float, no UInt. |
 
 ## Neural Network Layers
@@ -101,6 +101,22 @@ Non-operator modules (streaming, memory, numeric units) are verified with the sa
 | `Float` unit (fromSInt) | — | ✅ | `FloatFormal` : SInt -> FloatML conversion (FP8 E4M3), plus `Float.zero`. |
 | DTypes (I4/I8/I16/I32/U4/U8/FP4) | ✅ | ✅ | Quantization round-trip per dtype. |
 | PWL / Math LUTs | ✅ | ✅ | `PWLFormal`, `math_lutsFormal` (exp/rsqrt/sqrt/reciprocal units). |
+
+## Quantization Schemes (wXaY) — *(experimental)*
+
+spinalML aims to quantize per layer with the industry scheme naming `wXaY`: **X = bits of the weights, Y = bits of the activations**. `Linear` is wired for all six schemes below; the other ops are still exposed through their uniform per-op dtype columns only. This section documents the target quantization architecture.
+
+**Policy: activations are float-only.** The tensors flowing between layers (activations) exist only in the float family `{BF16, FP8, FP4}`. Non-linear ops (Softmax, Exp, Sigmoid, ...) are therefore never instantiated in integer — the integer variants are mathematically meaningless (0 / overflow on unquantized integers). Integer formats are reserved for **weights**, as compact storage plus a scale (per-tensor / per-channel): the weights are dequantized to the activation dtype before the (float) matrix multiply. *(Weight-only quantization.)*
+
+### Operations Requiring the Conversion
+
+Only the weight-carrying ops living in the float activation domain are concerned. `Conv1D` / `Conv2D` are deliberately excluded: they stay pure int/int, and the data is `Cast` to the float domain at the boundary (e.g. before `Softmax`).
+
+| Operation | w8a16 | w4a16 | w8a8 | w4a8 | w8a4 | w4a4 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `Linear` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Weights stored as SInt (`I8`/`I4`) + compile-time scale (per-tensor or per-channel), dequantized through a scaled `Cast` to the activation float dtype before the float matmul. Bit-exact vs golden model on all six schemes (Python co-sim), incl. per-channel scales. |
+| `Classical Attention` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Multi-Head Attention` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ## Methodology Notes
 

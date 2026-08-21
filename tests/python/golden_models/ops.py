@@ -691,6 +691,39 @@ def linear_hw(A, W, b, dtype):
                 Y[m][n] = sum_val
     return Y
 
+
+def dequant_hw(W_int, scales, act_dtype, weight_bits=8):
+    """Golden model of CastOp with scales (weight-only dequantization).
+    Mirrors the hardware exactly: W_dq = FloatML_mul(FloatML_fromSInt(w),
+    quantized_scale_const), where the scale constant is itself quantized
+    to the activation dtype (Float.fromDouble on the Scala side).
+    Per-channel scales are indexed by weight column (stream beat order)."""
+    if isinstance(scales, (int, float)):
+        scales = [float(scales)]
+    K = len(W_int)
+    N = len(W_int[0])
+    W_dq = [[0.0] * N for _ in range(K)]
+    for k in range(K):
+        for n in range(N):
+            q_bits = cast_hw(int(W_int[k][n]), weight_bits, act_dtype)
+            q_val = act_dtype.to_float(q_bits)
+            s_val = act_dtype.to_float(act_dtype.from_float(float(scales[n % len(scales)])))
+            W_dq[k][n] = floatml_mul(q_val, s_val, act_dtype)
+    return W_dq
+
+
+def linear_hw_wxay(A, W_int, b, act_dtype, scales=(1.0,), weight_bits=8):
+    """Golden model of LinearLayer with weight-only quantization (wXaY):
+    Y = Matmul(A, dequant(W)) + b, computed in the activation float domain."""
+    W_dq = dequant_hw(W_int, scales, act_dtype, weight_bits)
+    matmul_res = matmul_hw(A, W_dq, act_dtype)
+
+    Y = [[0.0] * len(matmul_res[0]) for _ in range(len(matmul_res))]
+    for m in range(len(matmul_res)):
+        for n in range(len(matmul_res[0])):
+            Y[m][n] = floatml_add(matmul_res[m][n], b[0][n], act_dtype)
+    return Y
+
 def conv1d_hw(X, W, b, dtype):
     L_in = len(X)
     C_in = len(X[0]) if isinstance(X[0], list) else 1

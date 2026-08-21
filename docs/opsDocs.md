@@ -13,7 +13,7 @@ All operations interface via `Tensor[T]`, which embeds a physical hardware `Stre
 | **Mul** | `mul(a, b)` | Element-wise multiplication. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **Div** | `div(a, b)` | Element-wise division. | `a, b: Tensor[T]` | `Tensor[T]` |
 | **BiasAdd** | `bias_add(a, b)` | Broadcast add of a bias vector over the last dimension (columns). | `a, b: Tensor[T]` | `Tensor[T]` |
-| **Cast** | `cast(a, dt)` | Casts tensor to a new datatype (SInt -> FloatML, only this direction). | `a: Tensor[T], dt: HardType[U]` | `Tensor[U]` |
+| **Cast** | `cast(a, dt, scales = Seq(1.0))` | Casts tensor to a new datatype (SInt -> FloatML, only this direction). `scales` (compile-time, length 1 = per-tensor or length = number of stream beats = per-channel) dequantizes weights: `W_float = FloatML(W_int) * scale`. | `a: Tensor[T], dt: HardType[U], scales: Seq[Double]` | `Tensor[U]` |
 | **Requantize** | `requantize(a, dt, shift)` | Shift + saturate to a smaller SInt type (e.g. I32 -> I8). | `a: Tensor[T], dt: HardType[U], shift: Int` | `Tensor[U]` |
 | **Abs** | `abs(a)` | Absolute value. | `a: Tensor[T]` | `Tensor[T]` |
 | **Log** | `log(a, base = Math.E)` | Element-wise logarithm. Default `base = e` (ln); `base = 10.0` gives log10. Domain `x <= 0 -> 0` (industry convention, same as `rsqrt`). | `a: Tensor[T]` | `Tensor[T]` |
@@ -55,7 +55,7 @@ Neural network layers maintain their own state or weights, and typically present
 
 | Layer | Syntax | Description | Inputs | Outputs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Linear** | `Linear(x, w, b)` | Fully Connected Layer. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
+| **Linear** | `Linear(x, w, b)` | Fully Connected Layer. Weight-only quantization (wXaY): if `w` is a `Tensor[SInt]`, pass compile-time `weightScales: Seq[Double]` (per-tensor or per-channel) — weights are dequantized to the activation float dtype before the matmul. | `x, b: Tensor[T], w: Tensor[T] or Tensor[SInt]` | `y: Tensor[T]` |
 | **Conv1D** | `Conv1D(x, w, b)` | 1D Convolution. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
 | **Conv2D** | `Conv2D(x, w, b)` | 2D Convolution. | `x, w, b: Tensor[T]` | `y: Tensor[T]` |
 

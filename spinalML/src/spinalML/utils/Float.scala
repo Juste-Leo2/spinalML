@@ -37,8 +37,13 @@ object Float {
     val overflow = mantProd.msb
     
     // 3. Exponent Addition
-    // We use SInt to safely handle intermediate negative numbers before underflow check
-    val expSumSInt = a.exponent.intoSInt + b.exponent.intoSInt - bias + overflow.asUInt.intoSInt
+    // Widened so the sum can never wrap before the saturation check
+    // (e.g. FP4: 2+2-1+1 = 4 overflows a 3-bit signed accumulator)
+    val expSumWidth = expBits + 3
+    val expSumSInt = a.exponent.intoSInt.resize(expSumWidth) +
+      b.exponent.intoSInt.resize(expSumWidth) -
+      bias +
+      overflow.asUInt.intoSInt.resized
     
     // 4. Renormalize Mantissa
     // Extract the exact mantBits after the leading 1
@@ -164,7 +169,8 @@ object Float {
     val finalMantissa = normalizedSumExt(W - 2 downto W - 1 - mantBits)
     
     val expAdjustSInt = 1 - lz.intoSInt
-    val newExpSInt = larger.exponent.intoSInt + expAdjustSInt
+    // Widened so exponent+1 can never wrap before the saturation check
+    val newExpSInt = larger.exponent.intoSInt.resize(expBits + 3) + expAdjustSInt.resize(expBits + 3)
     
     // 5. Pack result
     c.sign := larger.sign
@@ -186,6 +192,71 @@ object Float {
       c.mantissa := finalMantissa
     }
     
+    c
+  }
+
+  /**
+   * Pure elaboration-time logic converting a Double into FloatML fields
+   * (sign, biased exponent, mantissa). Mirrors the Python golden model
+   * `FloatML.from_float` bit-exactly (banker's rounding on the mantissa,
+   * overflow -> infinity encoding, underflow -> zero).
+   */
+  def doubleToFields(value: Double, expBits: Int, mantBits: Int): (Boolean, Int, Long) = {
+    val bias = (1 << (expBits - 1)) - 1
+
+    if (value == 0.0 || value.isNaN) {
+      return (false, 0, 0)
+    }
+
+    val signBit = value < 0
+    val absVal = math.abs(value)
+
+    // Saturation check (same formula as the golden model)
+    val maxExp = (1 << expBits) - 2
+    val maxMant = (1 << mantBits) - 1
+    val maxVal = (1.0 + maxMant.toDouble / (1 << mantBits)) * math.pow(2, maxExp - bias)
+
+    if (value.isInfinity || absVal > maxVal) {
+      return (signBit, (1 << expBits) - 1, 0)
+    }
+
+    // frexp equivalent: m in [1, 2), e = floor(log2(absVal))
+    val e = Math.getExponent(absVal)
+    val m = java.lang.Math.scalb(absVal, -e)
+    var expVal = e + bias
+
+    // Mantissa rounding: Python round() == half-to-even
+    val scaled = BigDecimal((m - 1.0) * (1 << mantBits).toDouble)
+    var mantVal = scaled.setScale(0, BigDecimal.RoundingMode.HALF_EVEN).toLongExact
+
+    // Mantissa rounding overflow FIRST (can rescue an underflow)
+    if (mantVal >= (1 << mantBits)) {
+      mantVal = 0
+      expVal += 1
+    }
+
+    // THEN saturation / underflow (subnormals are omitted in hardware)
+    if (expVal >= ((1 << expBits) - 1)) {
+      expVal = (1 << expBits) - 1
+      mantVal = 0
+    } else if (expVal <= 0) {
+      expVal = 0
+      mantVal = 0
+    }
+
+    (signBit, expVal, mantVal)
+  }
+
+  /**
+   * Elaboration-time constant conversion: Double -> FloatML hardware literal.
+   * Bit-exact counterpart of the Python golden model `FloatML.from_float`.
+   */
+  def fromDouble(value: Double, expBits: Int, mantBits: Int): FloatML = {
+    val (signBit, expVal, mantVal) = doubleToFields(value, expBits, mantBits)
+    val c = FloatML(expBits, mantBits)
+    c.sign := Bool(signBit)
+    c.exponent := U(expVal, expBits bits)
+    c.mantissa := U(mantVal, mantBits bits)
     c
   }
 
