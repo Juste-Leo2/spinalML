@@ -61,7 +61,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `Classical Attention` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Scaled dot-product attention (Q, K, V). |
-| `Multi-Head Attention`| ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Multiple parallel attention heads (heads processed in parallel, `1/sqrt(d_k)` scaling folded into weights). |
+| `Multi-Head Attention`| ✅ | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ❌ | Multiple parallel attention heads (heads processed in parallel, `1/sqrt(d_k)` scaling folded into weights). I16: known softmax polarity defect on the SInt PWL path (`docs/bugs/int16-softmax-polarity.md`), patch planned. |
 | `Mamba2` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Advanced state space models for sequence processing. |
 
 ## Activation Functions
@@ -104,7 +104,7 @@ Non-operator modules (streaming, memory, numeric units) are verified with the sa
 
 ## Quantization Schemes (wXaY) — *(experimental)*
 
-spinalML aims to quantize per layer with the industry scheme naming `wXaY`: **X = bits of the weights, Y = bits of the activations**. `Linear` is wired for all six schemes below; the other ops are still exposed through their uniform per-op dtype columns only. This section documents the target quantization architecture.
+spinalML aims to quantize per layer with the industry scheme naming `wXaY`: **X = bits of the weights, Y = bits of the activations**. `Linear` and `Classical/Multi-Head Attention` are wired for all six schemes below; the remaining ops are still exposed through their uniform per-op dtype columns only. This section documents the target quantization architecture.
 
 **Policy: activations are float-only.** The tensors flowing between layers (activations) exist only in the float family `{BF16, FP8, FP4}`. Non-linear ops (Softmax, Exp, Sigmoid, ...) are therefore never instantiated in integer — the integer variants are mathematically meaningless (0 / overflow on unquantized integers). Integer formats are reserved for **weights**, as compact storage plus a scale (per-tensor / per-channel): the weights are dequantized to the activation dtype before the (float) matrix multiply. *(Weight-only quantization.)*
 
@@ -115,11 +115,12 @@ Only the weight-carrying ops living in the float activation domain are concerned
 | Operation | w8a16 | w4a16 | w8a8 | w4a8 | w8a4 | w4a4 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | `Linear` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Weights stored as SInt (`I8`/`I4`) + compile-time scale (per-tensor or per-channel), dequantized through a scaled `Cast` to the activation float dtype before the float matmul. Bit-exact vs golden model on all six schemes (Python co-sim), incl. per-channel scales. |
-| `Classical Attention` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `Multi-Head Attention` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Classical Attention` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Same contract as Linear: SInt weights + compile-time scale(s) (per-tensor or per-channel, one scale per weight column), dequantized once at the io boundary via a scaled `Cast` before the head forks. Validated vs golden on all six schemes incl. per-channel scales; FP4 saturations (`±inf`) compared inf-aware. |
+| `Multi-Head Attention` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Same wiring as Classical Attention (shared `ClassicalAttentionHW`, scales shared across Q/K/V/O). Validated on all six wXaY schemes at seqLen=4/heads=2. Uniform I16 path has a known pre-existing softmax polarity defect — see [⚠️](#methodology-notes) below and `docs/bugs/int16-softmax-polarity.md` (patch planned, not urgent). |
 
 ## Methodology Notes
 
 * **Alg+LUT**: **Algebraic Separation + LUT** (exact math for exponent, LUT for mantissa). `Log` uses the same idea: `log_b(x) = log2(x) * ln(2)/ln(b)` with a fixed-point `Q8.8` mantissa LUT, a `Q0.16` constant (`ln(2)/ln(b)`), and LZD re-quantization.
 * **⚠️**: Supported via PWL or LUT approximation, but mathematically meaningless for unquantized integers (results in 0 or overflow).
+* **Multi-Head Attention I16 ⚠️**: known pre-existing softmax polarity defect on the SInt PWL path (hot probability = −1 instead of +1; saturations on later tiles). Masked by tolerances until now. Analysis + proposed fix: `docs/bugs/int16-softmax-polarity.md`.
 

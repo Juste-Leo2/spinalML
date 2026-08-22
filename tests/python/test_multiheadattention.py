@@ -232,8 +232,12 @@ async def run_multihead_quant_test(dut, op_name, combo_name, w_dtype, w_bits, ac
         for n in range(embedDim):
             out_val = Y_out[m][n]
             exp_val = float(Y_expected[m][n])
-            err = abs(out_val - exp_val)
-            assert err < 0.25, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {exp_val}"
+            if np.isinf(out_val) or np.isinf(exp_val):
+                assert np.isinf(out_val) and np.isinf(exp_val) and np.signbit(out_val) == np.signbit(exp_val), \
+                    f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {exp_val}"
+            else:
+                err = abs(out_val - exp_val)
+                assert err < 0.25, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {exp_val}"
 
 async def _run_multihead_quant_combo(dut, combo_name, scales=(1.0,)):
     w_dt, w_bits, a_dt = QUANT_COMBOS[combo_name]

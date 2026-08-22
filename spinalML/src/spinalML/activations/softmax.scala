@@ -151,20 +151,24 @@ case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: In
   
   // 6. Final Multiply: Y = e^(X') * (1/sum)
   val outPayload = Vec(dataType, channels)
-  
+
+  val outStream = Stream(Vec(dataType, channels))
   val finalSyncValid = invSumStream.valid && carryExpStream.valid
-  invSumStream.ready := io.y.stream.ready && carryExpStream.valid
-  carryExpStream.ready := io.y.stream.ready && invSumStream.valid
-  
+  // Consume the join when the downstream pipe actually takes the beat
+  // (its ready is !full || y.ready), NOT on raw io.y.stream.ready: otherwise
+  // an empty pipe captures a pair without the join consuming it, and the
+  // stored beat is re-emitted (duplicated) on the next y.ready pulse.
+  invSumStream.ready := outStream.ready && carryExpStream.valid
+  carryExpStream.ready := outStream.ready && invSumStream.valid
+
   for (i <- 0 until channels) {
     val eX = carryExpStream.payload(i)
     val invS = invSumStream.payload(0)
     outPayload(i) := mul(eX, invS)
   }
-  
-  val outStream = Stream(Vec(dataType, channels))
+
   outStream.valid := finalSyncValid
   outStream.payload := outPayload
-  
+
   io.y.stream << outStream.m2sPipe()
 }
