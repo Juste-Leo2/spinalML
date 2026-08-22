@@ -72,3 +72,5 @@ Neural network layers maintain their own state or weights, and typically present
 | **LayerNorm** | `LayerNorm1D(x, g, b)` | Dynamic mean and standard deviation. | `x, gamma, beta` | `y: Tensor[T]` |
 | **MaxPool1D** | `maxpool1d(x, k, s)` | 1D Max Pooling (Supports multi-channel). | `x: Tensor[T]` | `y: Tensor[T]` |
 | **AvgPool1D** | `avgpool1d(x, k, s)` | 1D Average Pooling (Supports multi-channel). | `x: Tensor[T]` | `y: Tensor[T]` |
+| **MaxPool2D** | `maxpool2d(x, k, s)` | 2D Max Pooling. Input `[H, W(, C)]` lanes=1, output `[H_out, W_out(, C)]` lanes=C. BRAM line buffers (`Mem` + `readSync`). | `x: Tensor[T]` | `y: Tensor[T]` |
+| **AvgPool2D** | `avgpool2d(x, k, s)` | 2D Average Pooling (requires isPow2(K*K), shift-based division). Same streaming contract as MaxPool2D. *(Requires BRAM)* | `x: Tensor[T]` | `y: Tensor[T]` |

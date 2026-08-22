@@ -83,9 +83,9 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D max pooling. |
-| `MaxPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2D max pooling. *(Requires BRAM)* |
+| `MaxPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D max pooling, multi-channel. BRAM delay-line line buffers (`Mem` + `readSync`). |
 | `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
-| `AvgPool2D` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2D average pooling. *(Requires BRAM)* |
+| `AvgPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D average pooling (isPow2(K*K), shift-based). Same BRAM line buffers as MaxPool2D. |
 
 ## Infrastructure Modules
 

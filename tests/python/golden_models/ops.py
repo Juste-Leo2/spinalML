@@ -1148,3 +1148,98 @@ def multi_head_attention_hw_wxay(X, Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, n
     """Golden model of ClassicalAttentionHW(numHeads>1) with weight-only quantization (wXaY)."""
     Wq, Wk, Wv, Wo = _dequant_attention_weights(Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales, weight_bits)
     return multi_head_attention_hw(X, Wq, Wk, Wv, Wo, act_dtype, numHeads)
+
+def _tree_add_floatml(vals, dtype):
+    """Pairwise adder-tree reduction mirroring the RTL buildAdderTree
+    (FloatML rounding applied at each tree level, left pair first)."""
+    if len(vals) == 1:
+        return vals[0]
+    nxt = []
+    for i in range(0, len(vals), 2):
+        if i + 1 < len(vals):
+            nxt.append(floatml_add(vals[i], vals[i + 1], dtype))
+        else:
+            nxt.append(vals[i])
+    return _tree_add_floatml(nxt, dtype)
+
+def _floatml_exp_shift(acc_val, shift, dtype):
+    """Exact division by 2^shift on a FloatML value: exponent decrement with
+    underflow clamp (mirrors AvgPool exponent-shift path)."""
+    bits = dtype.from_float(acc_val)
+    sign = (bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
+    exp = (bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
+    mant = bits & ((1 << dtype.mant_bits) - 1)
+    if exp == 0:
+        return 0.0
+    shifted = exp - shift
+    if shifted <= 0:
+        return 0.0
+    new_bits = (sign << (dtype.exp_bits + dtype.mant_bits)) | (shifted << dtype.mant_bits) | mant
+    return dtype.to_float(new_bits)
+
+def maxpool2d_hw(X, K, stride, dtype):
+    """Golden model of MaxPool2DOp. Input [H, W] or [H, W, C]; output [H_out, W_out(, C)].
+    Max compared on encoded bits, mirroring the hardware comparator."""
+    H = len(X)
+    W_in = len(X[0])
+    is_3d = isinstance(X[0][0], list)
+    C = len(X[0][0]) if is_3d else 1
+    H_out = (H - K) // stride + 1
+    W_out = (W_in - K) // stride + 1
+    Y = []
+    for i in range(H_out):
+        row = []
+        for j in range(W_out):
+            pix = []
+            for c in range(C):
+                def get(r, cc):
+                    v = X[i * stride + r][j * stride + cc]
+                    return v[c] if is_3d else v
+                best_bits = dtype.from_float(get(0, 0))
+                for ki in range(K):
+                    for kj in range(K):
+                        if ki == 0 and kj == 0:
+                            continue
+                        val_bits = dtype.from_float(get(ki, kj))
+                        if dtype.to_float(val_bits) > dtype.to_float(best_bits):
+                            best_bits = val_bits
+                pix.append(dtype.to_float(best_bits))
+            row.append(pix if is_3d else pix[0])
+        Y.append(row)
+    return Y
+
+def avgpool2d_hw(X, K, stride, dtype):
+    """Golden model of AvgPool2DOp. Input [H, W] or [H, W, C]; output [H_out, W_out(, C)].
+    Floats: pairwise adder-tree (floatml_add) then exact exponent shift by log2(K*K).
+    Integers: exact sum then arithmetic right shift (floor division)."""
+    import math
+    H = len(X)
+    W_in = len(X[0])
+    is_3d = isinstance(X[0][0], list)
+    C = len(X[0][0]) if is_3d else 1
+    is_floatml = hasattr(dtype, 'exp_bits')
+    H_out = (H - K) // stride + 1
+    W_out = (W_in - K) // stride + 1
+    shift = int(math.log2(K * K))
+    Y = []
+    for i in range(H_out):
+        row = []
+        for j in range(W_out):
+            pix = []
+            for c in range(C):
+                window = []
+                for ki in range(K):
+                    for kj in range(K):
+                        v = X[i * stride + ki][j * stride + kj]
+                        window.append(v[c] if is_3d else v)
+                if is_floatml:
+                    acc_val = _tree_add_floatml(window, dtype)
+                    val = _floatml_exp_shift(acc_val, shift, dtype)
+                else:
+                    acc = sum(int(w) for w in window)
+                    val = acc >> shift
+                bits = dtype.from_float(val)
+                pix.append(dtype.to_float(bits))
+            row.append(pix if is_3d else pix[0])
+        Y.append(row)
+    return Y

@@ -86,7 +86,9 @@ spinalML/
 │   │   │   └── softmax.scala      # built from exp + reciprocal components
 │   │   ├── poolings/
 │   │   │   ├── avgpool1d.scala
-│   │   │   └── maxpool1d.scala
+│   │   │   ├── maxpool1d.scala
+│   │   │   ├── avgpool2d.scala     # 2D average pooling (BRAM line buffers)
+│   │   │   └── maxpool2d.scala     # 2D max pooling (BRAM line buffers)
 │   │   ├── layers/
 │   │   │   ├── Conv1D.scala
 │   │   │   ├── Conv2D.scala
@@ -127,7 +129,7 @@ spinalML/
 │       ├── ops/                # one *Test.scala per file in src/ops
 │       ├── symbolicTest/       # formal (symbolic) specs, mirroring src/ packages
 │       │   └── ops/AddFormal.scala  # proof of the I8 add op (k-induction, Z3)
-│       ├── poolings/           # AvgPool1DTest, MaxPool1DTest
+│       ├── poolings/           # AvgPool1DTest, MaxPool1DTest, AvgPool2DTest, MaxPool2DTest
 │       ├── accelerator/        # MLAcceleratorTest
 │       ├── tensors/            # TensorSim.scala (simulation driver)
 │       └── test/               # SequentialTest, SequentialCNNTest, Comprehensive1DCNNTest
