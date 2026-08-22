@@ -9,7 +9,6 @@ from golden_models.dtypes import FP8_E4M3, I8, I16, BF16, I4, FP4_E2M1
 from golden_models.ops import multi_head_attention_hw, multi_head_attention_hw_wxay
 from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim, DEFAULT_NUM_TRIALS
 from utils.tb_utils import seed_random, SEED
-from utils.math_metrics import log_math_line
 
 seed_random()
 
@@ -214,14 +213,6 @@ async def run_multihead_quant_test(dut, op_name, combo_name, w_dtype, w_bits, ac
     await send_x
 
     Y_expected = multi_head_attention_hw_wxay(X, Wq, Wk, Wv, Wo, act_dtype, numHeads, scales, weight_bits=w_bits)
-
-    # TEMP DEBUG: per-trial dump
-    trial_idx = len(collect["out"]) if collect is not None else 0
-    log_math_line(f"MHATTDBG t{trial_idx} {combo_name} X={[[round(x, 3) for x in r] for r in X]}")
-    log_math_line(f"MHATTDBG t{trial_idx} Y_hw={[[round(x, 4) for x in r] for r in Y_out]}")
-    log_math_line(f"MHATTDBG t{trial_idx} Y_gd={[[round(x, 4) for x in r] for r in np.array(Y_expected).tolist()]}")
-    errs = [[round(abs(Y_out[m][n] - float(Y_expected[m][n])), 4) for n in range(embedDim)] for m in range(seqLen)]
-    log_math_line(f"MHATTDBG t{trial_idx} abs_err={errs}")
 
     if collect is not None:
         collect["out"].append(Y_out)

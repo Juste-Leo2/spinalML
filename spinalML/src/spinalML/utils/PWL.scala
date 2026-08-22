@@ -36,25 +36,56 @@ object PWLLUTs {
   def createSegmentFn(bitWidth: Int, isFloat: Boolean, expBits: Int, mantBits: Int, indexBits: Int, mathFn: Double => Double): Int => (Double, Double) = {
     val valFn = if (isFloat) MathLUTs.floatValFn(expBits, mantBits) else MathLUTs.intValFn(bitWidth)
     val shift = bitWidth - indexBits
-    
+
     (i: Int) => {
       val x_start = valFn(i << shift)
       val x_end = valFn(((i + 1) << shift) - 1)
-      
+
       if (x_start == x_end || x_start.isNaN || x_end.isNaN) {
         val y = mathFn(if(x_start.isNaN) 0.0 else x_start)
         (0.0, if(y.isNaN || y.isInfinity) 0.0 else y)
       } else {
         val y_start = mathFn(x_start)
         val y_end = mathFn(x_end)
-        
+
         val a = (y_end - y_start) / (x_end - x_start)
         val b = y_start - a * x_start
-        
+
         val safeA = if (a.isNaN || a.isInfinity) 0.0 else a
         val safeB = if (b.isNaN || b.isInfinity) y_start else b
         (safeA, safeB)
       }
+    }
+  }
+
+  // Piecewise-CONSTANT fallback for functions whose local slope cannot be
+  // represented in the storage dtype (e.g. 1/x near 0 in narrow signed ints:
+  // the linear-fit slope saturates at -2^(w-1) while the intercept saturates
+  // at +(2^(w-1)-1), yielding garbage like recip(1) = 1*(-2^(w-1)) + (2^(w-1)-1)
+  // = -1). Each segment stores (0, f(sample)) where sample is the first
+  // abscissa of the segment with |x| >= 1, keeping small positive integers
+  // (softmax sums) exact-ish and everything else bounded.
+  def createConstantSegmentFn(bitWidth: Int, indexBits: Int, mathFn: Double => Double): Int => (Double, Double) = {
+    val maxVal = (1 << (bitWidth - 1)) - 1
+    val shift = bitWidth - indexBits
+
+    def signed(raw: Int): Double = {
+      val half = 1 << (bitWidth - 1)
+      val full = 1 << bitWidth
+      if (raw >= half) (raw - full).toDouble else raw.toDouble
+    }
+
+    (i: Int) => {
+      val xs = signed(i << shift)
+      val xe = signed(((i + 1) << shift) - 1)
+      // first abscissa of the segment whose magnitude is >= 1 (avoids f's singularity at 0)
+      val sample =
+        if (xe < 1.0) xe
+        else if (xs > 1.0) xs
+        else 1.0
+      val y = mathFn(sample)
+      val ySafe = if (y.isNaN || y.isInfinity || y > maxVal.toDouble || y < -maxVal.toDouble) 0.0 else y
+      (0.0, ySafe)
     }
   }
 }

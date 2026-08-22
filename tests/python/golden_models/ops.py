@@ -384,9 +384,35 @@ def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
     return pwl_int(x_val, bit_width, exp_fn, index_bits)
 
 def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
-    def rec_fn(x):
-        return 1.0 / (x + (1e-9 if x >= 0 else -1e-9))
-    return pwl_int(x_val, bit_width, rec_fn, index_bits)
+    """Golden of the SInt PWL reciprocal: piecewise-CONSTANT per segment
+    (sampled at the first abscissa with |x| >= 1). Mirrors
+    PWLLUTs.createConstantSegmentFn; the old linear fit saturated its int
+    coefficients on steep 1/x slopes (recip(1) evaluated to -1)."""
+    from golden_models.dtypes import SIntML
+
+    def signed(raw):
+        half = 1 << (bit_width - 1)
+        full = 1 << bit_width
+        return float(raw - full) if raw >= half else float(raw)
+
+    def encode(y):
+        min_v = -(1 << (bit_width - 1))
+        max_v = (1 << (bit_width - 1)) - 1
+        v = int(max(float(min_v), min(float(max_v), math.floor(y + 0.5))))
+        return v & ((1 << bit_width) - 1)
+
+    x_int = SIntML(bit_width).from_float(x_val)
+    shift = bit_width - index_bits
+    segment = (x_int >> shift) & ((1 << index_bits) - 1)
+
+    xs = signed(segment << shift)
+    xe = signed(((segment + 1) << shift) - 1)
+    sample = xe if xe < 1 else max(xs, 1.0)
+
+    y = 1.0 / (sample + (1e-9 if sample >= 0 else -1e-9))
+    if math.isnan(y) or math.isinf(y) or abs(y) > (1 << (bit_width - 1)) - 1:
+        y = 0.0
+    return encode(y)
 
 def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8) -> int:
     """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les flottants."""

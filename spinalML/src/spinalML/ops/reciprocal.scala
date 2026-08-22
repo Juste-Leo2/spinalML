@@ -97,13 +97,20 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
     // PWL Approximation for Int > 8 bits
     val indexBits = 8
     val numSegments = 1 << indexBits
-    
+
     val segmentIndexFn: T => UInt = (x: T) => {
       x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
     }
-    
-    val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
-    
+
+    // For signed ints, a linear fit of 1/x needs slopes far beyond what an
+    // int coefficient can encode (they saturate: recip(1) evaluated to -1).
+    // Use a piecewise-constant approximation instead; keep the generic fit
+    // for unsigned inputs (non-negative domain, no singularity at 0..255 mix).
+    val isSInt = dataType().isInstanceOf[SInt]
+    val segmentFn =
+      if (isSInt) spinalML.utils.PWLLUTs.createConstantSegmentFn(bitWidth, indexBits, mathFn)
+      else spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
+
     val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
     pwlOp.io.a <> io.a
     io.c <> pwlOp.io.c

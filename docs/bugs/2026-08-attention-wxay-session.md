@@ -205,6 +205,8 @@ After this, `w8a4`/`w4a4` pass on both attention suites.
 
 ---
 
-## Still open
-- `multihead_i16` (uniform SInt path): pre-existing softmax polarity defect in
-  the integer PWL domain — see `docs/bugs/int16-softmax-polarity.md`.
+## Also fixed in the same campaign
+- **I16 (SInt) softmax polarity** — _PATCHED_: PWL reciprocal coefficient
+  saturation made `recip(1) = -1` (hot probability inverted, Cosine −1.000 on
+  the single-head I16 path). Piecewise-constant reciprocal for SInt > 8 bits;
+  see `docs/bugs/int16-softmax-polarity.md`.

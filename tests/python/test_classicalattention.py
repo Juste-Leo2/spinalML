@@ -6,9 +6,8 @@ import pytest
 import os
 
 from golden_models.dtypes import FP8_E4M3, I8, I16, BF16, I4, FP4_E2M1
-from golden_models.ops import classical_attention_hw, classical_attention_hw_wxay, dequant_hw, matmul_hw, softmax
+from golden_models.ops import classical_attention_hw, classical_attention_hw_wxay
 from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, run_layer_sim, DEFAULT_NUM_TRIALS
-from utils.math_metrics import log_math_line
 from utils.tb_utils import seed_random, SEED
 
 seed_random()
@@ -175,26 +174,6 @@ QUANT_COMBOS = {
     "w4a4": (I4, 4, FP4_E2M1),
 }
 
-_PHANTOM_STATE = {}
-
-def _golden_probs(X, Wq_int, Wk_int, act_dtype, scales, w_bits):
-    Wq = np.array(dequant_hw(Wq_int, scales, act_dtype, weight_bits=w_bits))
-    Wk = np.array(dequant_hw(Wk_int, scales, act_dtype, weight_bits=w_bits))
-    Q = np.array(matmul_hw(X, Wq.tolist(), act_dtype))
-    K_T = np.array(matmul_hw(X, Wk.tolist(), act_dtype)).T
-    S = matmul_hw(Q.tolist(), K_T.tolist(), act_dtype)
-    return np.array([softmax(np.array(row), act_dtype) for row in S])
-
-def _phantom_predictions(X, Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales, w_bits, P_prev):
-    Wv = np.array(dequant_hw(Wv_int, scales, act_dtype, weight_bits=w_bits))
-    Wo = np.array(dequant_hw(Wo_int, scales, act_dtype, weight_bits=w_bits))
-    Vc = np.array(matmul_hw(X, Wv.tolist(), act_dtype))
-    P_cur = _golden_probs(X, Wq_int, Wk_int, act_dtype, scales, w_bits)
-    P_shift = np.vstack([P_prev[-1:, :], P_cur[:-1, :]])
-    Y_shift = P_shift @ Vc @ Wo
-    Y_norm = P_cur @ Vc @ Wo
-    return P_cur, Y_shift, Y_norm
-
 async def run_attention_quant_test(dut, op_name, combo_name, w_dtype, w_bits, act_dtype,
                                    X, Wq, Wk, Wv, Wo, seqLen, embedDim, xLanes, wLanes,
                                    scales=(1.0,), collect=None):
@@ -231,24 +210,6 @@ async def run_attention_quant_test(dut, op_name, combo_name, w_dtype, w_bits, ac
 
     # Hardware exact math (weights dequantized to the activation float domain)
     Y_expected = classical_attention_hw_wxay(X, Wq, Wk, Wv, Wo, act_dtype, scales, weight_bits=w_bits)
-
-    # TEMP DEBUG: per-trial dump + phantom-row hypothesis check
-    trial_idx = len(collect["out"]) if collect is not None else 0
-    log_math_line(f"ATTDBG t{trial_idx} {combo_name} X={[[round(x, 3) for x in r] for r in X]}")
-    log_math_line(f"ATTDBG t{trial_idx} Y_hw={[[round(x, 4) for x in r] for r in Y_out]}")
-    log_math_line(f"ATTDBG t{trial_idx} Y_gd={[[round(x, 4) for x in r] for r in Y_expected]}")
-    errs = [[round(abs(Y_out[m][n] - float(Y_expected[m][n])), 4) for n in range(embedDim)] for m in range(seqLen)]
-    log_math_line(f"ATTDBG t{trial_idx} abs_err={errs}")
-
-    P_prev = _PHANTOM_STATE.get(combo_name)
-    if P_prev is not None and trial_idx >= 1:
-        P_cur, Y_shift, Y_norm = _phantom_predictions(
-            X, Wq, Wk, Wv, Wo, act_dtype, scales, w_bits, P_prev)
-        d_shift = float(np.max(np.abs(np.array(Y_out) - Y_shift)))
-        d_norm = float(np.max(np.abs(np.array(Y_out) - Y_norm)))
-        log_math_line(f"ATTDBG t{trial_idx} PHANTOM max|Yhw-Yshift|={d_shift:.4f} max|Yhw-Ynorm|={d_norm:.4f}")
-        log_math_line(f"ATTDBG t{trial_idx} Y_shift_pred={[[round(x, 4) for x in r] for r in Y_shift.tolist()]}")
-    _PHANTOM_STATE[combo_name] = _golden_probs(X, Wq, Wk, act_dtype, scales, w_bits)
 
     if collect is not None:
         collect["out"].append(Y_out)
