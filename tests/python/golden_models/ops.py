@@ -30,8 +30,21 @@ def floatml_mul(a: float, b: float, dtype: FloatML) -> float:
     overflow = (mant_prod >> (2 * dtype.mant_bits + 1)) & 1
     if overflow:
         norm_mant = (mant_prod >> (dtype.mant_bits + 1)) & ((1 << dtype.mant_bits) - 1)
+        dropped = mant_prod & ((1 << (dtype.mant_bits + 1)) - 1)
+        guard = (dropped >> dtype.mant_bits) & 1
+        sticky = (dropped & ((1 << dtype.mant_bits) - 1)) != 0
     else:
         norm_mant = (mant_prod >> dtype.mant_bits) & ((1 << dtype.mant_bits) - 1)
+        dropped = mant_prod & ((1 << dtype.mant_bits) - 1)
+        guard = (dropped >> (dtype.mant_bits - 1)) & 1
+        sticky = (dropped & ((1 << (dtype.mant_bits - 1)) - 1)) != 0
+
+    # Round-to-nearest-even on the dropped bits (mirrors the hardware rounding)
+    if guard and (sticky or (norm_mant & 1)):
+        norm_mant += 1
+        if norm_mant >= (1 << dtype.mant_bits):
+            norm_mant = 0
+            overflow = 1  # rounding carry adjusts the exponent
         
     exp_sum = a_exp + b_exp - dtype.bias + overflow
     
@@ -100,7 +113,17 @@ def floatml_add(a: float, b: float, dtype: FloatML) -> float:
         
     normalizedSumExt = (mantSumExt << lz) & ((1 << 64) - 1)
     finalMantissa = (normalizedSumExt >> (W - 1 - dtype.mant_bits)) & ((1 << dtype.mant_bits) - 1)
-    
+
+    # Round-to-nearest-even on the dropped bits (mirrors the hardware rounding)
+    dropped = normalizedSumExt & ((1 << (W - 1 - dtype.mant_bits)) - 1)
+    guard = (dropped >> (W - 2 - dtype.mant_bits)) & 1
+    sticky = (dropped & ((1 << (W - 2 - dtype.mant_bits)) - 1)) != 0
+    if guard and (sticky or (finalMantissa & 1)):
+        finalMantissa += 1
+        if finalMantissa >= (1 << dtype.mant_bits):
+            finalMantissa = 0
+            lz -= 1  # rounding carry: exponent gains one, same effect as lz shift by -1
+
     expAdjustSInt = 1 - lz
     newExpSInt = larger_exp + expAdjustSInt
     
@@ -1078,3 +1101,24 @@ def multi_head_attention_hw(X, Wq, Wk, Wv, Wo, dtype, numHeads):
     
     Y = matmul_hw(Context, Wo, dtype)
     return Y
+
+
+def _dequant_attention_weights(Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales, weight_bits):
+    """Dequantize the four projection matrices (shared per-tensor or
+    per-channel-by-column scales), mirroring the scaled CastOp at the HW io boundary."""
+    return tuple(
+        dequant_hw(W_int, scales, act_dtype, weight_bits)
+        for W_int in (Wq_int, Wk_int, Wv_int, Wo_int)
+    )
+
+
+def classical_attention_hw_wxay(X, Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales=(1.0,), weight_bits=8):
+    """Golden model of ClassicalAttentionHW with weight-only quantization (wXaY)."""
+    Wq, Wk, Wv, Wo = _dequant_attention_weights(Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales, weight_bits)
+    return classical_attention_hw(X, Wq, Wk, Wv, Wo, act_dtype)
+
+
+def multi_head_attention_hw_wxay(X, Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, numHeads, scales=(1.0,), weight_bits=8):
+    """Golden model of ClassicalAttentionHW(numHeads>1) with weight-only quantization (wXaY)."""
+    Wq, Wk, Wv, Wo = _dequant_attention_weights(Wq_int, Wk_int, Wv_int, Wo_int, act_dtype, scales, weight_bits)
+    return multi_head_attention_hw(X, Wq, Wk, Wv, Wo, act_dtype, numHeads)

@@ -241,7 +241,7 @@ case class Sequential(
         
       case a: ClassicalAttention =>
         val seqLen = currentTensor.shape(0)
-        val comp = ClassicalAttentionHW(currentType, lType, seqLen, a.embedDim, a.numHeads, currentTensor.lanes, layerWeights.lanes)
+        val comp = ClassicalAttentionHW(currentType, currentType, lType, seqLen, a.embedDim, a.numHeads, currentTensor.lanes, layerWeights.lanes)
         comp.io.x <> currentTensor
         
         // Fork and slice the weights stream into 4 parts

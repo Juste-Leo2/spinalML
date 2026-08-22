@@ -3,6 +3,7 @@ package spinalML.attention
 import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
+import spinalML.dtypes.FloatML
 import spinalML.ops._
 import spinalML.activations._
 
@@ -31,15 +32,17 @@ case class ClassicalAttention(
   override def getBiasShape(): Seq[Int] = Seq(0) // No bias for simplicity in V1
 }
 
-case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
+case class ClassicalAttentionHW[T <: Data, TW <: Data, TAcc <: Data](
   dataType: HardType[T],
+  weightType: HardType[TW],
   accType: HardType[TAcc],
   seqLen: Int,
   embedDim: Int,
   numHeads: Int,
   xLanes: Int,
   wLanes: Int,
-  projLanes: Int = 1
+  projLanes: Int = 1,
+  weightScales: Seq[Double] = Seq(1.0)
 ) extends Component {
   require(projLanes >= 1, "projLanes must be >= 1")
   require(numHeads >= 1, "numHeads must be >= 1")
@@ -50,22 +53,37 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
 
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(seqLen, embedDim), xLanes))
-    val wq = slave(Tensor(dataType, Seq(embedDim, embedDim), wLanes))
-    val wk = slave(Tensor(dataType, Seq(embedDim, embedDim), wLanes))
-    val wv = slave(Tensor(dataType, Seq(embedDim, embedDim), wLanes))
-    val wo = slave(Tensor(dataType, Seq(embedDim, embedDim), wLanes))
+    val wq = slave(Tensor(weightType, Seq(embedDim, embedDim), wLanes))
+    val wk = slave(Tensor(weightType, Seq(embedDim, embedDim), wLanes))
+    val wv = slave(Tensor(weightType, Seq(embedDim, embedDim), wLanes))
+    val wo = slave(Tensor(weightType, Seq(embedDim, embedDim), wLanes))
     val y = master(Tensor(accType, Seq(seqLen, embedDim), lanes = 1))
   }
-  
+
+  // Weight-only quantization (wXaY): SInt weights feeding a FloatML activation
+  // domain are dequantized once per matrix at the io boundary (before the head
+  // forks) through a scaled cast. Any other combination keeps the legacy
+  // direct wiring. Scale contract is the same as Linear: length 1 (per-tensor)
+  // or embedDim (per-channel, one weight column per stream beat).
+  private val needsDequant = (dataType(), weightType()) match {
+    case (_: FloatML, _: SInt) => true
+    case _ => false
+  }
+
+  val wqIn = if (needsDequant) cast(io.wq, dataType, weightScales) else io.wq.asInstanceOf[Tensor[T]]
+  val wkIn = if (needsDequant) cast(io.wk, dataType, weightScales) else io.wk.asInstanceOf[Tensor[T]]
+  val wvIn = if (needsDequant) cast(io.wv, dataType, weightScales) else io.wv.asInstanceOf[Tensor[T]]
+  val woIn = if (needsDequant) cast(io.wo, dataType, weightScales) else io.wo.asInstanceOf[Tensor[T]]
+
   // 1. Projections per head: Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
   // Weight streams are column-major (each stream transaction = one weight column),
   // so head h owns the transaction block [h*headDim, (h+1)*headDim) = columns of Wq/Wk/Wv.
   // The projection stage runs at `projLanes` parallelism (transistor/speed knob).
   val xForks = StreamFork(io.x.stream, 3 * numHeads)
-  val wqForks = StreamFork(io.wq.stream, numHeads)
-  val wkForks = StreamFork(io.wk.stream, numHeads)
-  val wvForks = StreamFork(io.wv.stream, numHeads)
-  
+  val wqForks = StreamFork(wqIn.stream, numHeads)
+  val wkForks = StreamFork(wkIn.stream, numHeads)
+  val wvForks = StreamFork(wvIn.stream, numHeads)
+
   def combineContexts(ctxs: Seq[Tensor[T]]): Tensor[T] = {
     if (ctxs.length == 1) ctxs.head
     else {
@@ -76,7 +94,7 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
       combineContexts(combined)
     }
   }
-  
+
   val contexts: Seq[Tensor[T]] = for (h <- 0 until numHeads) yield {
     val xQ = Tensor(dataType, io.x.shape, xLanes)
     xQ.stream << xForks(3 * h)
@@ -84,12 +102,12 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
     xK.stream << xForks(3 * h + 1)
     val xV = Tensor(dataType, io.x.shape, xLanes)
     xV.stream << xForks(3 * h + 2)
-    
-    val wqHW = Tensor(dataType, io.wq.shape, wLanes)
+
+    val wqHW = Tensor(dataType, wqIn.shape, wLanes)
     wqHW.stream << wqForks(h)
-    val wkHW = Tensor(dataType, io.wk.shape, wLanes)
+    val wkHW = Tensor(dataType, wkIn.shape, wLanes)
     wkHW.stream << wkForks(h)
-    val wvHW = Tensor(dataType, io.wv.shape, wLanes)
+    val wvHW = Tensor(dataType, wvIn.shape, wLanes)
     wvHW.stream << wvForks(h)
     
     // Keep transactions [h*headDim, (h+1)*headDim) of the column-major weight stream,
@@ -105,16 +123,17 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
     val k = matmul(repack(xK, projLanes), repack(wkH, projLanes), dataType)
     val v = matmul(repack(xV, projLanes), repack(wvH, projLanes), dataType)
     
-    // 2. Transpose K per head: K_T (Requires BRAM buffering)
-    val k_t = transpose(k)
-    
-    // 3. Dot Product per head: Q * K_T
-    // Add queues to prevent StreamFork deadlocks!
-    // k_t must be fully buffered in matmul's BRAM before it can consume q.
-    // So q must be buffered until k_t is fully loaded.
+    // 2./3. Dot Product per head: Q * K^T
+    // A matmul output streams row-major while a matmul B-input consumes
+    // columns, so the raw K stream already carries K^T columns: wiring it
+    // through an explicit TransposeOp would cancel the implicit one and
+    // compute softmax(Q*K) instead of softmax(Q*K^T). Only buffering is
+    // needed (B must fill the matmul BRAM before Q is consumed).
+    val k_fifo = Tensor(dataType, Seq(headDim, seqLen), 1)
+    k_fifo.stream << k.stream.queue(seqLen * headDim)
     val q_fifo = Tensor(dataType, q.shape, q.lanes)
     q_fifo.stream << q.stream.queue(seqLen * headDim)
-    val scores = matmul(q_fifo, k_t, dataType)
+    val scores = matmul(q_fifo, k_fifo, dataType)
     
     // 4. Scale: scores / sqrt(headDim)
     // Currently approximated or skipped since it's just a constant scale.
@@ -128,9 +147,15 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
     probs.io.x <> scores_repacked
     
     // 6. Attention per head: probs * V
-    val v_fifo = Tensor(dataType, v.shape, v.lanes)
-    v_fifo.stream << v.stream.queue(seqLen * headDim)
-    val v_repacked = repack(v_fifo, seqLen)
+    // The context matmul consumes B column-major (one column per beat). V comes
+    // out of the projection matmul row-major, so transpose it first: the stream
+    // then carries V columns sequentially. The logical orientation is re-declared
+    // as [seqLen, headDim] for the downstream shape checks.
+    val v_t = transpose(v)
+    val v_fifo = Tensor(dataType, v_t.shape, v_t.lanes)
+    v_fifo.stream << v_t.stream.queue(seqLen * headDim)
+    val v_repacked = Tensor(dataType, Seq(seqLen, headDim), seqLen)
+    v_repacked.stream << repack(v_fifo, seqLen).stream
     val context = matmul(probs.io.y, v_repacked, dataType)
     
     // Repack to one row per chunk so the axis-1 concatenation aligns rows block-wise
@@ -140,7 +165,7 @@ case class ClassicalAttentionHW[T <: Data, TAcc <: Data](
   // 7. Concatenate heads along embedDim, then Output Projection: context * Wo
   val context = combineContexts(contexts)
   val context_repacked = repack(context, wLanes)
-  val y_out = matmul(context_repacked, io.wo, accType)
-  
+  val y_out = matmul(context_repacked, woIn, accType)
+
   io.y <> y_out
 }

@@ -53,9 +53,22 @@ object FloatGolden {
 
     val sign = sa != sb
     val prod = ((1 << m) | ma) * ((1 << m) | mb)  // unbounded: cannot wrap
-    val ovf = (prod >> (2 * m + 1)) & 1
-    val normMant = if (ovf != 0) (prod >> (m + 1)) & ((1 << m) - 1)
+    var ovf = (prod >> (2 * m + 1)) & 1
+    var normMant = if (ovf != 0) (prod >> (m + 1)) & ((1 << m) - 1)
                    else (prod >> m) & ((1 << m) - 1)
+    val droppedM = if (ovf != 0) prod & ((1 << (m + 1)) - 1)
+                   else prod & ((1 << m) - 1)
+    val guardM = if (ovf != 0) (droppedM >> m) & 1
+                 else (droppedM >> (m - 1)) & 1
+    val stickyM = if (ovf != 0) (droppedM & ((1 << m) - 1)) != 0
+                  else (droppedM & ((1 << (m - 1)) - 1)) != 0
+
+    // Round-to-nearest-even (mirrors the hardware)
+    if (guardM != 0 && (stickyM || (normMant & 1) != 0)) {
+      normMant += 1
+      if (normMant >= (1 << m)) { normMant = 0; ovf = 1 } // carry adjusts the exponent
+    }
+
     val expSum = ea + eb - bias + ovf             // unbounded: cannot wrap
 
     if (expSum <= 0) pack(false, 0, 0, e, m)      // underflow -> zero
@@ -93,8 +106,19 @@ object FloatGolden {
     val w = m + guardBits + 2
     val lz = if (raw == 0) 0 else math.max(0, w - BigInt(raw).bitLength)
     val normalized = raw << lz
-    val finalMant = (normalized >> (w - 1 - m)) & ((1 << m) - 1)
-    val newExp = lExp + 1 - lz
+    var finalMant = (normalized >> (w - 1 - m)) & ((1 << m) - 1)
+
+    // Round-to-nearest-even (mirrors the hardware)
+    val dropped = normalized & ((1 << (w - 1 - m)) - 1)
+    val guardA = (dropped >> (w - 2 - m)) & 1
+    val stickyA = (dropped & ((1 << (w - 2 - m)) - 1)) != 0
+    var lzAdj = lz
+    if (guardA != 0 && (stickyA || (finalMant & 1) != 0)) {
+      finalMant += 1
+      if (finalMant >= (1 << m)) { finalMant = 0; lzAdj -= 1 } // carry adjusts the exponent
+    }
+
+    val newExp = lExp + 1 - lzAdj
 
     if (sumIsZeroEnc || raw == 0 || newExp <= 0) pack(false, 0, 0, e, m)
     else if (newExp >= ((1 << e) - 1)) pack(lSign, (1 << e) - 1, 0, e, m)
@@ -169,6 +193,26 @@ class FloatSweepTest extends AnyFunSuite {
       bits
     }
     val pairs = Seq.fill(20000)((randomCanonical(), randomCanonical()))
+    runSweep(e, m, pairs)
+  }
+
+  test("Absorption sweep wide format") {
+    // Systematic near-1.0 absorption coverage: add(x, tiny) collapsing to x.
+    // This corner escaped random sampling and once broke softmax normalization
+    // (add(1.0, 0.0074) -> 1.0 instead of rounding up).
+    val e = 8
+    val m = 7
+    val allCanonical = (0 until (1 << (1 + e + m))).filter(b => FloatGolden.isCanonical(b, e, m))
+    val smallExps = (110 to 127).toSet
+    val smalls = allCanonical.filter { b =>
+      val exp = (b >> m) & ((1 << e) - 1)
+      smallExps.contains(exp) || b == 0
+    }
+    val ones = allCanonical.filter { b =>          // values in [1.9375 .. 4.0625] +- signs
+      val exp = (b >> m) & ((1 << e) - 1)
+      exp == 127 || exp == 128 || exp == 129
+    }
+    val pairs = for (a <- ones; b <- smalls) yield (a, b)
     runSweep(e, m, pairs)
   }
 }

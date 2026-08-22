@@ -35,23 +35,32 @@ object Float {
     
     // If MSB is 1, the product overflowed (e.g. 1.x * 1.y = 10.z) and needs a 1-bit right shift
     val overflow = mantProd.msb
-    
-    // 3. Exponent Addition
+
+    // 3. Renormalize Mantissa (Round-to-nearest-even on the dropped bits)
+    val normMantProd = Mux(overflow,
+      mantProd(2 * mantBits downto mantBits + 1),
+      mantProd(2 * mantBits - 1 downto mantBits)
+    )
+    val guardM = Mux(overflow, mantProd(mantBits), mantProd(mantBits - 1))
+    val stickyM = Mux(overflow,
+      (mantProd(mantBits - 1 downto 0) =/= 0),
+      (mantProd(mantBits - 2 downto 0) =/= 0)
+    )
+    val roundUpM = guardM && (stickyM || normMantProd.lsb)
+    val mantRoundedExt = normMantProd +^ roundUpM.asUInt
+    val mantOvM = mantRoundedExt.msb
+    val finalMantM = Mux(mantOvM, U(0, mantBits bits), mantRoundedExt(mantBits - 1 downto 0))
+
+    // 4. Exponent Addition
     // Widened so the sum can never wrap before the saturation check
     // (e.g. FP4: 2+2-1+1 = 4 overflows a 3-bit signed accumulator)
     val expSumWidth = expBits + 3
     val expSumSInt = a.exponent.intoSInt.resize(expSumWidth) +
       b.exponent.intoSInt.resize(expSumWidth) -
       bias +
-      overflow.asUInt.intoSInt.resized
-    
-    // 4. Renormalize Mantissa
-    // Extract the exact mantBits after the leading 1
-    val normMantProd = Mux(overflow, 
-      mantProd(2 * mantBits downto mantBits + 1),
-      mantProd(2 * mantBits - 1 downto mantBits)
-    )
-    
+      overflow.asUInt.intoSInt.resized +
+      mantOvM.asUInt.intoSInt.resized                 // rounding carry adjusts the exponent
+
     // 5. Overflow / Underflow Checks and Final Assignment
     when(a_is_zero || b_is_zero || expSumSInt <= 0) {
       // Underflow or Zero
@@ -65,7 +74,7 @@ object Float {
     } otherwise {
       // Normal range
       c.exponent := expSumSInt.asUInt.resized
-      c.mantissa := normMantProd
+      c.mantissa := finalMantM
     }
     
     c
@@ -168,9 +177,20 @@ object Float {
     val normalizedSumExt = mantSumExt << lz
     val finalMantissa = normalizedSumExt(W - 2 downto W - 1 - mantBits)
     
+    // Round-to-nearest-even on the dropped bits:
+    // guard bit sits just below the mantissa window, sticky is the OR of the rest
+    val guardA = normalizedSumExt(W - 2 - mantBits)
+    val stickyA = (normalizedSumExt(W - 3 - mantBits downto 0) =/= 0)
+    val roundUpA = guardA && (stickyA || finalMantissa.lsb)
+    val mantRoundedExt = finalMantissa +^ roundUpA.asUInt
+    val mantOvA = mantRoundedExt.msb
+    val finalMantA = Mux(mantOvA, U(0, mantBits bits), mantRoundedExt(mantBits - 1 downto 0))
+    
     val expAdjustSInt = 1 - lz.intoSInt
     // Widened so exponent+1 can never wrap before the saturation check
-    val newExpSInt = larger.exponent.intoSInt.resize(expBits + 3) + expAdjustSInt.resize(expBits + 3)
+    val newExpSInt = larger.exponent.intoSInt.resize(expBits + 3) +
+      expAdjustSInt.resize(expBits + 3) +
+      mantOvA.asUInt.intoSInt.resized               // rounding carry adjusts the exponent
     
     // 5. Pack result
     c.sign := larger.sign
@@ -189,7 +209,7 @@ object Float {
       c.mantissa := 0
     } otherwise {
       c.exponent := newExpSInt.asUInt.resized
-      c.mantissa := finalMantissa
+      c.mantissa := finalMantA
     }
     
     c
