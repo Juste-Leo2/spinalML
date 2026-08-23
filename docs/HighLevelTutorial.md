@@ -59,14 +59,15 @@ Ready-to-compile templates live in [`spinalML/src/spinalML/examples/`](../spinal
 | :--- | :--- | :--- |
 | Convolution | `Conv1D(inChannels, outChannels, kernelSize)` | Valid-padding (`L_out = L − K + 1`). Compute in wide dtype (`customType = Some(I32())`) to avoid overflow. |
 | | `Conv2D(inChannels, outChannels, kernelSize)` | `[H, W]` or `[H, W, C]` input, valid padding. Multi-channel supported. |
-| Dense | `Linear(inFeatures, outFeatures)` | Treats its input as **a single row** of `inFeatures`: insert `Flatten()` first whenever `seqLen > 1`. Supports wXaY (see §3). |
+| Dense | `Linear(inFeatures, outFeatures)` | Features-last convention: consumes `[..., inFeatures]` and produces `[..., outFeatures]`. Multi-row native — a `[M, K]` input (e.g. attention output) flows through without `Flatten`. Supports wXaY (see §3). |
 | Activations | `ReLU()`, `LeakyReLU(shift)`, `Sigmoid()`, `Tanh()` | Shape-preserving, no weights. |
 | | `Softmax()` | Over the last dimension of a `[L, C]` tensor. Float domain strongly recommended. |
 | Normalization | `BatchNorm1D(features)`, `LayerNorm1D(features)` | Inference-only scale & shift. |
 | Pooling | `MaxPool1D(poolSize, stride)`, `AvgPool1D(poolSize, stride)` | Multi-channel; `AvgPool1D` requires `isPow2(poolSize)` (shift-based division). |
 | | `MaxPool2D(poolSize, stride)`, `AvgPool2D(poolSize, stride)` | `[H, W(, C)]`; `AvgPool2D` requires `isPow2(poolSize²)`. The C-lane output is repacked back to `lanes = 1` automatically. BRAM line buffers inside. |
 | Attention | `ClassicalAttention(embedDim, numHeads)` | Scaled dot-product attention + output projection. `numHeads = 1` gives classical attention; any power-of-2 `numHeads` with `embedDim % numHeads == 0` gives multi-head attention. Float activations required. Supports wXaY (see §3). |
-| Utilities | `Flatten()`, `Repack(newLanes)` | Metadata / gearbox only. |
+| Utilities | `Flatten()` (produces `[1, totalElements]`), `Repack(newLanes)` | Metadata / gearbox only. |
+| DAG merges | `Add(a, b)`, `Concat(a, b, axis = 0)` | Merge two earlier graph nodes by index (see §7). Identical shapes/dtypes required on both branches (`Cast`/`Repack` to align). |
 | Precision | `Requantize(shift, targetType)` | SInt -> smaller SInt (shift + saturate). |
 | | `Cast(targetType)` | Mid-network dtype change, e.g. SInt -> BF16 before a float head. |
 
@@ -129,11 +130,15 @@ The generated `Accelerator` exposes:
 Memory contents expected by the generated hardware:
 
 * **Image**: logical tensor flattened row-major (`[H][W][C]`, channel fastest), packed into
-  64-bit AXI words little-endian.
-* **Weights region**: layers in declaration order; for each layer its weights then its bias.
-  Matrices are stored row-major, one matrix row per stream beat. The attention layer expects
-  the four projection matrices **stacked**: `Wq | Wk | Wv | Wo`, i.e. a single
-  `[4 × embedDim, embedDim]` block (Wq rows first).
+  64-bit AXI words little-endian (element 0 = lowest bits of the word).
+* **Weights region**: layers in declaration order; for each layer its weights then its bias,
+  packed into 64-bit AXI words little-endian as well.
+  * `Linear`: the stored matrix is `[outFeatures, inFeatures]` (torch-style `W^T`), one weight
+    row per stream beat.
+  * Convolutions / attention: row-major `[K·K·C, N]` blocks. The attention layer expects
+    the four projection matrices **stacked**: `Wq | Wk | Wv | Wo`, i.e. a single
+    `[4 × embedDim, embedDim]` block (Wq rows first).
+  * Biases: one element per byte-addressable slot, streamed sequentially (`lanes = 1`).
 
 ---
 
@@ -149,9 +154,9 @@ From [`HighLevel2DTemplate.scala`](../spinalML/src/spinalML/examples/HighLevel2D
 | 3 | `ReLU()` | `[6, 6, 4]` |
 | 4 | `MaxPool2D(K2, s2)` | `[3, 3, 4]` |
 | 5 | `AvgPool2D(K2, s2)` | `[1, 1, 4]` |
-| 6 | `Flatten()` | `[4, 1]` |
-| 7 | `Linear(4 -> 10)` computed in I32 | `[10, 1]` |
-| 8 | `Requantize(shift = 4, I8)` | `[10, 1]` |
+| 6 | `Flatten()` | `[1, 4]` |
+| 7 | `Linear(4 -> 10)` computed in I32 | `[1, 10]` |
+| 8 | `Requantize(shift = 4, I8)` | `[1, 10]` |
 
 The builder deduces every intermediate shape and final output shape automatically
 (`getOutShape` chaining); you never declare them by hand.
@@ -197,13 +202,59 @@ Run the suites with:
 
 ---
 
-## 7. Current limitations
+## 7. Beyond linear chains: DAG topologies
 
-* **Linear graph only**: `Sequential` executes layers strictly one after another. Skip
-  connections / multi-branch topologies (ResNet-like DAGs) are future work — see the roadmap.
-* `Linear` consumes its whole input as one row; use `Flatten()` for sequence inputs (roadmap).
+`Sequential` generalizes from a linear chain to a **directed acyclic graph (DAG)**: any
+layer output can feed several consumers, and `Add`/`Concat` merge nodes can combine
+several branches — enabling ResNet-style skip connections and multi-branch heads.
+
+Nodes are identified by position in the graph: **node 0 is the network input**, node *k*
+is the output of the *k*-th spec entry. Standard layers implicitly consume the previous
+node; merge layers take two explicit references that must point **backwards**, which makes
+cycles impossible by construction:
+
+```scala
+Accelerator(dataType = BF16(), inputShape = Seq(2, 4),
+  modelSpec = Seq(
+    Linear(4, 4),          // node 1 <- node 0 (implicit)
+    ReLU(),                // node 2 <- node 1
+    Linear(4, 4),          // node 3 <- node 2      <- main branch
+                           //                        (node 0 waits in its FIFO)
+    Add(a = 0, b = 3),     // node 4 = node 0 + node 3   <- skip connection
+    ReLU()                 // node 5 <- node 4  = accelerator output
+  ))
+```
+
+A complete working example lives in
+[`ResidualMLPTemplate.scala`](../spinalML/src/spinalML/examples/ResidualMLPTemplate.scala),
+validated bit-exactly through the SoC flow by
+[`DagTopologyTest.scala`](../spinalML/test/src/spinalML/nn/DagTopologyTest.scala).
+
+Rules enforced at elaboration:
+* References must satisfy `ref <= current index` (acyclic by construction) — forward
+  references are rejected.
+* Both merge inputs must share identical shapes and dtypes; insert `Cast`/`Repack`
+  layers on a branch to align them. Mismatches produce explicit error messages.
+* Every node must be consumed; the last node drives the accelerator output stream.
+
+Hardware cost model: when a node feeds more than one consumer, the builder inserts a
+stream fork; each deferred branch owns an exact-capacity FIFO (`TapBuffer`) holding one
+full tensor — safe for one-shot inference since the deferred consumer always drains it.
+Execution order still follows the spec list (topology support, not parallel scheduling);
+the shared AXI arbiter serializes weight fetches as before.
+
+---
+
+## 8. Current limitations
+
+* **One-shot inference contract**: every buffer holds one full tensor and each `start`
+  runs a whole inference — models are implicitly capped at what fits on-chip. The
+  multi-tile continuous execution model (weight residency, activation tiling, DAG tap
+  contract for streaming) is detailed in the [roadmap](roadmap.md), section 6.
 * Sub-byte activation dtypes (FP4) cannot be fetched by the DMA (byte-addressed path).
 * Weight double-buffers hold each parameter tensor entirely on-chip; very large models need
   the tiling roadmap items.
+* DAG execution follows spec order (no inter-branch parallel scheduling yet); `Concat`
+  supports axis 0 only for now.
 
 Track progress on all of these in the [roadmap](roadmap.md).

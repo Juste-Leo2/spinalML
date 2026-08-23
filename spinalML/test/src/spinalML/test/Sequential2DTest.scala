@@ -52,11 +52,12 @@ class Sequential2DTest extends AnyFunSuite {
   }
 
   test("Sequential with Cast to BF16 and float Softmax compilation") {
-    // Exercises mid-network dtype change (SInt -> FloatML) feeding a float-domain head
+    // Exercises mid-network dtype change (SInt -> FloatML) feeding a float-domain head:
+    // [6,6,1] -> Conv2D(K3) [4,4,1] -> Cast BF16 -> Flatten [1,16] -> Softmax over 16 logits
     SpinalConfig().generateVerilog(
       Sequential(
         globalDataType = I8(),
-        inputShape = Seq(8, 8, 1),
+        inputShape = Seq(6, 6, 1),
         layers = Seq(
           Conv2D(inChannels = 1, outChannels = 1, kernelSize = 3, customType = Some(I32())),
           Requantize(shift = 4, targetType = I8()),

@@ -5,7 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{FloatML, I4, I8, I16, FP4_E2M1, FP8_E4M3, BF16}
+import spinalML.dtypes.{FloatML, I4, I8, I16, I32, FP4_E2M1, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Wrapper component
@@ -165,6 +165,64 @@ class LinearTest extends AnyFunSuite {
         dut.clockDomain.waitSampling(1)
       }
       
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  test("Test Linear Layer multi-row: Y = A * W + b with M=2 on I8 tensors") {
+    val A = Seq(Seq(1, -2, 3), Seq(0, 1, -4))
+    val Wflat = Seq(1, 2, 0, 0, 1, -1, -1, 0, 1, 2, -1, 1)
+    val bias = Seq(1, 2, 3, 4)
+    val expected = Seq(-2, -3, 5, 11, 3, 7, -1, -1)
+
+    SimConfig.withWave.compile(LinearTestCompMulti(I8(), I32())).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.a.stream.valid #= false
+      dut.io.w.stream.valid #= false
+      dut.io.b.stream.valid #= false
+      dut.io.y.stream.ready #= true
+
+      dut.clockDomain.waitSampling()
+
+      dut.io.w.stream.valid #= true
+      for (beat <- 0 until 4) {
+        for (i <- 0 until 3) {
+          dut.io.w.stream.payload(i) #= Wflat(beat * 3 + i)
+        }
+        dut.clockDomain.waitSamplingWhere(dut.io.w.stream.ready.toBoolean)
+      }
+      dut.io.w.stream.valid #= false
+
+      dut.io.b.stream.valid #= true
+      for (n <- 0 until 4) {
+        dut.io.b.stream.payload(0) #= bias(n)
+        dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
+      }
+      dut.io.b.stream.valid #= false
+
+      dut.io.a.stream.valid #= true
+      for (m <- 0 until 2) {
+        for (i <- 0 until 3) {
+          dut.io.a.stream.payload(i) #= A(m)(i)
+        }
+        dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+      }
+      dut.io.a.stream.valid #= false
+
+      val collected = scala.collection.mutable.ArrayBuffer[Int]()
+      var timeout = 0
+      while (collected.length < expected.length && timeout < 10000) {
+        if (dut.io.y.stream.valid.toBoolean && dut.io.y.stream.ready.toBoolean) {
+          collected += dut.io.y.stream.payload(0).toInt
+        }
+        dut.clockDomain.waitSampling()
+        timeout += 1
+      }
+
+      assert(timeout < 10000, s"Timeout: collected ${collected.length}/${expected.length}")
+      assert(collected.toSeq == expected,
+        s"Expected $expected, got $collected")
       dut.clockDomain.waitSampling(5)
     }
   }

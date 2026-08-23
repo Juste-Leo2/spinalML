@@ -59,7 +59,11 @@ case class Linear(
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   
-  override def getOutShape(inShape: Seq[Int]): Seq[Int] = Seq(outFeatures, 1)
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
+    require(inShape.last == inFeatures,
+      s"Linear expects its input's last dimension to be inFeatures ($inFeatures), got shape $inShape")
+    inShape.dropRight(1) :+ outFeatures
+  }
   override def getWeightShape(): Seq[Int] = Seq(inFeatures, outFeatures)
   override def getBiasShape(): Seq[Int] = Seq(1, outFeatures)
 }
@@ -180,7 +184,7 @@ case class Cast(targetType: HardType[Data]) extends LayerSpec {
 }
 
 case class Flatten() extends LayerSpec {
-  override def getOutShape(inShape: Seq[Int]): Seq[Int] = Seq(inShape.product, 1)
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = Seq(1, inShape.product)
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
@@ -193,6 +197,32 @@ case class Requantize(shift: Int, targetType: HardType[Data]) extends LayerSpec 
 }
 
 case class Repack(newLanes: Int) extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+/**
+ * DAG merge nodes: consume two earlier tensors by node index (position in the
+ * modelSpec, where node 0 is the network input and node k is the output of the
+ * k-th spec entry). References must point strictly backwards, which makes the
+ * graph acyclic by construction.
+ *
+ * Their real shape/type inference is performed by the Sequential builder, which
+ * knows the shapes of both referenced nodes; getOutShape is therefore unused.
+ */
+case class Add(a: Int, b: Int) extends LayerSpec {
+  require(a >= 0 && b >= 0, "Add node references must be non-negative")
+  require(a != b, "Add requires two distinct nodes")
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+case class Concat(a: Int, b: Int, axis: Int = 0) extends LayerSpec {
+  require(a >= 0 && b >= 0, "Concat node references must be non-negative")
+  require(a != b, "Concat requires two distinct nodes")
+  require(axis == 0, "Concat supports axis 0 only (sequential juxtaposition)")
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)

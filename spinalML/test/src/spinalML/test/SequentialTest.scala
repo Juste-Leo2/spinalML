@@ -22,7 +22,8 @@ object SequentialTest {
       val layers = Seq(
         Conv2D(inChannels=1, outChannels=1, kernelSize=3),
         ReLU(),
-        Linear(inFeatures=36, outFeatures=1) // 8x8 -> 6x6 = 36 features
+        Flatten(),
+        Linear(inFeatures=36, outFeatures=1) // 6x6 = 36 features
       )
       
       val io = new Bundle {

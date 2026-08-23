@@ -65,6 +65,7 @@ object HighLevelTemplateVerilog extends App {
 > - **Manual Repacking**: Use `Repack(newLanes)` to dynamically change the physical bus width between layers to save FPGA resources.
 > - **Weight-only Quantization (wXaY)**: declare `customWeightType = Some(I8())` and `weightScales` (per-tensor or per-channel) on `Linear` and `ClassicalAttention` to keep float activations with compact integer weights.
 > - **2D Vision & Transformers**: `MaxPool2D`/`AvgPool2D`, `Sigmoid`, `Tanh` and `ClassicalAttention(embedDim, numHeads)` (classical or multi-head) are all first-class citizens of the API.
+> - **DAG Topologies**: go beyond linear chains with explicit merge nodes — `Add(a, b)` and `Concat(a, b)` reference earlier graph nodes for ResNet-style skip connections (see the [High-Level Tutorial](HighLevelTutorial.md) §7).
 
 ---
 
