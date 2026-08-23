@@ -132,6 +132,52 @@ case class AvgPool1D(poolSize: Int, stride: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
+case class MaxPool2D(poolSize: Int, stride: Int) extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
+    require(inShape.length >= 2 && inShape.length <= 3, "MaxPool2D requires a 2D (H, W) or 3D (H, W, C) input shape")
+    val h = inShape(0)
+    val w = inShape(1)
+    val hOut = (h - poolSize) / stride + 1
+    val wOut = (w - poolSize) / stride + 1
+    if (inShape.length == 3) Seq(hOut, wOut, inShape(2)) else Seq(hOut, wOut)
+  }
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+case class AvgPool2D(poolSize: Int, stride: Int) extends LayerSpec {
+  require(isPow2(poolSize * poolSize), "AvgPool2D requires isPow2(poolSize*poolSize) (shift-based division)")
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
+    require(inShape.length >= 2 && inShape.length <= 3, "AvgPool2D requires a 2D (H, W) or 3D (H, W, C) input shape")
+    val h = inShape(0)
+    val w = inShape(1)
+    val hOut = (h - poolSize) / stride + 1
+    val wOut = (w - poolSize) / stride + 1
+    if (inShape.length == 3) Seq(hOut, wOut, inShape(2)) else Seq(hOut, wOut)
+  }
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+case class Sigmoid() extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+case class Tanh() extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+}
+
+case class Cast(targetType: HardType[Data]) extends LayerSpec {
+  override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
+  override def outType(default: HardType[Data]) = targetType
+}
+
 case class Flatten() extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = Seq(inShape.product, 1)
   override def getWeightShape(): Seq[Int] = Seq(0)

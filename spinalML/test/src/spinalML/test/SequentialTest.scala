@@ -1,5 +1,6 @@
 package spinalML.test
 
+import org.scalatest.funsuite.AnyFunSuite
 import spinal.core._
 import spinal.lib._
 import spinal.core.sim._
@@ -9,7 +10,7 @@ import spinalML.nn._
 import spinalML.tensors.Tensor
 
 object SequentialTest {
-  def main(args: Array[String]): Unit = {
+  def run(): Unit = {
     // 1. Configs
     val axiDataWidth = 64
     val axiConfig = Axi4Config(addressWidth = 32, dataWidth = axiDataWidth, idWidth = 4)
@@ -104,5 +105,13 @@ object SequentialTest {
       assert(validCount == 1, s"Expected 1 outputs, got $validCount")
       println("Sequential hardware simulation successful!")
     }
+  }
+
+  def main(args: Array[String]): Unit = run()
+}
+
+class SequentialTest extends AnyFunSuite {
+  test("Sequential SoC simulation (Conv2D + ReLU + Linear over AXI DMA)") {
+    SequentialTest.run()
   }
 }

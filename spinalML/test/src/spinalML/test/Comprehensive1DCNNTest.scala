@@ -1,12 +1,14 @@
 package spinalML.test
 
+import org.scalatest.funsuite.AnyFunSuite
 import spinal.core.sim._
 import spinal.core._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.AxiMemorySim
 import spinalML.examples.Comprehensive1DCNN
 
-object Comprehensive1DCNNTest extends App {
+object Comprehensive1DCNNTest {
+  def run(): Unit = {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   
   SimConfig.withWave.compile(Comprehensive1DCNN(axiConfig)).doSim { dut =>
@@ -72,5 +74,14 @@ object Comprehensive1DCNNTest extends App {
     
     assert(validCount == 1, s"Expected 1 output stream transaction, got $validCount")
     println("Comprehensive1DCNN Simulation Successful!")
+  }
+  }
+
+  def main(args: Array[String]): Unit = run()
+}
+
+class Comprehensive1DCNNTest extends AnyFunSuite {
+  test("Comprehensive1DCNN SoC simulation (AXI4 DMA + AXI-Lite control)") {
+    Comprehensive1DCNNTest.run()
   }
 }

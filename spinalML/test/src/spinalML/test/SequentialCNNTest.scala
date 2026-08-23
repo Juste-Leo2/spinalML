@@ -7,7 +7,8 @@ import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.AxiMemorySim
 import spinalML.examples.SequentialCNN
 
-object SequentialCNNTest extends App {
+object SequentialCNNTest {
+  def run(): Unit = {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   
   SimConfig.withWave.compile(SequentialCNN(axiConfig)).doSim { dut =>
@@ -86,5 +87,14 @@ object SequentialCNNTest extends App {
     
     assert(validCount == 1, s"Expected 1 output, got $validCount")
     println("SequentialCNN Simulation Successful!")
+  }
+  }
+
+  def main(args: Array[String]): Unit = run()
+}
+
+class SequentialCNNTest extends AnyFunSuite {
+  test("SequentialCNN SoC simulation (AXI4 DMA + AXI-Lite control)") {
+    SequentialCNNTest.run()
   }
 }

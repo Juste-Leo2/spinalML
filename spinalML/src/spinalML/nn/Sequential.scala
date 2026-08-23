@@ -6,9 +6,9 @@ import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
 import spinalML.tensors.Tensor
 import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => LinearHW, batchnorm}
-import spinalML.ops.{reshape, repack, flatten}
-import spinalML.activations.{relu, leaky_relu}
-import spinalML.poolings.{maxpool1d, avgpool1d}
+import spinalML.ops.{reshape, repack, flatten, cast}
+import spinalML.activations.{relu, leaky_relu, sigmoid, tanh}
+import spinalML.poolings.{maxpool1d, avgpool1d, maxpool2d, avgpool2d}
 import spinalML.attention._
 
 case class Sequential(
@@ -71,7 +71,10 @@ case class Sequential(
   triggerIdx += 1
 
   // Use Automatic Double Buffering instead of a simple queue
-  val imgBufferSize = 1024 // e.g. 1024 elements per bank
+  // The double-buffer contract tiles exactly `depth` elements per bank: the
+  // buffer MUST be sized to the exact tensor size (any floor like max(16, n)
+  // deadlocks small tensors, as tileReady would never assert).
+  val imgBufferSize = inputShape.product
   val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = 1)
   imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream
   
@@ -129,7 +132,7 @@ case class Sequential(
       triggerIdx += 1
       currentMemoryOffset += elements * (wType.getBitsWidth / 8)
       
-      val wBufferSize = Math.max(16, elements) // Double buffer size for weights
+      val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
       wDoubleBuffer.io.streamIn << dmaW.io.outStream.stream
       
@@ -167,7 +170,7 @@ case class Sequential(
       triggerIdx += 1
       currentMemoryOffset += elements * (lType.getBitsWidth / 8)
       
-      val bBufferSize = Math.max(16, elements)
+      val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
       val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
       bDoubleBuffer.io.streamIn << dmaB.io.outStream.stream
       
@@ -223,7 +226,28 @@ case class Sequential(
         val c = if (currentTensor.shape.length > 1) currentTensor.shape(1) else 1
         val repacked = if (currentTensor.lanes != c) repack(currentTensor, c) else currentTensor
         avgpool1d(repacked, ap.poolSize, ap.stride)
-        
+
+      case mp2: MaxPool2D =>
+        // Pooling 2D consumes one element per beat (lanes = 1) and emits C lanes per beat.
+        // Repack on both sides to preserve the lanes = 1 invariant between layers.
+        val in = if (currentTensor.lanes != 1) repack(currentTensor, 1) else currentTensor
+        val pooled = maxpool2d(in, mp2.poolSize, mp2.stride)
+        if (pooled.lanes != 1) repack(pooled, 1) else pooled
+
+      case ap2: AvgPool2D =>
+        val in = if (currentTensor.lanes != 1) repack(currentTensor, 1) else currentTensor
+        val pooled = avgpool2d(in, ap2.poolSize, ap2.stride)
+        if (pooled.lanes != 1) repack(pooled, 1) else pooled
+
+      case _: Sigmoid =>
+        sigmoid(currentTensor)
+
+      case _: Tanh =>
+        tanh(currentTensor)
+
+      case _: Cast =>
+        cast(currentTensor, lType)
+
       case _: Flatten =>
         flatten(currentTensor)
         
