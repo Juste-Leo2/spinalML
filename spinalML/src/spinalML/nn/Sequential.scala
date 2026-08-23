@@ -254,7 +254,14 @@ case class Sequential(
       case l: Linear =>
         val reshaped = reshape(currentTensor, Seq(1, l.inFeatures))
         val repackedTensor = repack(reshaped, l.inFeatures)
-        val linOut = LinearHW(repackedTensor, layerWeights, layerBias, lType)
+        // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
+        // are dequantized to the activation float dtype inside the layer.
+        val linOut = layerWeights.dataType() match {
+          case _: SInt =>
+            spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales)
+          case _ =>
+            LinearHW(repackedTensor, layerWeights, layerBias, lType)
+        }
         reshape(linOut, Seq(l.outFeatures, 1))
         
       case rq: Requantize =>
@@ -265,7 +272,9 @@ case class Sequential(
         
       case a: ClassicalAttention =>
         val seqLen = currentTensor.shape(0)
-        val comp = ClassicalAttentionHW(currentType, currentType, lType, seqLen, a.embedDim, a.numHeads, currentTensor.lanes, layerWeights.lanes)
+        // wType carries the (possibly quantized) weight dtype declared via
+        // customWeightType; scales drive the in-layer dequantization.
+        val comp = ClassicalAttentionHW(currentType, wType, lType, seqLen, a.embedDim, a.numHeads, currentTensor.lanes, layerWeights.lanes, weightScales = a.weightScales)
         comp.io.x <> currentTensor
         
         // Fork and slice the weights stream into 4 parts

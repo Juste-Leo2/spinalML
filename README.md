@@ -15,6 +15,7 @@ The core objective of spinalML is to provide a complete and tested set of tools 
 To understand the direction and the capabilities of this project, please refer to the following documents:
 
 *   [Getting Started](docs/getting_started.md): A tutorial to understand core concepts, tensors, streams, and how to build your first ML hardware layers.
+*   [High-Level Tutorial](docs/HighLevelTutorial.md): The complete guide to the PyTorch-like API: layer catalog, wXaY quantization, memory layout and SoC simulation.
 *   [Operations Support](docs/opsSupport.md): A comprehensive matrix of all machine learning operations and their hardware validation status.
 *   [API Reference](docs/opsDocs.md): The detailed technical documentation and signatures for all supported hardware operations.
 *   [Roadmap](docs/roadmap.md): The step-by-step checklist of the project's development phases.

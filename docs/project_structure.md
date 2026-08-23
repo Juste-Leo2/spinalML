@@ -113,6 +113,7 @@ spinalML/
 │   │   │   ├── Comprehensive1DCNN.scala  # larger 1D CNN
 │   │   │   ├── HighLevelTemplate.scala   # template for the high-level nn API (1D)
 │   │   │   ├── HighLevel2DTemplate.scala # 2D CNN template: Conv2D + Pool2D + Linear
+│   │   │   ├── HighLevelAttentionTemplate.scala # wXaY MHA transformer block template
 │   │   │   └── DMATemplate.scala        # template with AXI4 DMA memory access
 │   │   └── utils/
 │   │       ├── Float.scala     # float bit-manipulation helpers
@@ -134,7 +135,7 @@ spinalML/
 │       ├── accelerator/        # MLAcceleratorTest
 │       ├── tensors/            # TensorSim.scala (simulation driver)
 │       └── test/               # SequentialTest, SequentialCNNTest, Comprehensive1DCNNTest,
-│                               #   Sequential2DTest
+│                               #   Sequential2DTest, HighLevelAttentionTest
 └── tests/
     └── python/
         ├── conftest.py         # pytest options (--debug-math -> tests/true_math_errors.log)

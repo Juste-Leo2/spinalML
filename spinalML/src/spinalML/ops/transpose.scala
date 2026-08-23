@@ -21,8 +21,10 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
   val mem = Mem(dataType, totalElements)
   
   val writeAddr = Reg(UInt(log2Up(totalElements) bits)) init(0)
-  val readRow = Reg(UInt(log2Up(M) bits)) init(0)
-  val readCol = Reg(UInt(log2Up(N) bits)) init(0)
+  // Math.max(1, ...) guards degenerate 1-sized dimensions (log2Up(1) == 0 bits,
+  // which would crash on the register increments below).
+  val readRow = Reg(UInt(Math.max(1, log2Up(M)) bits)) init(0)
+  val readCol = Reg(UInt(Math.max(1, log2Up(N)) bits)) init(0)
   
   io.a.stream.ready := False
   

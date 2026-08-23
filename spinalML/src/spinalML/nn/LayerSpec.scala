@@ -53,7 +53,8 @@ case class Linear(
   inFeatures: Int, 
   outFeatures: Int,
   customType: Option[HardType[Data]] = None,
-  customWeightType: Option[HardType[Data]] = None
+  customWeightType: Option[HardType[Data]] = None,
+  weightScales: Seq[Double] = Seq(1.0)
 ) extends LayerSpec {
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)

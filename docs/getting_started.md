@@ -11,6 +11,11 @@ SpinalML allows you to define your neural network architecture declaratively usi
 - **AXI4 Bus Arbitration**: Instantiate the AXI memory-mapped DMAs and arbiters to autonomously fetch your inputs, weights, and biases from the external DDR4 memory.
 - **Hardware Pipelining**: Insert FIFOs and connect the AXI4-Stream handshakes between layers.
 
+> [!TIP]
+> **Complete guide:** for the full layer catalog (2D pooling, attention, normalization...),
+> weight-only quantization, DDR memory layout and SoC simulation patterns, read the
+> [High-Level Tutorial](HighLevelTutorial.md).
+
 ### The High-Level Template
 
 Here is a complete, ready-to-use template (`HighLevelTemplate.scala`) that defines an entire CNN and generates the Verilog hardware:
@@ -56,8 +61,10 @@ object HighLevelTemplateVerilog extends App {
 
 > [!TIP]
 > **Advanced Topology Control:** The High-Level API supports dynamic modifications of the hardware datapath directly within the `modelSpec`:
-> - **Dynamic Mixed Precision**: Use `Requantize(shift, targetType)` to adjust quantization and change precision on the fly.
+> - **Dynamic Mixed Precision**: Use `Requantize(shift, targetType)` to adjust quantization and change precision on the fly, or `Cast(targetType)` to cross from integer chains to the float domain (e.g. before a Softmax head).
 > - **Manual Repacking**: Use `Repack(newLanes)` to dynamically change the physical bus width between layers to save FPGA resources.
+> - **Weight-only Quantization (wXaY)**: declare `customWeightType = Some(I8())` and `weightScales` (per-tensor or per-channel) on `Linear` and `ClassicalAttention` to keep float activations with compact integer weights.
+> - **2D Vision & Transformers**: `MaxPool2D`/`AvgPool2D`, `Sigmoid`, `Tanh` and `ClassicalAttention(embedDim, numHeads)` (classical or multi-head) are all first-class citizens of the API.
 
 ---
 
@@ -126,7 +133,9 @@ Operations like `Exp`, `Softmax`, and `Rsqrt` are implemented using a novel **Al
 To see these concepts in action, check out the provided examples directly in the repository:
 
 - **High-Level API:**
-  - **`HighLevelTemplate.scala`**: The base PyTorch-like boilerplate.
+  - **`HighLevelTemplate.scala`**: The base PyTorch-like boilerplate (1D CNN).
+  - **`HighLevel2DTemplate.scala`**: A full 2D vision pipeline with `MaxPool2D`/`AvgPool2D`.
+  - **`HighLevelAttentionTemplate.scala`**: Quantized multi-head attention transformer block (wXaY).
   - **`SequentialCNN.scala`**: A slightly more complex CNN using the High-Level API.
   - **`Comprehensive1DCNN.scala`**: A full real-world CNN with Max Pooling and BN.
 - **Low-Level Hardware API:**
