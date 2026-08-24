@@ -15,5 +15,9 @@ object spinalML extends ScalaModule {
     def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"org.scalatest::scalatest:3.2.17"
     )
+
+    // Large designs (e.g. Mnist) evaluate deep Verilator call trees on the
+    // simulation threads; the default 1 MB Java thread stack overflows (SIGSEGV).
+    def forkArgs = super.forkArgs() ++ Seq("-Xss512m")
   }
 }

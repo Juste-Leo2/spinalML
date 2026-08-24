@@ -100,6 +100,13 @@ case class Sequential(
   val allAxiMasters = scala.collection.mutable.ArrayBuffer[Axi4ReadOnly]()
   var currentMemoryOffset = 0
 
+  // Every weight/bias region must start on an AXI-beat boundary: DDR
+  // controllers and memory models serve bursts from the beat-aligned address,
+  // so an unaligned region start would silently read the tail of the previous
+  // region's word instead of the intended first elements.
+  val beatBytes = axiConfig.dataWidth / 8
+  def alignToBeat(offset: Int): Int = (offset + beatBytes - 1) / beatBytes * beatBytes
+
   // Start triggers fork
   // Image + each weight + each bias
   val totalDmaTriggers = 1 + layers.map(l => (if(l.getWeightShape().head > 0) 1 else 0) + (if(l.getBiasShape().head > 0) 1 else 0)).sum
@@ -192,6 +199,7 @@ case class Sequential(
       val reqW = Stream(FetchRequest(axiConfig.addressWidth))
       reqW.valid := startTriggers(triggerIdx).valid
       startTriggers(triggerIdx).ready := reqW.ready
+      currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqW.address := io.weightsBaseAddress + currentMemoryOffset
       val elementsPerBeatW = axiConfig.dataWidth / wType.getBitsWidth
       val beats = (elements + elementsPerBeatW - 1) / elementsPerBeatW
@@ -200,7 +208,7 @@ case class Sequential(
 
       allAxiMasters += dmaW.io.axiMaster
       triggerIdx += 1
-      currentMemoryOffset += elements * (wType.getBitsWidth / 8)
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + elements * (wType.getBitsWidth / 8))
 
       val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
@@ -228,6 +236,7 @@ case class Sequential(
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
       reqB.valid := startTriggers(triggerIdx).valid
       startTriggers(triggerIdx).ready := reqB.ready
+      currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqB.address := io.weightsBaseAddress + currentMemoryOffset
 
       val elementsPerBeatB = axiConfig.dataWidth / lType.getBitsWidth
@@ -238,7 +247,7 @@ case class Sequential(
 
       allAxiMasters += dmaB.io.axiMaster
       triggerIdx += 1
-      currentMemoryOffset += elements * (lType.getBitsWidth / 8)
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + elements * (lType.getBitsWidth / 8))
 
       val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
       val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)

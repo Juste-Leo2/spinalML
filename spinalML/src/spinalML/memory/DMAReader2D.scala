@@ -53,7 +53,7 @@ case class DMAReader2D[T <: Data](
   
   readerCmd.valid   := False
   readerCmd.address := currentAddress
-  readerCmd.length  := io.cmd.patchWidth
+  readerCmd.length  := io.cmd.patchWidth.resize(16 bits)
   
   io.cmd.ready := False
   

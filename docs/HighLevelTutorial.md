@@ -132,12 +132,16 @@ Memory contents expected by the generated hardware:
 * **Image**: logical tensor flattened row-major (`[H][W][C]`, channel fastest), packed into
   64-bit AXI words little-endian (element 0 = lowest bits of the word).
 * **Weights region**: layers in declaration order; for each layer its weights then its bias,
-  packed into 64-bit AXI words little-endian as well.
+  packed into 64-bit AXI words little-endian as well. **Each weight/bias section starts on a
+  64-bit beat boundary** (4 BF16 / 8 I8 elements): pad every section up to a multiple of the
+  beat capacity, exactly like the builder does internally — an unaligned region start would
+  be silently served from the tail of the previous word by any real DDR controller.
   * `Linear`: the stored matrix is `[outFeatures, inFeatures]` (torch-style `W^T`), one weight
     row per stream beat.
   * Convolutions / attention: row-major `[K·K·C, N]` blocks. The attention layer expects
     the four projection matrices **stacked**: `Wq | Wk | Wv | Wo`, i.e. a single
     `[4 × embedDim, embedDim]` block (Wq rows first).
+    One stream beat always carries one output neuron's K-vector.
   * Biases: one element per byte-addressable slot, streamed sequentially (`lanes = 1`).
 
 ---
@@ -172,6 +176,11 @@ start bit over AXI4-Lite, then collect the output stream.
 Reference implementations (copy-paste friendly):
 * [`SequentialCNNTest.scala`](../spinalML/test/src/spinalML/test/SequentialCNNTest.scala) — 2D CNN through the SoC flow.
 * [`HighLevelAttentionTest.scala`](../spinalML/test/src/spinalML/test/HighLevelAttentionTest.scala) — quantized multi-head attention end to end.
+* [`MnistTest.scala`](../spinalML/test/src/spinalML/examples/MnistTest.scala) — a real trained MNIST CNN
+  (2 942 parameters, Conv→ReLU→MaxPool→Flatten→Linear in BF16) validated black-box: five digits,
+  argmax against the true labels, 5/5. See [`Mnist.scala`](../spinalML/src/spinalML/examples/Mnist.scala)
+  for the model and [the session notes](bugs/2026-08-mnist-session.md) for the full story
+  (burst DMA, region alignment, flatten-order remap).
 
 Minimal skeleton:
 
@@ -248,8 +257,11 @@ the shared AXI arbiter serializes weight fetches as before.
 ## 8. Current limitations
 
 * **One-shot inference contract**: every buffer holds one full tensor and each `start`
-  runs a whole inference — models are implicitly capped at what fits on-chip. The
-  multi-tile continuous execution model (weight residency, activation tiling, DAG tap
+  runs a whole inference — models are implicitly capped at what fits on-chip. Concretely,
+  back-to-back `start` pulses on the same live datapath are not re-armed yet (buffers/FSMs
+  keep residual state): give each inference a fresh elaboration/simulation, as
+  [`MnistTest`](../spinalML/test/src/spinalML/examples/MnistTest.scala) does. The multi-tile
+  continuous execution model (weight residency, activation tiling, DAG tap
   contract for streaming) is detailed in the [roadmap](roadmap.md), section 6.
 * Sub-byte activation dtypes (FP4) cannot be fetched by the DMA (byte-addressed path).
 * Weight double-buffers hold each parameter tensor entirely on-chip; very large models need
