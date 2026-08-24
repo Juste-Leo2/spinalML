@@ -6,10 +6,12 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 
 /**
- * CastOp: SInt -> FloatML conversion, with optional weight dequantization.
+ * CastOp: SInt -> FloatML conversion (with optional weight dequantization),
+ * or SInt -> SInt sign-extending width conversion.
  *
  * `scales` (compile-time constants) implements the weight-only quantization
- * (wXaY) policy: W_float = FloatML(W_int) * scale.
+ * (wXaY) policy and integer-to-float domain boundaries:
+ * W_float = FloatML(W_int) * scale.
  *   - scales.length == 1            : per-tensor scale
  *   - scales.length == totalBeats   : per-channel scale, indexed by stream
  *                                     beat order (for column-major weight
@@ -43,20 +45,23 @@ case class CastOp[TIn <: Data, TOut <: Data](
   // Beat counter to select the per-channel scale (stream beat order)
   val beatCounter = if (useScale && scales.length > 1) Some(Counter(totalBeats)) else None
 
-  // Elaboration-time scale constants (selected once, shared by all lanes)
-  val (expBitsOut, mantBitsOut) = dataTypeOut() match {
-    case f: FloatML => (f.expBits, f.mantBits)
-    case _ => throw new Exception("CastOp with scales requires a FloatML output type")
-  }
-  val scaleLits = scales.map(s => spinalML.utils.Float.fromDouble(s, expBitsOut, mantBitsOut))
-  val scaleSel: FloatML = beatCounter match {
-    case Some(cnt) =>
-      var acc: FloatML = scaleLits.head
-      scaleLits.zipWithIndex.tail.foreach { case (lit, idx) =>
-        acc = Mux(cnt.value === U(idx), lit, acc)
-      }
-      acc
-    case None => scaleLits.head
+  // Elaboration-time scale constants (selected once, shared by all lanes).
+  // Only built when a scale is actually requested; SInt -> SInt casts skip it.
+  val scaleHw: Option[FloatML] = if (!useScale) None else Some {
+    val (expBitsOut, mantBitsOut) = dataTypeOut() match {
+      case f: FloatML => (f.expBits, f.mantBits)
+      case _ => throw new Exception("CastOp with scales requires a FloatML output type")
+    }
+    val scaleLits = scales.map(s => spinalML.utils.Float.fromDouble(s, expBitsOut, mantBitsOut))
+    beatCounter match {
+      case Some(cnt) =>
+        var acc: FloatML = scaleLits.head
+        scaleLits.zipWithIndex.tail.foreach { case (lit, idx) =>
+          acc = Mux(cnt.value === U(idx), lit, acc)
+        }
+        acc
+      case None => scaleLits.head
+    }
   }
 
   for (i <- 0 until lanes) {
@@ -64,14 +69,17 @@ case class CastOp[TIn <: Data, TOut <: Data](
       case (valIn: SInt, valOut: FloatML) =>
         val converted = spinalML.utils.Float.fromSInt(valIn, valOut.expBits, valOut.mantBits)
         val result = if (useScale) {
-          spinalML.utils.Float.mul(converted, scaleSel)
+          spinalML.utils.Float.mul(converted, scaleHw.get)
         } else {
           converted
         }
         io.c.stream.payload(i).assignFrom(result.asInstanceOf[TOut])
+      case (valIn: SInt, valOut: SInt) =>
+        require(!useScale, "CastOp SInt -> SInt does not support scales")
+        io.c.stream.payload(i).assignFrom(valIn.resize(valOut.getWidth).asInstanceOf[TOut])
       // More cases can be added here if needed in the future (e.g. UInt -> Float, Float -> SInt, etc.)
       case _ =>
-        throw new Exception("Type de cast non supporté (seul SInt -> FloatML est géré pour le moment)")
+        throw new Exception("Type de cast non supporté (SInt -> FloatML et SInt -> SInt sont gérés)")
     }
   }
 

@@ -176,7 +176,13 @@ case class Tanh() extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Cast(targetType: HardType[Data]) extends LayerSpec {
+/**
+ * Cast to `targetType`. When casting an SInt tensor to a FloatML type,
+ * `scales` implements the dequantization step of integer-domain pipelines:
+ * W_float = FloatML(W_int) * scale (per-tensor, length 1). Default Seq(1.0)
+ * keeps the pure cast behavior.
+ */
+case class Cast(targetType: HardType[Data], scales: Seq[Double] = Seq(1.0)) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)

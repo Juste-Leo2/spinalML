@@ -115,7 +115,11 @@ case class Sequential(
 
   // Base AXI config for leaf DMAs (accounting for arbiter routing bits)
   // For simplicity in this V1, we use a single stage arbiter if <= 16 ports.
-  val dmaAxiConfig = axiConfig.copy(idWidth = axiConfig.idWidth - log2Up(Math.max(2, totalDmaTriggers)))
+  // A single DMA (weightless models) skips the arbiter entirely and keeps the
+  // full id width.
+  val dmaAxiConfig =
+    if (totalDmaTriggers == 1) axiConfig
+    else axiConfig.copy(idWidth = axiConfig.idWidth - log2Up(totalDmaTriggers))
 
   // 1.1. Image DMA
   val inputDataType = globalDataType
@@ -208,7 +212,11 @@ case class Sequential(
 
       allAxiMasters += dmaW.io.axiMaster
       triggerIdx += 1
-      currentMemoryOffset = alignToBeat(currentMemoryOffset + elements * (wType.getBitsWidth / 8))
+      // Region byte size is ceil(totalBits/8): sub-byte weight types (e.g. I4
+      // nibbles) pack two-per-byte, so the ceil must happen on the whole
+      // region — a per-element bits/8 would floor sub-byte sizes to zero and
+      // make the next region alias the weight region start.
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + (elements * wType.getBitsWidth + 7) / 8)
 
       val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
@@ -247,7 +255,7 @@ case class Sequential(
 
       allAxiMasters += dmaB.io.axiMaster
       triggerIdx += 1
-      currentMemoryOffset = alignToBeat(currentMemoryOffset + elements * (lType.getBitsWidth / 8))
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + (elements * lType.getBitsWidth + 7) / 8)
 
       val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
       val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
@@ -271,7 +279,16 @@ case class Sequential(
         Conv1DHW(inTensor, layerWeights, layerBias, lType)
 
       case c: Conv2D =>
-        Conv2DHW(inTensor, layerWeights, layerBias, lType)
+        // Integer-domain convolutions: narrow SInt weights (e.g. true I4
+        // nibbles fetched from DDR) are sign-extended to the activation width
+        // so the single-width int matmul can consume them.
+        val wForConv =
+          if (layerWeights.dataType().isInstanceOf[SInt] &&
+              inTensor.dataType().isInstanceOf[SInt] &&
+              layerWeights.dataType().getBitsWidth != inTensor.dataType().getBitsWidth)
+            cast(layerWeights.asInstanceOf[Tensor[SInt]], inTensor.dataType)
+          else layerWeights
+        Conv2DHW(inTensor, wForConv, layerBias, lType)
 
       case _: ReLU =>
         relu(inTensor)
@@ -330,7 +347,7 @@ case class Sequential(
         tanh(inTensor)
 
       case _: Cast =>
-        cast(inTensor, lType)
+        cast(inTensor, lType, layers(i).asInstanceOf[Cast].scales)
 
       case _: Flatten =>
         reshape(flatten(inTensor), Seq(1, inTensor.shape.product))

@@ -181,6 +181,10 @@ Reference implementations (copy-paste friendly):
   argmax against the true labels, 5/5. See [`Mnist.scala`](../spinalML/src/spinalML/examples/Mnist.scala)
   for the model and [the session notes](bugs/2026-08-mnist-session.md) for the full story
   (burst DMA, region alignment, flatten-order remap).
+* [`Mnistw4a8Test.scala`](../spinalML/test/src/spinalML/examples/Mnistw4a8Test.scala) — the same network in
+  **W4A8 mixed precision**: true INT4 convolution (nibble-packed weights, integer activations and
+  accumulator, quantized bias) followed by `Cast(FP8_E4M3, scales)` and an FP8 Linear, 5/5.
+  See [the W4A8 session notes](bugs/2026-08-w4a8-session.md).
 
 Minimal skeleton:
 
