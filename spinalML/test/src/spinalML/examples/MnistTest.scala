@@ -6,6 +6,7 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
 import spinalML.dtypes.FloatML
+import spinalML.utils.MemLayout
 
 /**
  * Black-box SoC validation of the Mnist accelerator under Verilator.
@@ -39,9 +40,12 @@ class MnistTest extends AnyFunSuite {
   def writeWords(mem: SparseMemory, base: Int, words: Seq[BigInt]): Unit =
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
 
-  /** Pads a weight section up to the 64-bit AXI beat (4 BF16 elements). */
-  def padded(elems: Seq[Float]): Seq[Float] =
-    elems ++ Seq.fill((4 - elems.length % 4) % 4)(0.0f)
+  /** Pads a weight section up to its builder footprint (MemLayout.regionBytes
+    * rounded up to the 64-bit AXI beat), mirroring Sequential. */
+  def padded(elems: Seq[Float]): Seq[Float] = {
+    val capacity = MemLayout.alignToBeat(MemLayout.regionBytes(elems.length, 16), 8) / 2
+    elems ++ Seq.fill(capacity - elems.length)(0.0f)
+  }
 
   def imageWords(rows: Seq[String]): Seq[BigInt] =
     packFloats(rows.flatMap(_.map(c => if (c == '1') 1.0f else 0.0f)))

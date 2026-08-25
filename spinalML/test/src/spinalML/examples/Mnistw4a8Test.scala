@@ -6,6 +6,7 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
 import spinalML.dtypes.FloatML
+import spinalML.utils.MemLayout
 
 /**
  * Black-box SoC validation of the W4A8 Mnist accelerator under Verilator.
@@ -16,7 +17,8 @@ import spinalML.dtypes.FloatML
  *            (the DMA slices element i at bit 4*i of the AXI word);
  *   ConvB  : int-domain biases (b_q = round(b / convScale)) as I16 little-endian;
  *   FcW/FcB: E4M3 bytes (weights are grid-exact, bias rounded to nearest);
- *   Image  : pixel values 0.0/1.0 as E4M3 bytes.
+ *   Image  : raw 0/1 integer byte codes (the conv runs on integer
+ *            activations, NOT float-encoded pixels).
  * Each weight section is padded to a whole 64-bit word, mirroring the
  * builder's beat-aligned region layout.
  */
@@ -75,6 +77,17 @@ class Mnistw4a8Test extends AnyFunSuite {
   def toWords(bytes: Seq[Int]): Seq[BigInt] =
     bytes.grouped(8).map(g => wordOf(g.padTo(8, 0), 8)).toSeq
 
+  val beatBytes = 8 // axiConfig.dataWidth / 8; benches assume a 64-bit bus
+
+  /** One weight region exactly as the builder lays it out: size from
+    * MemLayout.regionBytes (whole-region ceil, sub-byte safe) rounded up to
+    * the AXI beat — bench and RTL share a single layout convention. */
+  def region(bytes: Seq[Int], elements: Int, elemBits: Int): Seq[BigInt] = {
+    val size = MemLayout.alignToBeat(MemLayout.regionBytes(elements, elemBits), beatBytes)
+    require(bytes.length <= size, s"weight region overflow: ${bytes.length}B > $size B")
+    toWords(bytes.padTo(size, 0))
+  }
+
   def nibbleBytes(qs: Seq[Int]): Seq[Int] =
     qs.grouped(2).map(g => (g.head & 0xF) | ((g.apply(1) & 0xF) << 4)).toSeq
 
@@ -88,10 +101,14 @@ class Mnistw4a8Test extends AnyFunSuite {
    *   ConvW [50 x I4] | pad | ConvB [2 x I16] | pad | FcW [2880 x E4M3] | pad | FcB [10 x E4M3] | pad
    */
   def weightWords(): Seq[BigInt] = {
-    val convW = toWords(nibbleBytes(Mnistw4a8Weights.convWq.flatten))
-    val convB = toWords(Mnistw4a8Weights.convBq.flatMap(v => Seq(v & 0xFF, (v >> 8) & 0xFF)))
-    val fcW = toWords(Mnistw4a8Weights.fcW.flatten.map(v => fp8Bits(v)))
-    val fcB = toWords(Mnistw4a8Weights.fcB.map(v => fp8Bits(v)))
+    val wq = Mnistw4a8Weights.convWq.flatten
+    val fw = Mnistw4a8Weights.fcW.flatten
+    val convW = region(nibbleBytes(wq), wq.length, 4)
+    val convB = region(
+      Mnistw4a8Weights.convBq.flatMap(v => Seq(v & 0xFF, (v >> 8) & 0xFF)),
+      Mnistw4a8Weights.convBq.length, 16)
+    val fcW = region(fw.map(v => fp8Bits(v)), fw.length, 8)
+    val fcB = region(Mnistw4a8Weights.fcB.map(v => fp8Bits(v)), Mnistw4a8Weights.fcB.length, 8)
     convW ++ convB ++ fcW ++ fcB
   }
 

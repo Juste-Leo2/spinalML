@@ -19,6 +19,15 @@ trait LayerSpec {
   def getBiasShape(): Seq[Int]
 }
 
+/**
+ * 2D convolution layer. Weight/bias dtypes default to the pipeline dtype;
+ * `customWeightType` enables narrow integer weights (e.g. true I4 nibbles),
+ * which Sequential sign-extends to the activation width so the integer
+ * matmul consumes them. Mixed precision on Conv2D is therefore supported
+ * only in the integer domain — unlike Linear, there is no float-dequant
+ * path (float activations require float weights). See
+ * docs/bugs/2026-08-w4a8-session.md.
+ */
 case class Conv2D(
   inChannels: Int, 
   outChannels: Int, 

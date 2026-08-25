@@ -5,6 +5,8 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
 import spinalML.tensors.Tensor
+import spinalML.utils.MemLayout
+import spinalML.dtypes.FloatML
 import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => LinearHW, batchnorm}
 import spinalML.ops.{reshape, repack, flatten, cast}
 import spinalML.activations.{relu, leaky_relu, sigmoid, tanh}
@@ -105,7 +107,7 @@ case class Sequential(
   // so an unaligned region start would silently read the tail of the previous
   // region's word instead of the intended first elements.
   val beatBytes = axiConfig.dataWidth / 8
-  def alignToBeat(offset: Int): Int = (offset + beatBytes - 1) / beatBytes * beatBytes
+  def alignToBeat(offset: Int): Int = MemLayout.alignToBeat(offset, beatBytes)
 
   // Start triggers fork
   // Image + each weight + each bias
@@ -132,6 +134,8 @@ case class Sequential(
   val pixelBytes = inputDataType.getBitsWidth / 8
   dmaImg.io.cmd.stride := inputShape(1) * pixelBytes
   val elementsPerBeat = axiConfig.dataWidth / inputDataType.getBitsWidth
+  require(elementsPerBeat >= 1,
+    s"Input dtype (${inputDataType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported image element size")
   dmaImg.io.cmd.patchWidth := (scala.math.ceil(inputShape(1).toDouble / elementsPerBeat).toInt - 1).max(0)
   dmaImg.io.cmd.patchHeight := inputShape(0)
 
@@ -206,17 +210,20 @@ case class Sequential(
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqW.address := io.weightsBaseAddress + currentMemoryOffset
       val elementsPerBeatW = axiConfig.dataWidth / wType.getBitsWidth
+      require(elementsPerBeatW >= 1,
+        s"Weight dtype (${wType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported weight element size")
       val beats = (elements + elementsPerBeatW - 1) / elementsPerBeatW
+      require(beats <= 65536,
+        s"Weight region of layer $i needs $beats beats, above the 64K-beat single-command limit (multi-command fetch belongs to the multi-tile roadmap)")
       reqW.length := (if (beats > 0) beats - 1 else 0)
       dmaW.io.cmd << reqW
 
       allAxiMasters += dmaW.io.axiMaster
       triggerIdx += 1
-      // Region byte size is ceil(totalBits/8): sub-byte weight types (e.g. I4
-      // nibbles) pack two-per-byte, so the ceil must happen on the whole
-      // region — a per-element bits/8 would floor sub-byte sizes to zero and
-      // make the next region alias the weight region start.
-      currentMemoryOffset = alignToBeat(currentMemoryOffset + (elements * wType.getBitsWidth + 7) / 8)
+      // Whole-region ceil via MemLayout: sub-byte weight types (e.g. I4
+      // nibbles) must not floor to zero bytes, or the next region aliases
+      // the weight region start.
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + MemLayout.regionBytes(elements, wType.getBitsWidth))
 
       val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
@@ -248,14 +255,18 @@ case class Sequential(
       reqB.address := io.weightsBaseAddress + currentMemoryOffset
 
       val elementsPerBeatB = axiConfig.dataWidth / lType.getBitsWidth
+      require(elementsPerBeatB >= 1,
+        s"Bias dtype (${lType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported bias element size")
       val beatsB = (elements + elementsPerBeatB - 1) / elementsPerBeatB
+      require(beatsB <= 65536,
+        s"Bias region of layer $i needs $beatsB beats, above the 64K-beat single-command limit (multi-command fetch belongs to the multi-tile roadmap)")
       reqB.length := (if (beatsB > 0) beatsB - 1 else 0)
 
       dmaB.io.cmd << reqB
 
       allAxiMasters += dmaB.io.axiMaster
       triggerIdx += 1
-      currentMemoryOffset = alignToBeat(currentMemoryOffset + (elements * lType.getBitsWidth + 7) / 8)
+      currentMemoryOffset = alignToBeat(currentMemoryOffset + MemLayout.regionBytes(elements, lType.getBitsWidth))
 
       val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
       val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
@@ -282,12 +293,20 @@ case class Sequential(
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
         // nibbles fetched from DDR) are sign-extended to the activation width
         // so the single-width int matmul can consume them.
+        val wDT = layerWeights.dataType()
+        val aDT = inTensor.dataType()
         val wForConv =
-          if (layerWeights.dataType().isInstanceOf[SInt] &&
-              inTensor.dataType().isInstanceOf[SInt] &&
-              layerWeights.dataType().getBitsWidth != inTensor.dataType().getBitsWidth)
+          if (wDT.isInstanceOf[SInt] && aDT.isInstanceOf[SInt] && wDT.getBitsWidth != aDT.getBitsWidth) {
+            require(wDT.getBitsWidth < aDT.getBitsWidth,
+              s"Conv2D weights (${wDT.getBitsWidth}b) wider than activations (${aDT.getBitsWidth}b): " +
+                "narrowing auto-cast refused — insert an explicit Cast layer or use wider activations")
             cast(layerWeights.asInstanceOf[Tensor[SInt]], inTensor.dataType)
-          else layerWeights
+          } else {
+            require(!(aDT.isInstanceOf[FloatML] && wDT.isInstanceOf[SInt]),
+              "Conv2D with float activations and integer weights is unsupported (float dequant is Linear-only): " +
+                "quantize the activations or run this stage on integer activations")
+            layerWeights
+          }
         Conv2DHW(inTensor, wForConv, layerBias, lType)
 
       case _: ReLU =>

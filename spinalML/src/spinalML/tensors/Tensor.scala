@@ -12,7 +12,11 @@ case class Tensor[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int)
   require(shape.forall(_ > 0), "All dimensions must be > 0")
 
   val totalElements = shape.product
-  // require(totalElements % lanes == 0, s"Total elements ($totalElements) must be a multiple of lanes ($lanes)")
+  // NOTE: deliberately NOT enforced: totalElements % lanes == 0. A tensor
+  // stream emits Vec(lanes)-wide beats and its FINAL beat may be partial
+  // (e.g. Conv2D weights [2][1][5][5] = 50 elements fetched at lanes = 4):
+  // exact-size double buffers simply stop after the last valid element.
+  // Enforcing divisibility would reject legitimate configurations.
 
   val stream = Stream(Vec(dataType, lanes))
 

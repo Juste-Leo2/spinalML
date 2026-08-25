@@ -24,12 +24,12 @@ formal/<Top>/<Top>.sby             ← generated config
    ▼
 sby: base   → yosys read -formal; prep -top <Top>     (parse + symbolically elaborate)
      prep   → yosys prep flow (formalff, write_jny/write_rtlil, smt2)
-     engine → yosys-smtbmc -s z3 (basecase + induction, or bmc steps)
+     engine → yosys-smtbmc -s cvc4 (basecase + induction, or bmc steps)
    ▼
 PASS (exit 0)  or  FAIL (exit 1 → counterexample VCD in formal/<Top>/<Top>_prove/engine_0/)
 ```
 
-The solver (Z3) receives the circuit as formulas and **decides** whether the
+The solver (CVC4) receives the circuit as formulas and **decides** whether the
 assertions hold for **every** legal input sequence — no sampling, no vectors.
 
 ---
@@ -84,7 +84,7 @@ FormalConfig
   // .withCover(50)                                  // reachability
   .withTimeout(600)                                  // seconds; inconclusive ≠ failed
   .withDebug                                         // keep formal/ workspace (traces)
-  .withEngies(List(SmtBmc(solver = SmtBmcSolver.Z3))) // smtbmc engine (see below)
+  .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4))) // smtbmc engine (see below)
   .workspacePath("formal")                           // output dir (gitignored)
   .doVerify(new XxxFormal, "free_label")             // DUT by-name + label for logs
 ```
@@ -98,7 +98,7 @@ Verified facts (1.14.2):
   induction at depth), `cover` (reachability). `live`/`equiv`/`synth` exist in the API —
   not used here.
 - `SmtBmc(nomem, syn, stbv, stdt, nopresat, unroll, dumpsmt2, progress=true, solver)`
-  maps to `yosys-smtbmc` flags; `progress` yields the `--progress z3` used in logs.
+  maps to `yosys-smtbmc` flags; `progress` yields the `--progress cvc4` used in logs.
   Other engines: `Aiger()`, and `Abc()` — **do not use `Abc()`**: the project's yosys
   is built with `ENABLE_ABC := 0` (formal proof never needs ABC).
 - `withTimeout(t)` sets the sby `timeout` (seconds) per task. A timeout gives
@@ -170,7 +170,7 @@ object AddFormal {
       .withProve(10)
       .withTimeout(600)
       .withDebug
-      .withEngies(List(SmtBmc(solver = SmtBmcSolver.Z3)))
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
       .doVerify(new AddFormal, "add_i8")
   }
@@ -222,7 +222,7 @@ Why each piece is there:
 8. **Spec**: golden values; `when(output handshake) { assert(...) }` with a message.
 9. **Bootstrap** (§3.2): `withProve(10)` for full proofs (sweet spot), `withBMC(100)`
    for bounded checks on big designs, `withTimeout(600)`, `withDebug`,
-   `SmtBmc(solver = Z3)`, `workspacePath("formal")`.
+   `SmtBmc(solver = cvc4)`, `workspacePath("formal")`.
 10. **Validate** (non-optional QA): run once with a deliberately broken assertion
     (`=== expected + 1`) → the solver MUST return a counterexample (exit 1, VCD in
     `engine_0/`). Restore the correct assertion, rerun → exit 0. This proves the
@@ -278,8 +278,8 @@ arithmetic/quantization **units that implement it** (`spinalML.utils.Float.add/.
 - **`SymbiYosys failure` is an envelope, not a cause**: the real error is in
   `formal/<Top>/<Top>_<mode>/logfile*.txt` or `model/design*.log`. Always inspect
   before touching the spec.
-- **Version matrix (project standard)**: Yosys **0.33** (git `2584903a060`), Z3
-  **4.8.12**, SBY **v0.68**. Yosys < 0.24 breaks sby's prep (`formalff -hierarchy`);
+- **Version matrix (project standard)**: Yosys **0.33** (git `2584903a060`), CVC4
+  **1.8**, SBY **v0.68**. Yosys < 0.24 breaks sby's prep (`formalff -hierarchy`);
   the CI builds 0.33 from source if the system one is older (built once in
   `$HOME/.local` with `ENABLE_ABC := 0` — ABC is unused by `prep`+`smtbmc`, and
   building it takes ~20 min and overheats the runner).
@@ -292,6 +292,22 @@ arithmetic/quantization **units that implement it** (`spinalML.utils.Float.add/.
   `make clean` — a hard power-loss mid-build silently corrupts object files and
   yosys then answers `No such command: <pass>`.
 - **Do not use `Abc()` engine** — yosys is built without ABC; the engine would fail.
+- **SpinalHDL bit-slicing trap**: `x(1, 2 bits)` extracts bits **[2:1]** (syntax is
+  `(offset, width)`, not `(low, high)`) — an alignment check written this way produces
+  real-looking counterexamples that are pure spec bugs. Cross-check every suspicious
+  assertion against the generated SV (`formal/<Top>/rtl/<Top>.sv`) before suspecting
+  the RTL: the assert operands appear there as explicit nets.
+- **Comparison width truncation**: in a relational op between mismatched widths,
+  SpinalHDL may satisfy it by TRUNCATING the wider side (`.resized` chains included)
+  instead of growing the narrower one — a bound like `elemCnt < rowWords * EW` silently
+  became `< (rowWords*EW)[1:0]`. Widen explicitly (`elemCnt.resize(12 bits) < wideExpr`).
+- **Pull registers, not combinational nets**: gate assertions on `dut.fsm.stateReg`
+  (as bits: `.pull().asBits.asUInt`, encodings = declaration order) and latched regs;
+  reconstruct comb conditions in the spec. And remember per-row/per-phase bookkeeping:
+  trackers like "first kept beat" must reset at EVERY phase boundary, not only per command.
+- **State-space diet**: 32-bit address arithmetic dominates BMC solve time — shrink the
+  DUT's `addressWidth` (16 is plenty for fetch-ordering proofs) and keep depths small
+  (BMC ~10-15); a full serialized-row DMA proof then runs in seconds.
 - **k-induction**: `prove` = basecase + induction. Both must pass.
 - **Under-specified specs pass trivially**: missing `anyseq`/`assumeInitial`/
   domain assumptions are the usual cause of either aborts or bogus counterexamples.
@@ -355,7 +371,7 @@ object <X>Formal {
       .withProve(10)
       .withTimeout(600)
       .withDebug
-      .withEngies(List(SmtBmc(solver = SmtBmcSolver.Z3)))
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
       .doVerify(new <X>Formal, "<x>_<t>")
   }
@@ -388,15 +404,3 @@ class <X>Formal extends Component {
 ```
 
 ---
-
-## 10. Pre-push checklist
-
-- [ ] File: `spinalML/test/src/spinalML/symbolicTest/<category>/XxxFormal.scala`, name ends with `Formal.scala`, package = `spinalML.symbolicTest.<category>`, class + object present.
-- [ ] `FormalDut` wraps the test component; every input driven (`anyseq`/`anyconst`); `assumeInitial` reset present.
-- [ ] Golden model bit-exact (widths resized, FloatML via `spinalML.utils.Float.*`).
-- [ ] Assertions guarded (handshake / `when` / `past(...)`).
-- [ ] Bootstrap: `withProve`/`withBMC`, `withTimeout`, `SmtBmc(solver = Z3)`.
-- [ ] Local run: exit `0`, log shows `returned pass for basecase` + `returned pass for induction` (`successful proof by k-induction`).
-- [ ] Negative QA done: broken assertion ⇒ counterexample (exit `1`), then restored.
-- [ ] Runs in CI: `workflow_dispatch` on `ci-symbolic.yml` picks the spec up
-      automatically via the `*Formal.scala` glob.

@@ -8,16 +8,18 @@ import spinalML.tensors.Tensor
 
 /**
  * FetchRequest2D specifies a 2D memory patch to fetch.
- * patchWidth: N-1 AXI beats per row (advisory; the component derives its own
- *             beat budget from stride/width so sub-beat row widths work)
- * patchHeight: Number of rows to fetch
+ * baseAddress: Byte address of the first row's start
  * stride: Address offset (in bytes) between the start of row N and row N+1
+ * patchHeight: Number of rows to fetch
+ * patchWidth: IGNORED by the hardware (kept for API compatibility) — the
+ *             component derives its own beat budget from stride/width so
+ *             sub-beat row widths work.
  */
 case class FetchRequest2D(addressWidth: Int) extends Bundle {
   val baseAddress = UInt(addressWidth bits)
   val stride      = UInt(addressWidth bits)
-  val patchWidth  = UInt(8 bits)
-  val patchHeight = UInt(8 bits)
+  val patchWidth  = UInt(16 bits)
+  val patchHeight = UInt(16 bits)
 }
 
 /**
@@ -34,6 +36,15 @@ case class FetchRequest2D(addressWidth: Int) extends Bundle {
  * bus), the fetch is aligned DOWN to the beat boundary and the leading and
  * trailing extra elements are trimmed from the element stream, which then
  * carries exactly `shape(1)` elements per row.
+ *
+ * Preconditions:
+ *  - Element dtype must be at least one byte wide (byte-addressed fetch).
+ *  - Row width must be divisible by `outLanes`: the trim masks whole output
+ *    beats and cannot split an element group across a row boundary.
+ *  - When `outLanes > 1`, callers must additionally guarantee that every row
+ *    start address falls on an output-group boundary (headSkipElems % outLanes
+ *    == 0). Row addresses are runtime values, so this is checked by formal
+ *    properties rather than at elaboration time (see roadmap §8).
  */
 case class DMAReader2D[T <: Data](
   dataType: HardType[T],
@@ -58,30 +69,48 @@ case class DMAReader2D[T <: Data](
   // --------------------------------------------------------
   // Geometry helpers
   // --------------------------------------------------------
+  require(shape.length >= 2,
+    "DMAReader2D: shape must be at least 2D (H, W) — it describes a patch of rows")
+  require(dataType.getBitsWidth >= 8,
+    s"DMAReader2D: ${dataType.getBitsWidth}-bit elements are unsupported — the fetch is byte-addressed, use a dtype of at least 8 bits")
+  require(shape(1) % outLanes == 0,
+    s"DMAReader2D: row width ${shape(1)} is not divisible by $outLanes output lanes — the beat-granular trim cannot split an element group across rows")
   val elemBytes   = dataType.getBitsWidth / 8
   val bytesPerBeat = axiConfig.dataWidth / 8
   val elemsPerWord = bytesPerBeat / elemBytes
-  val rowWidth     = U(shape(1), 16 bits)
+  require(elemsPerWord >= 1,
+    s"DMAReader2D: ${dataType.getBitsWidth}-bit elements are wider than the ${axiConfig.dataWidth}-bit AXI beat — unsupported element size")
+  // Counter widths derived from the static shape (and worst-case row
+  // misalignment) instead of fixed 8/9/12-bit ceilings, so any row width /
+  // patch height is supported rather than silently wrapping.
+  val maxRowWords    = (shape(1) + elemsPerWord - 1) / elemsPerWord + 1 // +1: alignment slack
+  val rowWordsW      = log2Up(maxRowWords + 1)
+  val skipW          = log2Up(elemsPerWord max 2)
+  val keepEndW       = log2Up(shape(1) + elemsPerWord + 1)
+  val maxFetchElems  = maxRowWords * elemsPerWord
+  val beatsPerRowMax = (maxFetchElems + outLanes - 1) / outLanes
+  val beatsW         = log2Up(beatsPerRowMax + 1)
+  val rowWidth     = U(shape(1), log2Up(shape(1) + 1) bits)
 
   // --------------------------------------------------------
   // Address Generator State Machine
   // --------------------------------------------------------
   val currentAddress = Reg(UInt(axiConfig.addressWidth bits)) init (0)
-  val currentRow     = Reg(UInt(8 bits)) init (0)
+  val currentRow     = Reg(UInt(16 bits)) init (0)
   val lastRow        = Reg(Bool()) init (False)
-  val cmdHeight      = Reg(UInt(8 bits)) init (0)
+  val cmdHeight      = Reg(UInt(16 bits)) init (0)
   val cmdStride      = Reg(UInt(axiConfig.addressWidth bits)) init (0)
 
   // Per-row latched geometry (computed combinationally from currentAddress
   // while issuing the row command, then stable during drain)
   val rowReqAddr  = Reg(UInt(axiConfig.addressWidth bits)) init (0)
-  val rowWords    = Reg(UInt(9 bits)) init (0)
-  val rowSkip     = Reg(UInt(9 bits)) init (0) // leading elements to trim
-  val rowKeepEnd  = Reg(UInt(12 bits)) init (0)// last kept element index
+  val rowWords    = Reg(UInt(rowWordsW bits)) init (0)
+  val rowSkip     = Reg(UInt(skipW bits)) init (0) // leading elements to trim
+  val rowKeepEnd  = Reg(UInt(keepEndW bits)) init (0)// last kept element index
 
   readerCmd.valid   := False
   readerCmd.address := rowReqAddr
-  readerCmd.length  := (rowWords -^ U(1, 9 bits)).resize(16 bits)
+  readerCmd.length  := (rowWords -^ U(1, rowWordsW bits)).resize(16 bits)
 
   io.cmd.ready := False
 
@@ -89,28 +118,28 @@ case class DMAReader2D[T <: Data](
   val headSkipBytes = currentAddress % U(bytesPerBeat, axiConfig.addressWidth bits)
   val headSkipElems = headSkipBytes >> log2Up(elemBytes)
   val reqAddrAligned = currentAddress - headSkipBytes
-  val wordsForCurrentRow = ((headSkipElems +^ rowWidth +^ U(elemsPerWord - 1, 12 bits)) /
-                            U(elemsPerWord, 12 bits)).resize(9 bits)
+  val wordsForCurrentRow = ((headSkipElems +^ rowWidth +^ U(elemsPerWord - 1)) /
+                            U(elemsPerWord)).resize(rowWordsW bits)
 
   // Output stream beats per fetched row
-  val totalFetchElems = rowWords * U(elemsPerWord, 10 bits)
-  val rowFetchedBeats = ((totalFetchElems / outLanes).resize(12 bits)) +
-                        Mux(totalFetchElems % outLanes =/= 0, U(1, 12 bits), U(0, 12 bits))
+  val totalFetchElems = rowWords * U(elemsPerWord)
+  val rowFetchedBeats = ((totalFetchElems / outLanes).resize(beatsW bits)) +
+                        Mux(totalFetchElems % outLanes =/= 0, U(1, beatsW bits), U(0, beatsW bits))
 
   // --------------------------------------------------------
   // Row trim: mask leading (alignment) and trailing (overshoot) elements of
   // each row's raw stream so the output carries exactly `shape(1)` elements
   // per row. With aligned, exact-width rows this is a pure passthrough.
   // --------------------------------------------------------
-  val elemCnt  = Reg(UInt(12 bits)) init (0)
-  val suppress = (elemCnt < rowSkip.resize(13 bits)) || (elemCnt > rowKeepEnd)
+  val elemCnt  = Reg(UInt(beatsW bits)) init (0)
+  val suppress = (elemCnt < rowSkip.resize(beatsW bits)) || (elemCnt > rowKeepEnd)
 
   io.outStream.stream.valid := reader1D.io.outStream.stream.valid && !suppress
   reader1D.io.outStream.stream.ready := io.outStream.stream.ready || suppress
   io.outStream.stream.payload := reader1D.io.outStream.stream.payload
 
   when(reader1D.io.outStream.stream.fire) {
-    elemCnt := Mux(elemCnt === rowFetchedBeats -^ U(1, 12 bits), U(0, 12 bits), elemCnt + 1)
+    elemCnt := Mux(elemCnt === rowFetchedBeats -^ U(1, beatsW bits), U(0, beatsW bits), elemCnt + 1)
   }
 
   val fsm = new StateMachine {
@@ -130,12 +159,12 @@ case class DMAReader2D[T <: Data](
       whenIsActive {
         readerCmd.valid := True
         readerCmd.address := reqAddrAligned
-        readerCmd.length := (wordsForCurrentRow -^ U(1, 9 bits)).resize(16 bits)
+        readerCmd.length := (wordsForCurrentRow -^ U(1, rowWordsW bits)).resize(16 bits)
         when(readerCmd.ready) {
           rowReqAddr := reqAddrAligned
           rowWords   := wordsForCurrentRow
-          rowSkip    := headSkipElems.resize(9 bits)
-          rowKeepEnd := (headSkipElems +^ rowWidth -^ U(1, 12 bits)).resize(12 bits)
+          rowSkip    := headSkipElems.resize(skipW bits)
+          rowKeepEnd := (headSkipElems +^ rowWidth -^ U(1)).resize(keepEndW bits)
           lastRow    := currentRow === cmdHeight - 1
           goto(stateDrain)
         }
@@ -144,7 +173,7 @@ case class DMAReader2D[T <: Data](
 
     val stateDrain: State = new State {
       whenIsActive {
-        when(reader1D.io.outStream.stream.fire && elemCnt === rowFetchedBeats -^ U(1, 12 bits)) {
+        when(reader1D.io.outStream.stream.fire && elemCnt === rowFetchedBeats -^ U(1, beatsW bits)) {
           currentAddress := currentAddress + cmdStride
           currentRow     := currentRow + 1
           when(lastRow) {

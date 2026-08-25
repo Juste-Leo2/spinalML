@@ -176,6 +176,7 @@ bit-identically across repeated runs.
 | Scala non-regression (all packages except symbolic) | 309 tests / 70 suites green |
 | Python co-sim (dma_reader, dma_reader2d, double_buffer_streamer) | 3/3 |
 | `spinalML.examples.Mnistw4a8Test` black-box | 5/5 |
+| Formal (CVC4): DMAReader 1D + rewritten DMAReader2D (3 contracts, BMC+cover, mutation-tested) | PASS — see roadmap §8 / playbook §8 |
 | Standalone checks during bring-up | Conv2DLayer full-size bit-exact; DMAReader2D trimmed fetch bit-exact; image echo through SoC bit-exact |
 
 Hardware logits vs software replica (image 0): `[-3.0 -4.5 -2.25 -0.81 … ]`
@@ -196,10 +197,11 @@ identical argmax on all five digits.
 3. **Wider accumulators for float paths**: the FP8 Linear still accumulates
    in FP8; routing matmul's `accType` to BF16 internally would mirror the
    int path's headroom.
-4. **Formal coverage for the new 2D FSM**: the serialized drain-wait and the
-   head/tail trim counters deserve the same BMC treatment the burst engine
-   got (properties: exactly `shape(1)` elements per row, order preservation,
-   no beat lost across row boundaries).
+4. **Formal coverage for the new 2D FSM** — DONE in the follow-up session:
+   the serialized drain-wait and trim counters are now proven with CVC4
+   (addressing, keep-window geometry, per-command beat accounting, covers;
+   lanes=1 free-stride contract plus lanes>1 under the documented alignment
+   precondition). See `symbolicTest/memory/DMAReader2DFormal.scala`.
 5. **Sub-byte activation dtypes** remain unsupported end-to-end (byte-addressed
    DMA); the widen-cast pattern proven here for weights could be mirrored if
    A4 flows ever matter.
