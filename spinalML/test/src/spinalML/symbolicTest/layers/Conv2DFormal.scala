@@ -26,6 +26,7 @@ case class Conv2DTestComp[T <: Data, TAcc <: Data](
   }
   
   val dut = Conv2DLayer(dataType, accType, H, W_in, inChannels, outChannels, K, outLanes, tileSize = 4, parallelN = parallelN)
+  dut.io.reArm := False
   dut.io.x <> io.x
   dut.io.w <> io.w
   dut.io.b <> io.b

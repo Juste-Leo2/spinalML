@@ -16,6 +16,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       
       dut.io.streamIn.valid #= false
       dut.io.nextTile #= false
+      dut.io.reArm #= false
       dut.io.readAddr #= 0
       dut.clockDomain.waitSampling()
       

@@ -147,7 +147,18 @@ case class Sequential(
   // buffer MUST be sized to the exact tensor size (any floor like max(16, n)
   // deadlocks small tensors, as tileReady would never assert).
   val imgBufferSize = inputShape.product
+  // Re-arm tied to the image DMA command boundary: back-to-back starts must
+  // not observe full flags left over by the previous inference.
   val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = 1)
+  // Re-arm boundary: rising edge of io.start.valid. Neither io.start.fire nor
+  // dmaImg.io.cmd.fire is usable here — the synchronous fork only completes
+  // its handshake when EVERY sink accepted, and the 2D image DMA accepts its
+  // command on the LAST DRAINED BEAT, so both "fires" land after the image
+  // has already filled a bank; re-arming then clears a fresh tileReady
+  // forever (pipeline deadlock). The valid rising edge occurs one cycle
+  // after the host pulses START, strictly before any DMA data moves.
+  val prevStartValid = RegNext(io.start.valid) init (False)
+  imgDoubleBuffer.io.reArm := io.start.valid && !prevStartValid
   imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream
 
   val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = 1)
@@ -183,6 +194,9 @@ case class Sequential(
 
     val wShape = layer.getWeightShape()
     val bShape = layer.getBiasShape()
+    // Fire of this layer's weight DMA (null when weightless): threaded into
+    // matmul-based layers so their internal weight buffer re-arms per command.
+    var weightDmaFire: Bool = null
 
     var layerWeights: Tensor[Data] = null
     var layerBias: Tensor[Data] = null
@@ -203,7 +217,8 @@ case class Sequential(
         case _ => 1
       }
 
-      val dmaW = DMAReader(wType, wShape, outLanes = requiredLanes, dmaAxiConfig)
+      val dmaW = DMAReader(wType, wShape, outLanes = requiredLanes, dmaAxiConfig,
+        trimToElements = true, flushableGearbox = true)
       val reqW = Stream(FetchRequest(axiConfig.addressWidth))
       reqW.valid := startTriggers(triggerIdx).valid
       startTriggers(triggerIdx).ready := reqW.ready
@@ -226,7 +241,9 @@ case class Sequential(
       currentMemoryOffset = alignToBeat(currentMemoryOffset + MemLayout.regionBytes(elements, wType.getBitsWidth))
 
       val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
+      weightDmaFire = reqW.fire
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
+      wDoubleBuffer.io.reArm := reqW.fire
       wDoubleBuffer.io.streamIn << dmaW.io.outStream.stream
 
       val wStreamer = DoubleBufferStreamer(wType, wBufferSize, requiredLanes)
@@ -247,7 +264,8 @@ case class Sequential(
         case _ => 1
       }
       val elements = bShape.product
-      val dmaB = DMAReader(lType, bShape, outLanes = requiredBiasLanes, dmaAxiConfig)
+      val dmaB = DMAReader(lType, bShape, outLanes = requiredBiasLanes, dmaAxiConfig,
+        trimToElements = true, flushableGearbox = true)
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
       reqB.valid := startTriggers(triggerIdx).valid
       startTriggers(triggerIdx).ready := reqB.ready
@@ -270,6 +288,7 @@ case class Sequential(
 
       val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
       val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
+      bDoubleBuffer.io.reArm := reqB.fire
       bDoubleBuffer.io.streamIn << dmaB.io.outStream.stream
 
       val bStreamer = DoubleBufferStreamer(lType, bBufferSize, requiredBiasLanes)
@@ -287,7 +306,7 @@ case class Sequential(
 
     val nextTensor: Tensor[Data] = layer match {
       case c: Conv1D =>
-        Conv1DHW(inTensor, layerWeights, layerBias, lType)
+        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire))
 
       case c: Conv2D =>
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
@@ -307,7 +326,7 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
-        Conv2DHW(inTensor, wForConv, layerBias, lType)
+        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire))
 
       case _: ReLU =>
         relu(inTensor)
@@ -379,9 +398,10 @@ case class Sequential(
         // are dequantized to the activation float dtype inside the layer.
         layerWeights.dataType() match {
           case _: SInt =>
-            spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales)
+            spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
+              false, 1024, Option(weightDmaFire))
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType)
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire))
         }
 
       case rq: Requantize =>

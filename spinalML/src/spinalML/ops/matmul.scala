@@ -12,11 +12,11 @@ import spinalML.memory.StreamDoubleBuffer
  * Output C is [M, N].
  */
 case class MatmulOp[T <: Data, TAcc <: Data](
-  dataType: HardType[T], 
-  accType: HardType[TAcc], 
-  shapeA: Seq[Int], 
-  shapeB: Seq[Int], 
-  lanes: Int, 
+  dataType: HardType[T],
+  accType: HardType[TAcc],
+  shapeA: Seq[Int],
+  shapeB: Seq[Int],
+  lanes: Int,
   parallelN: Boolean = false,
   pipelineTree: Boolean = true
 ) extends Component {
@@ -33,6 +33,10 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     val a = slave(Tensor(dataType, shapeA, lanes))
     val b = slave(Tensor(dataType, shapeB, lanes))
     val c = master(Tensor(accType, Seq(M, N), lanes = 1))
+    // Command-boundary re-arm forwarded to the internal B buffer(s): without
+    // it, a stale tileReady lets the next command start on the previous
+    // command's data. See StreamDoubleBuffer.io.reArm.
+    val reArm = in Bool()
   }
   
   // ==========================================
@@ -80,6 +84,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     // ==========================================
     // B is buffered in N parallel StreamDoubleBuffers, each storing 1 column (K elements)
     val buffersB = Seq.fill(N)(StreamDoubleBuffer(dataType, paddedK, lanes))
+    buffersB.foreach(_.io.reArm := io.reArm)
     
     val loadBankCounter = Counter(N)
     val loadElemCounter = Counter(chunksK)
@@ -209,6 +214,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     // ==========================================
     // B is buffered in 1 StreamDoubleBuffer holding all N columns (size = paddedK * N)
     val bufferB = StreamDoubleBuffer(dataType, paddedK * N, lanes)
+    bufferB.io.reArm := io.reArm
     bufferB.io.streamIn << io.b.stream
     bufferB.io.nextTile := False
     
@@ -345,29 +351,30 @@ case class MatmulOp[T <: Data, TAcc <: Data](
 }
 
 object matmul {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None): Tensor[TAcc] = {
     val rankA = a.shape.length
     val rankB = b.shape.length
     require(rankA >= 2 && rankB >= 2, "Matmul requires at least 2D tensors")
-    
+
     val M = a.shape(rankA - 2)
     val K_A = a.shape(rankA - 1)
     val K_B = b.shape(rankB - 2)
     val N = b.shape(rankB - 1)
-    
+
     require(K_A == K_B, s"Inner dimensions must match (A.cols=$K_A == B.rows=$K_B)")
     require(a.lanes == b.lanes, s"Tensors must have the same lanes (${a.lanes} != ${b.lanes})")
-    
+
     val batchDimsA = a.shape.dropRight(2)
     val batchDimsB = b.shape.dropRight(2)
-    
+
     // For now, require batch dimensions to match exactly for Batched Matmul.
     // E.g., [Heads, SeqLen, Dim] x [Heads, Dim, SeqLen].
     require(batchDimsA == batchDimsB, s"Batch dimensions must match ($batchDimsA != $batchDimsB). Broadcasting stream B is not supported natively here.")
-    
+
     val outShape = batchDimsA ++ Seq(M, N)
-    
+
     val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN)
+    matmulComp.io.reArm := reArm.getOrElse(False)
     
     // Connect the continuous batched streams directly to the 2D MatmulOp.
     // MatmulOp natively loops back to stateWaitTile after each 2D matrix, allowing zero-overhead batching.

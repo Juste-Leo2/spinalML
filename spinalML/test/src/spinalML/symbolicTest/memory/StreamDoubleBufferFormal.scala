@@ -13,6 +13,8 @@ class StreamDoubleBufferFormal extends Component {
   anyseq(dut.io.streamIn.payload)
   anyseq(dut.io.readAddr)
   anyseq(dut.io.nextTile)
+  // One-shot contract: no command boundary inside the formal window.
+  dut.io.reArm := False
   
   // Pull internal signals across hierarchy to avoid violations
   val pingFull = dut.pingFull.pull()

@@ -24,6 +24,7 @@ case class MatmulTestComp[T <: Data, TAcc <: Data](
   }
   
   val dut = MatmulOp(dataType, accType, Seq(M, K), Seq(K, N), lanes, parallelN = parallelN, pipelineTree = true)
+  dut.io.reArm := False
   dut.io.a <> io.a
   dut.io.b <> io.b
   io.c <> dut.io.c

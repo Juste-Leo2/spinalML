@@ -5,6 +5,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.tensors.Tensor
 import spinalML.ops.repack
+import spinalML.ops.RepackOp
 
 /**
  * FetchRequest specifies where to read and how much.
@@ -29,7 +30,16 @@ case class DMAReader[T <: Data](
   axiConfig: Axi4Config,
   /** Max AXI beats per INCR burst. Lower it in formal/sim benches so that
     * burst-splitting paths are reachable within short verification windows. */
-  val maxBurstBeats: Int = 256
+  val maxBurstBeats: Int = 256,
+  /** Emit EXACTLY shape.product elements: see the trim stage below. Weight /
+    * bias readers enable this; DMAReader2D keeps its own row trim. */
+  val trimToElements: Boolean = false,
+  /** Use the flushable structured gearbox instead of the plain width
+    * adapter, and gate command acceptance on its drain state. Weight/bias
+    * readers enable this: their regions can end mid-group, leaving stale
+    * partial groups that would phase-shift every back-to-back command.
+    * DMAReader2D keeps the legacy adapter (image rows are exact multiples). */
+  val flushableGearbox: Boolean = false
 ) extends Component {
 
   val axiLanes = axiConfig.dataWidth / dataType.getBitsWidth
@@ -55,7 +65,12 @@ case class DMAReader[T <: Data](
   val burstRemain = Reg(UInt(log2Up(maxBurstBeats + 1) bits)).init(0) // beats not yet received
   val addrReg     = Reg(UInt(axiConfig.addressWidth bits)).init(0)
 
-  io.cmd.ready := (remaining === 0) && (burstRemain === 0)
+  // With a flushable gearbox, accept a new command ONLY once its tail has
+  // drained: flushing earlier would truncate the previous tensor. Once
+  // empty, fire still precedes any read data of the new command.
+  val baseReady = (remaining === 0) && (burstRemain === 0)
+  val gearboxEmpty = Bool() // assigned in section 3, after gearbox creation
+  io.cmd.ready := (if (flushableGearbox) baseReady && gearboxEmpty else baseReady)
 
   when(io.cmd.fire) {
     addrReg := io.cmd.address
@@ -111,7 +126,32 @@ case class DMAReader[T <: Data](
   // 3. Internal Gearbox (Repack)
   // ==========================================
   // Automatically adapt the raw physical AXI stream to the desired ML lanes.
-  val repackedTensor = repack(axiRawTensor, outLanes)
-  
-  io.outStream <> repackedTensor
+  val gearboxOps = scala.collection.mutable.ArrayBuffer[RepackOp[_]]()
+  val repackedTensor = repack(axiRawTensor, outLanes,
+    reArm = if (flushableGearbox) Some(io.cmd.fire) else None,
+    created = gearboxOps, withFlush = flushableGearbox)
+  gearboxEmpty := (if (gearboxOps.isEmpty) True
+                   else gearboxOps.map(_.io.isEmpty).reduce(_ && _))
+
+  // Exact-element trim (see trimToElements): hide everything past the last
+  // logical element of this command so the stream ends GROUP-ALIGNED — whole-
+  // beat fetches otherwise drag region-padding elements past the tensor end,
+  // parking partial groups in the lane gearbox and junk words in downstream
+  // exact-size double buffers, which poisons back-to-back commands. The
+  // counter restarts at each cmd.fire, which precedes any read data of the
+  // new command.
+  val trimmedStream = if (!trimToElements) repackedTensor else {
+    val total = shape.product
+    val sent = Reg(UInt(log2Up(total + outLanes + 1) bits)) init (0)
+    when(io.cmd.fire) { sent := 0 }
+    val suppressed = sent >= U(total)
+    val trimmed = Tensor(dataType, shape, outLanes)
+    trimmed.stream.valid := repackedTensor.stream.valid && !suppressed
+    repackedTensor.stream.ready := io.outStream.stream.ready || suppressed
+    when(trimmed.stream.fire) { sent := sent + U(outLanes) }
+    trimmed.stream.payload := repackedTensor.stream.payload
+    trimmed
+  }
+
+  io.outStream <> trimmedStream
 }

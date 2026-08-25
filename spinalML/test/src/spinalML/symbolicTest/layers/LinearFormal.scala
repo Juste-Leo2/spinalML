@@ -24,6 +24,7 @@ case class LinearTestComp[T <: Data, TAcc <: Data](
   }
   
   val dut = LinearLayer(dataType, dataType, accType, Seq(M, K), Seq(K, N), lanes, tileSize = 4, parallelN = parallelN)
+  dut.io.reArm := False
   dut.io.a <> io.a
   dut.io.w <> io.w
   dut.io.b <> io.b

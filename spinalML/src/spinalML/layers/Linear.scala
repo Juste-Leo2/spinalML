@@ -38,6 +38,8 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     val w = slave(Tensor(weightType, shapeW, lanes))
     val b = slave(Tensor(accType, Seq(1, N), lanes = 1)) // Bias matches accumulator type
     val y = master(Tensor(accType, Seq(M, N), lanes = 1)) // Output can be processed sequentially
+    // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
+    val reArm = in Bool()
   }
   
   // Weight-only quantization path: SInt weights feeding a FloatML activation
@@ -52,38 +54,42 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     if (needsDequant) cast(io.w, dataType, weightScales)
     else io.w.asInstanceOf[Tensor[T]]
   
-  // 1. Matrix Multiplication: A * W_deq
-  val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN)
+  // 1. Matrix Multiplication: A * W_deq (reArm re-arms the internal B buffer,
+  //    which carries this layer's weights)
+  val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm))
   
   // 2. Add Bias (Broadcast): (A * W_deq) + b
   io.y <> bias_add(matmulResult, io.b)
 }
 
 object Linear {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean, reArm: Option[Bool] = None): Tensor[TAcc] = {
     val comp = LinearLayer(a.dataType, a.dataType, accType, a.shape, w.shape, a.lanes, Seq(1.0), tileSize, parallelN)
+    comp.io.reArm := reArm.getOrElse(False)
     comp.io.a <> a
     comp.io.w <> w
     comp.io.b <> b
     comp.io.y
   }
-  
+
   def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc]): Tensor[TAcc] = {
-    apply(a, w, b, accType, 1024, false)
+    apply(a, w, b, accType, 1024, false, None)
   }
-  
+
   def apply[T <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[T], tileSize: Int, parallelN: Boolean): Tensor[T] = {
-    apply(a, w, b, a.dataType, tileSize, parallelN)
+    apply(a, w, b, a.dataType, tileSize, parallelN, None)
   }
-  
+
   def apply[T <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[T]): Tensor[T] = {
-    apply(a, w, b, a.dataType, 1024, false)
+    apply(a, w, b, a.dataType, 1024, false, None)
   }
-  
+
   // Weight-only quantization (wXaY): weights stored as SInt (I4/I8) plus
-  // compile-time scale(s), activations in the float domain.
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean = false, tileSize: Int = 1024): Tensor[TAcc] = {
+  // compile-time scale(s), activations in the float domain. No default
+  // arguments here: only one overload of Linear may define defaults.
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean, tileSize: Int, reArm: Option[Bool]): Tensor[TAcc] = {
     val comp = LinearLayer(a.dataType, w.dataType, accType, a.shape, w.shape, a.lanes, weightScales, tileSize, parallelN)
+    comp.io.reArm := reArm.getOrElse(False)
     comp.io.a <> a
     comp.io.w <> w
     comp.io.b <> b

@@ -11,8 +11,8 @@ import spinalML.utils.MemLayout
 /**
  * Black-box SoC validation of the W4A8 Mnist accelerator under Verilator.
  *
- * Same protocol as [[MnistTest]] (no golden model: the trained network IS the
- * reference), but the DDR image is mixed-precision:
+ * Same protocol as [[MnistTest]] (logits checked against a bit-exact JVM
+ * replica, here [[Mnistw4a8Replica]]), but the DDR image is mixed-precision:
  *   ConvW  : raw int4 codes packed two-per-nibble-pair, 16 elements per beat
  *            (the DMA slices element i at bit 4*i of the AXI word);
  *   ConvB  : int-domain biases (b_q = round(b / convScale)) as I16 little-endian;
@@ -21,6 +21,9 @@ import spinalML.utils.MemLayout
  *            activations, NOT float-encoded pixels).
  * Each weight section is padded to a whole 64-bit word, mirroring the
  * builder's beat-aligned region layout.
+ *
+ * Input selection mirrors [[MnistTest]]: MNIST_INDICES / MNIST_RANDOM_N /
+ * MNIST_SEED (defaults = the historical 5 curated digits).
  */
 class Mnistw4a8Test extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
@@ -112,12 +115,78 @@ class Mnistw4a8Test extends AnyFunSuite {
     convW ++ convB ++ fcW ++ fcB
   }
 
-  test("Mnistw4a8 SoC black-box: 5/5 digits classified end to end") {
+  // ------------------------------------------------------------------
+  // Dynamic input selection (same policy as MnistTest)
+  // ------------------------------------------------------------------
+  case class Tc(image: Seq[String], label: Option[Int], name: String)
+
+  def buildCases(): Seq[Tc] = {
+    val curated = MnistData.images.indices.map(i =>
+      Tc(MnistData.images(i), Some(MnistData.labels(i)), s"curated#$i"))
+
+    sys.env.get("MNIST_INDICES").map { spec =>
+      spec.split(',').map(_.trim.toInt).map(idx => curated(idx)).toSeq
+    }.getOrElse {
+      sys.env.get("MNIST_RANDOM_N").map(_.toInt).map { n =>
+        val rng = new java.util.Random(sys.env.get("MNIST_SEED").map(_.toLong).getOrElse(0x5EEDL))
+        Seq.fill(n) {
+          if (rng.nextBoolean()) {
+            val base = MnistData.images(rng.nextInt(MnistData.images.length))
+            val img = base.map(row =>
+              row.map(c => if (rng.nextInt(100) < 8) (if (c == '1') '0' else '1') else c))
+            Tc(img, None, "perturbed")
+          } else {
+            val img = Seq.fill(28)(Seq.fill(28)(
+              if (rng.nextInt(100) < 15) '1' else '0').mkString)
+            Tc(img, None, "noise")
+          }
+        }
+      }.getOrElse(curated)
+    }
+  }
+
+  /** One full inference protocol; returns the 10 collected logits. */
+  def runInference(dut: Mnistw4a8, mem: SparseMemory, image: Seq[String],
+                   writeAxiLite: (BigInt, BigInt) => Unit): Seq[Float] = {
+    writeWords(mem, imgBase, toWords(imageBytes(image)))
+
+    dut.io.ctrlBus.aw.valid #= false
+    dut.io.ctrlBus.w.valid #= false
+    dut.io.ctrlBus.ar.valid #= false
+    dut.io.ctrlBus.r.ready #= false
+    dut.io.ctrlBus.b.ready #= false
+    dut.io.outStream.stream.ready #= true
+
+    dut.clockDomain.waitSampling(5)
+
+    writeAxiLite(BigInt(0x08), BigInt(imgBase))
+    writeAxiLite(BigInt(0x0C), BigInt(weightBase))
+    writeAxiLite(BigInt(0x00), 1)
+
+    val collected = scala.collection.mutable.ArrayBuffer[Float]()
+    var timeout = 0
+    val maxCycles = sys.env.get("MNIST_TIMEOUT").map(_.toInt).getOrElse(5000000)
+    while (collected.length < 10 && timeout < maxCycles) {
+      if (dut.io.outStream.stream.valid.toBoolean && dut.io.outStream.stream.ready.toBoolean) {
+        collected += getFloat(dut.io.outStream.stream.payload(0))
+      }
+      dut.clockDomain.waitSampling()
+      timeout += 1
+    }
+
+    assert(collected.length == 10,
+      s"timeout after $timeout cycles (${collected.length}/10 output beats)")
+    collected.toSeq
+  }
+
+  test("Mnistw4a8 SoC black-box: logits match the software replica") {
+    val cases = buildCases()
+
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig))
 
-    var correct = 0
-    for (idx <- MnistData.images.indices) {
+    var maxDev = 0.0
+    for (tc <- cases) {
       compiled.doSim { dut =>
         dut.clockDomain.forkStimulus(10)
 
@@ -129,8 +198,6 @@ class Mnistw4a8Test extends AnyFunSuite {
         memorySim.start()
 
         writeWords(memorySim.memory, weightBase, weightWords())
-        writeWords(memorySim.memory, imgBase + idx * imgStride,
-          toWords(imageBytes(MnistData.images(idx))))
 
         def writeAxiLite(addr: BigInt, data: BigInt) = {
           dut.io.ctrlBus.aw.valid #= true
@@ -148,44 +215,23 @@ class Mnistw4a8Test extends AnyFunSuite {
           dut.clockDomain.waitSampling()
         }
 
-        dut.io.ctrlBus.aw.valid #= false
-        dut.io.ctrlBus.w.valid #= false
-        dut.io.ctrlBus.ar.valid #= false
-        dut.io.ctrlBus.r.ready #= false
-        dut.io.ctrlBus.b.ready #= false
-        dut.io.outStream.stream.ready #= true
+        val logits = runInference(dut, memorySim.memory, tc.image, writeAxiLite _)
 
-        dut.clockDomain.waitSampling(5)
+        val expected = Mnistw4a8Replica.logits(tc.image)
+        val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
+        maxDev = math.max(maxDev, dev)
+        assert(dev <= sys.env.get("REPLICA_TOL").map(_.toDouble).getOrElse(0.0),
+          s"[${tc.name}] logit mismatch vs replica: hw ${logits.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")
 
-        writeAxiLite(BigInt(0x08), BigInt(imgBase + idx * imgStride))
-        writeAxiLite(BigInt(0x0C), BigInt(weightBase))
-        writeAxiLite(BigInt(0x00), 1)
-
-        val collected = scala.collection.mutable.ArrayBuffer[Float]()
-        var timeout = 0
-        while (collected.length < 10 && timeout < 5000000) {
-          if (dut.io.outStream.stream.valid.toBoolean && dut.io.outStream.stream.ready.toBoolean) {
-            collected += getFloat(dut.io.outStream.stream.payload(0))
-          }
-          dut.clockDomain.waitSampling()
-          timeout += 1
-        }
-
-        assert(collected.length == 10,
-          s"Image $idx: timeout after $timeout cycles (${collected.length}/10 output beats)")
-
-        val logits = collected.toSeq
         val pred = logits.indexOf(logits.max)
-        val shown = logits.map(p => f"$p%.3f").mkString("[", " ", "]")
-        println(f"Image $idx -> predicted $pred, label ${MnistData.labels(idx)}  logits: $shown")
+        println(f"[${tc.name}] predicted $pred  logits: ${logits.map(p => f"$p%.3f").mkString("[", " ", "]")}")
 
-        assert(pred == MnistData.labels(idx),
-          s"Image $idx: predicted $pred, label ${MnistData.labels(idx)}")
+        tc.label.foreach { l =>
+          assert(pred == l, s"[${tc.name}]: predicted $pred, label $l")
+        }
       }
-      correct += 1
     }
 
-    println(s"Mnistw4a8: $correct/${MnistData.images.length} digits correctly classified")
-    assert(correct == MnistData.images.length, s"$correct/${MnistData.images.length} only")
+    println(s"Mnistw4a8: ${cases.size} inferences checked (max |hw-sw| deviation = $maxDev)")
   }
 }

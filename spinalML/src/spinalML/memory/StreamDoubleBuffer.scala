@@ -8,6 +8,13 @@ import spinal.lib._
  * It reads from a Stream into Ping/Pong memory banks (BRAM).
  * Exposes a random-access read interface for the computation unit.
  * Handshake interface (nextTile, tileReady) controls the Ping/Pong switching.
+ *
+ * `io.reArm` is the command-boundary pulse (callers wire it to their
+ * producing DMA's cmd.fire): it returns every bank pointer / full flag to
+ * its power-on state so a back-to-back command can never observe a full
+ * flag left over by the previous command. Without it, ping/pong parity
+ * survives across commands and inference N+1 starts by consuming a stale
+ * tile (inter-start corruption).
  */
 case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int) extends Component {
   val io = new Bundle {
@@ -21,6 +28,9 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
     // Handshake
     val nextTile = in Bool()   // Pulse from Compute to say "I'm done with this tile"
     val tileReady = out Bool() // High when the current compute bank is full and ready
+
+    // Command-boundary re-arm pulse (see class doc)
+    val reArm = in Bool()
   }
   
   val memSize = depth / lanes
@@ -84,5 +94,15 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
   }
   when(io.nextTile) {
     computeBank := !computeBank
+  }
+
+  // Command-boundary re-arm: last-assignment-wins, so this overrides any of
+  // the updates above on the cycle a new command is accepted.
+  when(io.reArm) {
+    loadBank := False
+    computeBank := False
+    pingFull := False
+    pongFull := False
+    loadCounter.clear()
   }
 }
