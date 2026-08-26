@@ -15,23 +15,39 @@ import spinal.lib._
  * flag left over by the previous command. Without it, ping/pong parity
  * survives across commands and inference N+1 starts by consuming a stale
  * tile (inter-start corruption).
+ *
+ * `io.freeze` (optional port, weight-residency control plane — Phase 2a):
+ * while asserted it NEUTRALISES nextTile — the full flag of the consumed
+ * bank is preserved and the compute pointer stops flipping, so the tile
+ * just delivered stays visible forever: every later pass re-reads the SAME
+ * bank contents through its streamer (weights resident on chip, zero DDR
+ * traffic). An actual reArm pulse always wins (last-assignment-wins below),
+ * which makes a RELOAD underneath residency behave exactly like today's
+ * normal fetch-and-flip pass.
  */
-case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int) extends Component {
+case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int,
+                                         enableFreezePort: Boolean = false) extends Component {
   val io = new Bundle {
     // Input Stream
     val streamIn = slave(Stream(Vec(dataType, lanes)))
-    
+
     // Read Interface for Compute Unit
     val readAddr = in UInt(log2Up(depth / lanes) bits)
     val readData = out Vec(dataType, lanes)
-    
+
     // Handshake
     val nextTile = in Bool()   // Pulse from Compute to say "I'm done with this tile"
     val tileReady = out Bool() // High when the current compute bank is full and ready
 
     // Command-boundary re-arm pulse (see class doc)
     val reArm = in Bool()
+
+    // Residency hold (Phase 2a) — neutralises nextTile when asserted.
+    // (Named residentHold: `freeze` collides with spinal.core.Data#freeze.)
+    val residentHold = if (enableFreezePort) Some(in Bool()) else None
   }
+
+  def freezeNow: Bool = io.residentHold.getOrElse(False)
   
   val memSize = depth / lanes
   
@@ -75,24 +91,24 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
   }
   
   // State management for Ping bank
-  when(io.nextTile && computeBank === False) {
+  when(io.nextTile && !freezeNow && computeBank === False) {
     pingFull := False
   } elsewhen(loadDone && loadBank === False) {
     pingFull := True
   }
-  
+
   // State management for Pong bank
-  when(io.nextTile && computeBank === True) {
+  when(io.nextTile && !freezeNow && computeBank === True) {
     pongFull := False
   } elsewhen(loadDone && loadBank === True) {
     pongFull := True
   }
-  
+
   // Pointer updates
   when(loadDone) {
     loadBank := !loadBank
   }
-  when(io.nextTile) {
+  when(io.nextTile && !freezeNow) {
     computeBank := !computeBank
   }
 

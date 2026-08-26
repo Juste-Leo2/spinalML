@@ -17,7 +17,11 @@ case class Sequential(
   globalDataType: HardType[Data],
   inputShape: Seq[Int],
   layers: Seq[LayerSpec],
-  axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+  axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4),
+  // Phase-2a weight residency: when set, exposes the run-mode control plane
+  // (see Accelerator CSR map). Direct users of this component keep today's
+  // always-fetch behaviour when left at the default.
+  val weightResidency: Boolean = false
 ) extends Component {
 
   // ============================================================
@@ -94,9 +98,33 @@ case class Sequential(
     val imgBaseAddress = in UInt(axiConfig.addressWidth bits)
     val weightsBaseAddress = in UInt(axiConfig.addressWidth bits)
 
+    // Weight-residency run-mode inputs (instantiated only when the ctor flag
+    // is set; Accelerator maps them to CSR 0x10 bit0 and the 0x14 RELOAD shot)
+    val weightResident = if (weightResidency) Some(in Bool()) else None
+    val weightReload   = if (weightResidency) Some(in Bool()) else None
+
     val axiMaster = master(Axi4ReadOnly(axiConfig))
     val outStream = master(Tensor(finalType, finalShape, lanes = 1)) // Default to 1 lane output for now
   }
+
+  // ---- Weight residency control plane (Phase 2a) -------------------------
+  // MODE STREAM_PER_PASS (resident low) reproduces today's wiring verbatim.
+  // MODE WEIGHT_RESIDENT: weight/bias fork branches whose region is already
+  // on chip accept their START beat immediately WITHOUT issuing a DMA
+  // command (collective fork completion is unaffected — the image branch,
+  // which always fetches, dominates its latency). Real fetches happen on
+  // first use, for one pass after a RELOAD pulse, AND on the RISING EDGE of
+  // the resident mode itself: at that moment the compute pointer usually
+  // sits on a flipped-empty bank left over from a legacy pass, so tileReady
+  // would stay low forever — one guaranteed fill makes the resident state
+  // self-consistent without any host ritual. Buffers are then held with
+  // `residentHold` and every later pass re-diffuses the resident bank.
+  private val residentMode = io.weightResident.getOrElse(False)
+  private val residentPrev = RegInit(False) init (False)
+  residentPrev := residentMode
+  private val residentRise = residentMode && !residentPrev
+  private val weightReloadLatches = scala.collection.mutable.ArrayBuffer[Bool]()
+
 
   // --- 1. Memory Offset Calculation & DMA Instantiation ---
   val allAxiMasters = scala.collection.mutable.ArrayBuffer[Axi4ReadOnly]()
@@ -219,9 +247,16 @@ case class Sequential(
 
       val dmaW = DMAReader(wType, wShape, outLanes = requiredLanes, dmaAxiConfig,
         trimToElements = true, flushableGearbox = true)
+      // Weight-residency fetch scheduler: swallows this START's trigger beat
+      // when the region is already resident; passes the beat through to the
+      // reader unchanged otherwise (identical late-acceptance gating).
+      val fetchedOnceW = RegInit(False) init (False)
+      val reloadPendingW = RegInit(False) init (False)
+      weightReloadLatches += reloadPendingW
+      val fetchNowW = !fetchedOnceW || !residentMode || reloadPendingW || residentRise
       val reqW = Stream(FetchRequest(axiConfig.addressWidth))
-      reqW.valid := startTriggers(triggerIdx).valid
-      startTriggers(triggerIdx).ready := reqW.ready
+      reqW.valid := startTriggers(triggerIdx).valid && fetchNowW
+      startTriggers(triggerIdx).ready := Mux(fetchNowW, reqW.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqW.address := io.weightsBaseAddress + currentMemoryOffset
       val elementsPerBeatW = axiConfig.dataWidth / wType.getBitsWidth
@@ -242,8 +277,20 @@ case class Sequential(
 
       val wBufferSize = elements // Double buffer size for weights (exact: contract = tile of `depth` elements)
       weightDmaFire = reqW.fire
-      val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes)
+      val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes,
+        enableFreezePort = true)
+      when(reqW.fire) {
+        fetchedOnceW := True
+        reloadPendingW := False // RELOAD/rise-fetch consumed by this very pass
+      }
+      // Mode-off→on transition arms exactly one guaranteed refetch through
+      // the SAME sticky latch RELOAD uses (a raw pulse here would be missed:
+      // the rising edge lands between STARTs, long before the next trigger).
+      when(residentRise) {
+        reloadPendingW := True
+      }
       wDoubleBuffer.io.reArm := reqW.fire
+      wDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       wDoubleBuffer.io.streamIn << dmaW.io.outStream.stream
 
       val wStreamer = DoubleBufferStreamer(wType, wBufferSize, requiredLanes)
@@ -266,9 +313,14 @@ case class Sequential(
       val elements = bShape.product
       val dmaB = DMAReader(lType, bShape, outLanes = requiredBiasLanes, dmaAxiConfig,
         trimToElements = true, flushableGearbox = true)
+      // Weight-residency fetch scheduler (bias mirror of the weight site)
+      val fetchedOnceB = RegInit(False) init (False)
+      val reloadPendingB = RegInit(False) init (False)
+      weightReloadLatches += reloadPendingB
+      val fetchNowB = !fetchedOnceB || !residentMode || reloadPendingB || residentRise
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
-      reqB.valid := startTriggers(triggerIdx).valid
-      startTriggers(triggerIdx).ready := reqB.ready
+      reqB.valid := startTriggers(triggerIdx).valid && fetchNowB
+      startTriggers(triggerIdx).ready := Mux(fetchNowB, reqB.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqB.address := io.weightsBaseAddress + currentMemoryOffset
 
@@ -287,8 +339,17 @@ case class Sequential(
       currentMemoryOffset = alignToBeat(currentMemoryOffset + MemLayout.regionBytes(elements, lType.getBitsWidth))
 
       val bBufferSize = elements // Exact size (contract = tile of `depth` elements)
-      val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes)
+      val bDoubleBuffer = StreamDoubleBuffer(lType, bBufferSize, requiredBiasLanes,
+        enableFreezePort = true)
+      when(reqB.fire) {
+        fetchedOnceB := True
+        reloadPendingB := False
+      }
+      when(residentRise) {
+        reloadPendingB := True
+      }
       bDoubleBuffer.io.reArm := reqB.fire
+      bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       bDoubleBuffer.io.streamIn << dmaB.io.outStream.stream
 
       val bStreamer = DoubleBufferStreamer(lType, bBufferSize, requiredBiasLanes)
@@ -456,6 +517,14 @@ case class Sequential(
     }
 
     registerNode(nextTensor)
+  }
+
+  // RELOAD broadcast (Phase 2a weight residency): a pulse on this input arms
+  // EVERY resident region for exactly one refetch at the next START. Placed
+  // textually after the per-command latch-clear sites so it wins there
+  // (last-assignment-wins semantics).
+  when(io.weightReload.getOrElse(False)) {
+    weightReloadLatches.foreach(_ := True)
   }
 
   // Output assignment: the last node feeds the accelerator output stream

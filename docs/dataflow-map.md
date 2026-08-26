@@ -465,23 +465,28 @@ Zones d'ombre assumées :
 
 Ce que la carte révèle pour la suite (résidence des poids, préfetch) :
 
-1. **Les frontières existent déjà par-DMA** : `reqW.fire`/`reqB.fire` armés indépendamment
-   (Sequential.scala:246,291). Si ces triggers ne refirent plus, leurs buffers gardent leur
-   contenu ET leur `tileReady` → les streamers re-diffuseront les mêmes poids. **La résidence
-   pourrait tomber presque gratuitement** — hypothèse centrale à prouver par test chaîné.
-2. **Ce qu'il faudra ajouter** :
-   - un masque de triggers (les branches poids du fork ne firent qu'au premier START ou sur
-     pulsion d'un futur registre RELOAD) ;
-   - un registre RELOAD (ex. `0x10`) — décision API à trancher ;
-   - un mode `RESIDENT | STREAM_PER_PASS` (le mode actuel = STREAM_PER_PASS, prérequis exact du
-     Folding L2).
-3. **Le couplage poussé/tiré** : aujourd'hui tout est tiré par le calcul (§3.6). Le préfetch
-   (couche N+1 pendant le calcul de N) introduit du poussé : le WeightManager devra arbitrer
-   le maître AXI unique (img(N) ∥ weights(N+1)) et signaler « poids prêts » par couche.
-4. **Compatibilité résidence** : `biasAdd` recharge son `biasMem` à CHAQUE tensor
-   (bias_add.scala:88-94) → compatible résidence si le flux biais re-diffuse ; im2col garde des
-   fenêtres périmées (§3.7) → réécrites avant usage, OK mais à surveiller en tiling.
-5. **Jalon préalable** : dissection gearbox×DAG (§4.5) AVANT de concevoir le préfetch dessus.
+1. **Les frontières existent déjà par-DMA** : `reqW.fire`/`reqB.fire` armés indépendamment.
+   ⚠️ CORRECTION AU SPRINT (Phase 2a réalisée, août 2026) : l'hypothèse « résidence presque
+   gratuite » était **fausse en un point** — sans refill, le `nextTile` de fin de consommation
+   vide le flag du bank courant et bascule sur le bank jumeau (vide) : `tileReady` meurt et la
+   rediffusion ne redémarre jamais. La solution livrée = primitive `residentHold` sur
+   `StreamDoubleBuffer` (gèle flag + pointeur ; `reArm` garde la priorité last-wins pour qu'un
+   reload se comporte comme une passe normale). Le streamer, lui, est naturellement rejouable.
+2. ✅ **Livré en Phase 2a** :
+   - branches poids/biais du fork conditionnelles dans Sequential (fetch si 1ᵉʳ usage / RELOAD /
+     **front montant du mode** — ce front s'auto-fetch une fois car le pointeur hérite d'un bank
+     vide d'une passe legacy ; impulsion one-cycle → verrou sticky consommé par le `cmd.fire`) ;
+   - CSR `0x10` bit0 = WEIGHT_RESIDENT (défaut STREAM_PER_PASS), `0x14` write = RELOAD one-shot ;
+   - validation : `WeightResidentChainTest` (BF16+W4A8 bit-exactes, AR poids **strictement 0**
+     en régime établi, anti-vacuité RELOAD) + formel `StreamDoubleBufferHoldFormal`.
+3. **Le couplage poussé/tiré** (préfetch 2b, RESTE À FAIRE) : aujourd'hui tout est tiré par le
+   calcul (§3.6). Préfetcher couche N+1 pendant N introduit du poussé : le WeightManager devra
+   arbitrer le maître AXI unique (img(N) ∥ weights(N+1)) et signaler « poids prêts » par couche.
+4. **Compatibilité résidence vérifiée empiriquement** : `biasAdd` recharge son `biasMem` à CHAQUE
+   tensor depuis le flux re-diffusé ✓ ; les buffers B internes des matmuls reçoivent une copie
+   fraîche du flux à chaque passe → se comportent comme nourris par DMA ✓ ; im2col fenêtres
+   périmées (§3.7/M2) réécrites avant usage, OK — à surveiller en tiling Phase 3.
+5. ~~Jalon préalable gearbox×DAG~~ : levé (M1.7 open-mysteries — cloison principé).
 
 ---
 
