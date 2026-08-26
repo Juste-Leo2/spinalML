@@ -78,6 +78,10 @@ class StreamDoubleBufferHoldFormal extends Component {
   anyseq(dut.io.nextTile)
   anyseq(dut.io.residentHold.get)
   dut.io.reArm := False
+  // Prefetch staging is OUT OF SCOPE for this pure-hold spec: pin the input
+  // so the solver cannot arm phantom swaps (an undriven input would float
+  // into an unconstrained primary variable).
+  dut.io.stageRequest.get := False
 
   // House-playbook guard (cf. DMAReaderFormal): pin the async reset to be
   // asserted at t=0 so no mid-run free-reset window can desynchronise

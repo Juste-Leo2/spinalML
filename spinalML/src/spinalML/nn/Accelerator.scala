@@ -90,22 +90,28 @@ class Accelerator[T <: Data](
   model.io.weightsBaseAddress := weightsAddrReg
 
   // ------------------------------------------------------------------
-  // Weight-residency run-mode control plane (Phase 2a)
+  // Weight-residency run-mode control plane (Phase 2a + 2b prefetch)
   //
   // Register 0x10 MODE:
   //   bit0 = WEIGHT_RESIDENT — weight/bias regions are fetched from DDR on
   //          their first use (or one pass after RELOAD) and kept resident;
   //          every later START only repeats the activation/image fetch.
+  //   bit1 = PREFETCH_EN (requires bit0) — refresh fetches leave the START
+  //          sweep: a RELOAD fires eagerly against reader-ready × loader-
+  //          empty, filling the IDLE bank while the held tile is still being
+  //          consumed; the consumer switches onto the fresh weights at the
+  //          NEXT end-of-pass edge (never mid-stream).
   //   0x00 = STREAM_PER_PASS — today's behaviour: every START re-fetches
   //          everything.
   // Register 0x14 RELOAD: any write pulses a one-shot request so the next
-  //   START re-fetches all weight/bias regions from the CURRENT 0x0C base
-  //   (latched internally per region for exactly one pass).
-  // Assumption (documented in docs): the host programs these registers
-  // between STARTs — no write is expected while an inference is running.
+  //   boundary (START, or eager fire when prefetching) re-fetches all
+  //   weight/bias regions from the CURRENT 0x0C base.
+  // Assumption (documented in docs): the host paces RELOAD requests at most
+  // one outstanding per region — BUSY/export may be added later if needed.
   if (weightResidencyCSR) {
     val runModeReg = ctrlFactory.createReadAndWrite(UInt(8 bits), 0x10, 0) init(0)
     model.io.weightResident.foreach(_ := runModeReg(0))
+    model.io.weightPrefetch.foreach(_ := runModeReg(1))
 
     val reloadShot = RegInit(False)
     ctrlFactory.onWrite(0x14) {

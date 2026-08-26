@@ -16,7 +16,7 @@ import spinal.lib._
  * survives across commands and inference N+1 starts by consuming a stale
  * tile (inter-start corruption).
  *
- * `io.freeze` (optional port, weight-residency control plane — Phase 2a):
+ * `io.residentHold` (optional port, weight-residency control plane — Phase 2a):
  * while asserted it NEUTRALISES nextTile — the full flag of the consumed
  * bank is preserved and the compute pointer stops flipping, so the tile
  * just delivered stays visible forever: every later pass re-reads the SAME
@@ -24,6 +24,15 @@ import spinal.lib._
  * traffic). An actual reArm pulse always wins (last-assignment-wins below),
  * which makes a RELOAD underneath residency behave exactly like today's
  * normal fetch-and-flip pass.
+ *
+ * Phase 2b prefetch surface (with the residency port set): loading into the
+ * IDLE bank ALREADY works under hold (hold only guards nextTile actions),
+ * which is exactly what an overlapped weight refresh exploits. The caller
+ * raises `stageRequest` while a fresh-generation tile should become the next
+ * consumer view; the buffer then allows EXACTLY ONE governed flip — at the
+ * following end-of-pass nextTile edge, never mid-stream — after which it
+ * pulses `refreshSettled` and returns to holding the (newly consumed) tile.
+ * The OTHER bank carries no invariant: being empty/filling is normal.
  */
 case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int,
                                          enableFreezePort: Boolean = false) extends Component {
@@ -45,9 +54,20 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
     // Residency hold (Phase 2a) — neutralises nextTile when asserted.
     // (Named residentHold: `freeze` collides with spinal.core.Data#freeze.)
     val residentHold = if (enableFreezePort) Some(in Bool()) else None
+
+    // ---- Phase-2b prefetch surface (present when the residency port is) --
+    val stageRequest = if (enableFreezePort) Some(in Bool()) else None
+
+    /** Loader side can accept a whole tile into its (idle) bank right now. */
+    val loadCanAccept = out Bool()
+    /** Single-cycle pulse: a full tile just finished landing in the idle bank. */
+    val tileFilled = out Bool()
+    /** Single-cycle pulse: a STAGED swap just moved the consumer onto fresh data. */
+    val refreshSettled = out Bool()
   }
 
   def freezeNow: Bool = io.residentHold.getOrElse(False)
+  def stageRequest: Bool = io.stageRequest.getOrElse(False)
   
   val memSize = depth / lanes
   
@@ -75,11 +95,31 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
   // Load Process Logic
   val loadCounter = Counter(memSize)
   val currentLoadBankFull = (loadBank === False) ? pingFull | pongFull
-  
+
   io.streamIn.ready := !currentLoadBankFull
-  
+  io.loadCanAccept := !currentLoadBankFull
+
   val loadDone = io.streamIn.valid && !currentLoadBankFull && loadCounter.willOverflowIfInc
-  
+
+  // ---- Phase-2b swap FSM ----
+  // tileFilled: one-cycle pulse once a whole tile landed in the idle bank.
+  val tileFilled = RegNext(loadDone) init (False)
+  io.tileFilled := tileFilled
+
+  // switchArmed opens a single governed-flip window: the NEXT end-of-pass
+  // nextTile edge swaps the consumer onto the staged fresh bank (never
+  // mid-stream — streamer keeps its per-pass element count contract).
+  val switchArmed = RegInit(False)
+  val allowFlip = !freezeNow || switchArmed
+  when(stageRequest && tileFilled) {
+    switchArmed := True // caller-owned level: either arrival order converges
+  }
+  when(io.nextTile && allowFlip) {
+    computeBank := !computeBank
+    switchArmed := False
+  }
+  io.refreshSettled := io.nextTile && allowFlip && switchArmed
+
   when(io.streamIn.valid && !currentLoadBankFull) {
     // Write data to the correct memory
     when(loadBank === False) {
@@ -89,16 +129,17 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
     }
     loadCounter.increment()
   }
-  
-  // State management for Ping bank
-  when(io.nextTile && !freezeNow && computeBank === False) {
+
+  // State management for Ping bank (clear path follows the SAME governed
+  // window as the flip so flag erasure and pointer move stay atomic).
+  when(io.nextTile && allowFlip && computeBank === False) {
     pingFull := False
   } elsewhen(loadDone && loadBank === False) {
     pingFull := True
   }
 
   // State management for Pong bank
-  when(io.nextTile && !freezeNow && computeBank === True) {
+  when(io.nextTile && allowFlip && computeBank === True) {
     pongFull := False
   } elsewhen(loadDone && loadBank === True) {
     pongFull := True
@@ -107,9 +148,6 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
   // Pointer updates
   when(loadDone) {
     loadBank := !loadBank
-  }
-  when(io.nextTile && !freezeNow) {
-    computeBank := !computeBank
   }
 
   // Command-boundary re-arm: last-assignment-wins, so this overrides any of
@@ -120,5 +158,6 @@ case class StreamDoubleBuffer[T <: Data](dataType: HardType[T], depth: Int, lane
     pingFull := False
     pongFull := False
     loadCounter.clear()
+    switchArmed := False
   }
 }

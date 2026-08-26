@@ -479,9 +479,14 @@ Ce que la carte révèle pour la suite (résidence des poids, préfetch) :
    - CSR `0x10` bit0 = WEIGHT_RESIDENT (défaut STREAM_PER_PASS), `0x14` write = RELOAD one-shot ;
    - validation : `WeightResidentChainTest` (BF16+W4A8 bit-exactes, AR poids **strictement 0**
      en régime établi, anti-vacuité RELOAD) + formel `StreamDoubleBufferHoldFormal`.
-3. **Le couplage poussé/tiré** (préfetch 2b, RESTE À FAIRE) : aujourd'hui tout est tiré par le
-   calcul (§3.6). Préfetcher couche N+1 pendant N introduit du poussé : le WeightManager devra
-   arbitrer le maître AXI unique (img(N) ∥ weights(N+1)) et signaler « poids prêts » par couche.
+3. **Le couplage poussé/tiré** : ✅ PARTIELLEMENT RÉSOLU EN PHASE 2b — le mode `PREFETCH_EN`
+   (CSR 0x10 bit1, exige bit0) fait sortir les fetch de refresh du sweep START : tir
+   opportuniste sur l'intersection reader-ready × loader-empty (le bank IDLE se remplit pendant
+   que la tuile tenue est encore consommée), puis **swap gouverné côté buffer** (`switchArmed` :
+   exactement UN flip autorisé à la prochaine frontière de passe, jamais mi-flux) signalé par
+   `refreshSettled`. La porte vérité = fenêtres AR poids entre START et 1ᵉʳ beat de sortie :
+   sérialisé = motif complet ; préchargé = strictement zéro (`WeightPrefetchChainTest`, les deux
+   modèles). Reste ouvert pour Folding L2 : le contrôle continu run/stop multi-tuiles (§4).
 4. **Compatibilité résidence vérifiée empiriquement** : `biasAdd` recharge son `biasMem` à CHAQUE
    tensor depuis le flux re-diffusé ✓ ; les buffers B internes des matmuls reçoivent une copie
    fraîche du flux à chaque passe → se comportent comme nourris par DMA ✓ ; im2col fenêtres
