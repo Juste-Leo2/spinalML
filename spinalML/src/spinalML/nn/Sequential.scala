@@ -393,6 +393,12 @@ case class Sequential(
       case l: Linear =>
         val rows = inTensor.shape.dropRight(1).product
         val reshaped = reshape(inTensor, Seq(rows, l.inFeatures))
+        // DO NOT switch this repack to withFlush = true without a local
+        // elastic stage (FIFO >= 2 or a pipe pair) at this fan-out attach
+        // point: the flushable gearbox's hard `ready := !full` chained
+        // combinationally onto the node0 tee corrupted the OTHER fork branch
+        // (skip-FIFO lost/duplicated the boundary element — ResidualMLP).
+        // Bisection evidence + elasticity rule: docs/open-mysteries.md M1.7.
         val repackedTensor = repack(reshaped, l.inFeatures)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.

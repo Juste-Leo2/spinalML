@@ -86,6 +86,14 @@ object repack {
    * Modifies the physical lane width of a Tensor stream (Gearbox).
    * For instance, converts a 64-lane tensor stream into a 32-lane stream.
    * This does not modify the logical ML shape of the tensor.
+   *
+   * withFlush = true (structured gearbox) attaches a hard `ready := !full`
+   * to the caller's upstream. ATTACHMENT RULE (bisection M1.7,
+   * docs/open-mysteries.md): never hang this directly onto a shared fan-out
+   * branch without a local elastic stage — use a depth>=2 FIFO or a pipe pair
+   * at the attach point. Safe usages today: inside DMAReaders behind the
+   * empty-gated cmd.ready (weight/bias path). Known-unsafe: the Linear-input
+   * repack in nn/Sequential.scala (see guard comment there).
    */
   def apply[T <: Data](a: Tensor[T], newLanes: Int, reArm: Option[Bool] = None,
                        created: scala.collection.mutable.ArrayBuffer[RepackOp[_]] = null,

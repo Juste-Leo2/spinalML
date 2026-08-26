@@ -187,6 +187,14 @@ class RepackStallDiffTest extends AnyFunSuite {
     runSession("i8_2to4_p100_p25", I8(), 8, 64, 2, 4, withFlush = true, 1.0, 0.25, seed = 13)
   }
 
+  // The EXACT ResidualMLP-Dense1 suspect shape: lanes-in = 1 => m = 4.
+  // Earlier coverage stopped at m = 2 (and m = 3 in the formal chain) — m = 4
+  // was the blind spot until the network bisection pointed here.
+  test("M1-C aggregate I8 1-to-4 flushable - random stalls (suspect m=4)") {
+    runSession("i8_1to4_p50_p50", I8(), 8, 32, 1, 4, withFlush = true, 0.5, 0.5, seed = 23)
+    runSession("i8_1to4_p100_p15", I8(), 8, 32, 1, 4, withFlush = true, 1.0, 0.15, seed = 29)
+  }
+
   // The non-multiple W4A8 weight ratio: TWO chained gearboxes via lanes=1.
   test("M1-A chain I8 16-1-25 flushable - random stalls") {
     runSession("i8_chain16_25_p50_p50", I8(), 8, 400, 16, 25, withFlush = true, 0.5, 0.5, seed = 17)

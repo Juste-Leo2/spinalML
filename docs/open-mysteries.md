@@ -14,7 +14,7 @@
 
 | ID | Sujet | Statut | Bloque |
 |---|---|---|---|
-| [M1](#m1--gearbox-structurée-flushable--graphe-dag) | Gearbox structurée flushable × graphe DAG | 🟡 EN COURS — **gearbox blanchie (sim + formel)**, reste le consommateur (étape C bisection) | Généralisation du chemin flushable ; conception préfetch Phase 2b ; multi-tile Phase 3 |
+| [M1](#m1--gearbox-structurée-flushable--graphe-dag) | Gearbox structurée flushable × graphe DAG | 🟡→🟢 **CAUSE RACINE RÉGIONALE PROUVÉE** (bisection C0–C8) ; règle d'élasticité au fan-out établie ; micro-mécanisme RTL = suivi optionnel | Ne bloque plus : le cloison img-legacy/poids-flushable est principé (voir M1.7) |
 | [M2](#m2--état-de-fenêtre-persistant-dim2colop) | État de fenêtre persistant d'Im2ColOp | 🟡 OUVERT-documenté | Abort/soft-reset futur ; refonte multi-tile Phase 3 |
 
 ---
@@ -147,7 +147,48 @@ nouveau pacing. → **Étape C (bisection réseau)** reste à faire pour nommer 
 **Statut M1 : 🟡 EN COURS** — gearboxes blanchies et outillage permanent en place ;
 prochaine action unique : étape C, quelques heures.
 
-### M1.7 Pourquoi c'est bloquant AVANT la fin Phase 2 / début Phase 3
+### M1.7 RÉSULTATS ÉTAPE C — BISECTION RÉSEAU (2026-08)
+
+Reproduction sur demande obtenue avec la seule variable `BISECT_LINEAR_ONLY` (Linear-input
+repack structuré), sortie historique exacte reproduite :
+
+| # | Configuration | Résultat golden | Conclusion |
+|---|---|---|---|
+| C0 | Reader1D image structuré seul (axe A) | 🟢 | chemin image innocent (gate cmd.ready vide actif) |
+| C1 | Linear#1 **ET** Linear#2 input-repack structurés | 🔴 EXACT `[…,0,0,.625,.25]` | reproduction complète |
+| C2 | Linear#1 seul structuré | 🔴 EXACT | le coupable est DENSE1, pas Dense2 |
+| C3 | Linear#2 seul structuré | 🟢 | confirmation C2 |
+| C4 | + FIFO découplante 32 prof. **sortie** du site fautif | 🔴 identique | le pacing de SORTIE n'est pas en cause |
+| C5 | TapBuffer profondeur ×2 | 🔴 identique | débordement FIFO hors de cause |
+| C6 | Échange des deux vues du fork node0 | signature nouvelle `[1.5×8]` | sensible à la POSITION des consommateurs |
+| C7 | + FIFO élastique profondeur 2/4/64 **entrée** du site OU `m2sPipe` entrée | 🟢 **GOLDEN EXACT** | le couplage `a.ready:=!full` ↔ amont partagé EST le mécanisme |
+| C8 | Fix internalisé dans RepackOp (fifo/cut sur TOUS les flushables) | 🔴 autre signature (mot-frontière décalé entre couches) | la synchronisation inter-couches dépend de la géométrie des pacing ; un fix global change l'alignement matmul A/B |
+
+**Cause racine (région prouvée)** : le mode flushable expose une backpression dure
+(`a.ready := !full`, rafale-blocage). Attachée DIRECTEMENT à la branche directe d'un
+fork partagé (Tee node0 → reshaped → repack 1→4), cette politique traverse toute la chaîne
+de ready sans élasticité et perturbe l'état séquentiel partagé amont (double-buffer image /
+streamer) au point que **l'AUTRE branche** du fork (FIFO différée du skip) livre une séquence
+fausse (`[-1 dupliqué, -2 perdu]`) — d'où la corruption Add+ReLU observée, 100 % expliquée par
+cette séquence d'entrée erronée (`ta+tb` élément-wise vérifié numériquement sur trace pré-edge).
+Une simple élasticité d'un étage côté entrée restaure intégralement la correction (C7),
+y compris pour `m2sPipe` profond-1 : la coupure doit être LOCALE AU POINT DE FIXATION,
+pas interne au composant (C8 montre qu'un décalage global désynchronise la géométrie
+A/B des matmuls en réseau).
+
+**Leçon de fond (architecture)** : un consommateur à ready dur/combinatoire ne doit JAMAIS
+pendre directement à une branche partagée d'un fork dont l'autre branche alimente de
+l'état séquentiel sensible. La règle projet désormais : **tout attachement de gearbox
+structurée sur un fan-out exige une étape élastique locale (FIFO ≥ 2 ou pipe paire)**.
+Le cloison actuel image-legacy / poids-flushable est donc non seulement sûr empiriquement :
+il est PRINCIPÉ — les readers poids/biais acceptent via `cmd.ready` gated (frontière de
+commande, pas de couplage combinatoire durable), jamais directement sur un fan-out intra-graphe.
+
+**Suivi optionnel restant** (micro-mécanisme RTL exact du mot-frontière perdu/dupliqué à
+travers streamer/tee) : harnais standalone reproduisant topologie exacte + pacing matmul ;
+ne bloque plus rien tant que la règle d'élasticité ci-dessus est appliquée aux nouveaux sites.
+
+### M1.8 Pourquoi c'est bloquant AVANT la fin Phase 2 / début Phase 3
 
 Le multi-tile fera circuler les images **en tuiles avec halos** : exactement des régions finissant
 en milieu de groupe, traversant des consommateurs fortement stalling. C'est le régime précis où M1
@@ -231,3 +272,4 @@ pièges — il faut prendre l'habitude de lire les commentaires des primitives A
 | 2026-08 | M1 | **Étape A** : harnais permanent `RepackStallDiffTest` (9 tests) — gearbox structurée blanchie sous stalls aléatoires multi-commandes, y compris config ResidualMLP-image BF16 4→1 et chaîne 16→1→25. |
 | 2026-08 | M1 | **Étape B** : deux preuves BMC CVC4 — agrégat flushable 2→4 (`repack_flush_aggregate_stalls`, incl. théorème d'exclusion mutuelle) + chaîne non-multiple 4→1→3 (`repack_chain_4to1to3_stalls`). H2/H3 blanchies. |
 | 2026-08 | — | Combo chaîné × aléatoire : `MNIST_CHAIN_SEED` ajouté à MnistChainedTest ; 20/20 bit-exact (N=10 × 2 modèles). |
+| 2026-08 | M1 | **Étape C** : bisection réseau complète (C0–C8) — cause racine régionale prouvée (couplage ready-dur × fork partagé) ; règle d'architecture établie (élasticité obligatoire au fan-out) ; cloison actuel principé. Code expérimental reverté, `src/main` intact. |
