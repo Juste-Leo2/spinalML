@@ -27,6 +27,22 @@ class MnistChainedTest extends AnyFunSuite {
   /** Number of chained inferences per session (override via env). */
   val chainLength = sys.env.get("MNIST_CHAIN_N").map(_.toInt).getOrElse(3)
 
+  /** Per-step image selection:
+    *  - MNIST_CHAIN_SAME          : same curated digit every step (staleness fingerprint)
+    *  - MNIST_CHAIN_SEED=<n>      : reproducible pseudo-random digits — every step becomes a
+    *                                full-strength check on data the session has never seen
+    *  - otherwise                 : deterministic cycle through the curated set */
+  private def chainCases: Seq[Int] = {
+    if (sys.env.contains("MNIST_CHAIN_SAME")) Seq.fill(chainLength)(0)
+    else sys.env.get("MNIST_CHAIN_SEED").map(_.toInt) match {
+      case Some(seed) =>
+        val rng = new scala.util.Random(seed)
+        Seq.fill(chainLength)(rng.nextInt(MnistData.images.length))
+      case None =>
+        Seq.tabulate(chainLength)(k => k % MnistData.images.length)
+    }
+  }
+
   private def writeWords(mem: SparseMemory, base: Int, words: Seq[BigInt]): Unit =
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
 
@@ -38,9 +54,7 @@ class MnistChainedTest extends AnyFunSuite {
       .compile(Mnistw4a8(axiConfig))
 
     // Same digit repeated first (deterministic staleness fingerprint)
-    val cases =
-      if (sys.env.contains("MNIST_CHAIN_SAME")) Seq.fill(chainLength)(0)
-      else Seq.tabulate(chainLength)(k => k % MnistData.images.length)
+    val cases = chainCases
 
     compiled.doSim { dut =>
       dut.clockDomain.forkStimulus(10)
@@ -89,7 +103,7 @@ class MnistChainedTest extends AnyFunSuite {
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnist(axiConfig))
 
-    val cases = Seq.tabulate(chainLength)(k => k % MnistData.images.length)
+    val cases = chainCases
 
     compiled.doSim { dut =>
       dut.clockDomain.forkStimulus(10)

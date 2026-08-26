@@ -111,16 +111,22 @@ test in a way that isolated micro-probes do NOT reproduce (see §5).
 
 1. **Formal re-runs**: harnesses for StreamDoubleBuffer / MatmulOp /
    Conv1D-2D / Linear formals were updated for the new ports (`io.reArm`
-   tied False — one-shot windows unchanged), but the BMC proofs have not
-   been re-executed yet. New invariants worth adding once adapted:
-   `cmd.fire ==> buffer state == power-on` per module.
+   tied False — one-shot windows unchanged). ~~BMC proofs not yet
+   re-executed.~~    **DONE — all formal suites pass in CI (GitHub), Aug 2026; confirmed
+   locally 8/8 (CVC4 1.8, see `docs/open-mysteries.md` Annexe B).** New
+   invariants
+   worth adding: `cmd.fire ==> buffer state == power-on` per module;
+   RepackOp bit-stream identity under arbitrary stalls is tracked as
+   M1-étape B in `docs/open-mysteries.md`.
 2. **Structured-gearbox × DAG latent bug**: with the flushable gearbox also
    driving the IMAGE path, `ResidualMLPTemplate` (skip connection) produces
    wrong second-row values even though standalone probes of the same
    configuration (4→1 split, BF16 lanes, SInt and FloatML) are bit-perfect.
    Suspect a pacing-sensitive assumption somewhere between im2col and the
    tap FIFO. Until understood, the image path intentionally stays on the
-   legacy adapter.
+   legacy adapter. Dedicated register with ranked hypotheses, falsification
+   experiments and the dissection plan: `docs/open-mysteries.md` (M1; im2col
+   window state tracked there as M2).
 3. **Chain tests with random inputs**: combine `MNIST_RANDOM_N` with
    chaining (`MNIST_CHAIN_N`) once convenient — the replica oracle makes
    every chained random vector a full-strength check.

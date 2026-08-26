@@ -9,14 +9,14 @@ import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing repack: converting lanes=2 to lanes=4
-case class RepackTestComp[T <: Data](dataType: HardType[T]) extends Component {
+case class RepackTestComp[T <: Data](dataType: HardType[T], withFlush: Boolean = false) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4), lanes = 2))
     val c = master(Tensor(dataType, Seq(4), lanes = 4))
   }
-  
+
   // Use repack to reshape from 2 lanes to 4 lanes
-  io.c <> spinalML.ops.repack(io.a, newLanes = 4)
+  io.c <> spinalML.ops.repack(io.a, newLanes = 4, withFlush = withFlush)
 }
 
 class RepackTest extends AnyFunSuite {
