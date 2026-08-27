@@ -106,6 +106,16 @@ case class Sequential(
 
     val axiMaster = master(Axi4ReadOnly(axiConfig))
     val outStream = master(Tensor(finalType, finalShape, lanes = 1)) // Default to 1 lane output for now
+
+    // ---- Continuous-run frame signals (Phase 3, S1) ----------------------
+    // One inference = one output frame = exactly `finalShape.product` beats.
+    // These two outputs let the Accelerator auto-advance RUN mode safely:
+    //   busy — high from the first START accepted until the last output beat.
+    //   done — one-cycle pulse the moment a full output frame completes.
+    // Counted on the STREAM HANDSHAKE (fire), so downstream backpressure
+    // (ready=0) can never skip or duplicate a frame boundary.
+    val busy = out Bool()
+    val done = out Bool()
   }
 
   // ---- Weight residency control plane (Phase 2a) -------------------------
@@ -569,6 +579,27 @@ case class Sequential(
 
   // Output assignment: the last node feeds the accelerator output stream
   io.outStream <> nodeOutputs.last(consumers.last.indexOf(-1))
+
+  // ---- Frame accounting (Phase 3, S1) -----------------------------------
+  // A free-running modulo-frameSize counter of the final stream fires is
+  // exact because consecutive frames are contiguous by construction (a
+  // complete inference = exactly frameSize beats; a frame never stalls
+  // partially at handshake level — fires only count completed beats).
+  val frameSize = finalShape.product
+  require(frameSize > 0, "Sequential: output frame must be non-empty")
+  val frameCounter = Counter(frameSize)
+  when(io.outStream.stream.fire) {
+    frameCounter.increment()
+  }
+  val ioBusy = RegInit(False)
+  when(io.start.fire) {
+    ioBusy := True
+  }
+  when(ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc) {
+    ioBusy := False
+  }
+  io.busy := ioBusy
+  io.done := ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc
 
   // --- 3. Hierarchical AXI Arbitration ---
   // To avoid long combinatorial paths with many DMAs, we build a tree.

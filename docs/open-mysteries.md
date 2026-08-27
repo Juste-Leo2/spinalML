@@ -16,6 +16,7 @@
 |---|---|---|---|
 | [M1](#m1--gearbox-structurée-flushable--graphe-dag) | Gearbox structurée flushable × graphe DAG | 🟡→🟢 **CAUSE RACINE RÉGIONALE PROUVÉE** (bisection C0–C8) ; règle d'élasticité au fan-out établie ; micro-mécanisme RTL = suivi optionnel | Ne bloque plus : le cloison img-legacy/poids-flushable est principé (voir M1.7) |
 | [M2](#m2--état-de-fenêtre-persistant-dim2colop) | État de fenêtre persistant d'Im2ColOp | 🟡 OUVERT-documenté | Abort/soft-reset futur ; refonte multi-tile Phase 3 |
+| [M3](#m3--comptage-de-fenêtres-dim2colop--hk1w--k1) | Comptage de fenêtres Im2ColOp ≠ (H−K+1)(W−K+1) | 🔴 OUVERT (instrumenté S2, Phase 3) | Ne bloque pas le pipeline (bit-exact) ; à élucider avant de généraliser les formes |
 
 ---
 
@@ -239,7 +240,62 @@ argument de papier ; aucun abort mid-commande n'existe aujourd'hui pour le contr
 | C | Statu quo documenté (ce fichier) + la preuve M2.2 comme commentaire de code | Déjà fait côté doc | ✅ **Recommandé maintenant** |
 
 **Décision proposée** : Option C aujourd'hui ; Option A devient **obligatoire** le jour où un
-mécanisme d'abort/soft-reset existe ; refonte halo-explicite en Phase 3 remplacera la question.
+mécanisme d'abort/soft-reset existe ; refonte halo-explicite en Phase 3 remplacerà la question.
+
+---
+
+## M3 — Comptage de fenêtres d'Im2ColOp ≠ (H−K+1)·(W−K+1)
+
+### M3.1 Les faits (instrumentation Phase-3 S2, `Im2ColContinuityTest`)
+
+Sur Im2ColOp nu (Cannel C=1, K=3, SInt16 pixels, alimenté pixel par pixel via le Stream A) :
+
+| H | W | Fenêtres observées | Attendu naïf (H−2)·(W−2) |
+|---|---|---|---|
+| 10 | 8 | 27 | 48 |
+| 10 | 28 | 107 | 208 |
+| 10 | 64 | 251 | 496 |
+| 28 | 28 | 350 | 676 |
+
+La suite W (H=10) suit exactement `4·(W−2) + 3` : l'émission effective ne couvre qu'environ
+`⌊H/2⌋−1` rangées de fenêtres — comme si la moitié basse de l'image n'était jamais fenêtrée
+ou que la comptabilité rangée/compteur se décalait à mi-image.
+
+Observations associées :
+
+1. **W=8 (H=10), command-clean violé au niveau op** : une 2ᵉ commande (l'image B après A via
+   `stateDone`) émet ses fenêtres **décalées d'une colonne** vs une session fraîche (contenus
+   identiques à cours de... positions (0,1..) au lieu de (0,0..)). Les compteurs `x/y` sont bien
+   remis à zéro (`stateDone`), les *structures* (lineBuffers/shiftReg/tempVecs) ne le sont pas —
+   la puce M2.1 connue, mais observée POSITIVE en W=28 (107 fenêtres identiques B-après-A == B),
+   dépend de la largeur ⇒ l'interaction est liée aux résidus de largeur (8 = puissance de 2).
+2. **Le pipeline complet reste bit-exact** : Mnist (28×28, K=3) + répliques JVM, chaîné
+   10 inférences, régressions 23+ suites vertes. La convention d'émission, aussi curieuse
+   soit-elle, est cohérente avec ses consommateurs (matmul — indice K-aligné).
+3. **Propriétés des coutures prouvées indépendamment** : stall-équivalence (300 cycles à la
+   frontière de bande ⇒ fenêtres bit-identiques) — c'est le contrat dont la Phase 3 dépend ;
+   il NE dépend PAS du comptage.
+
+### M3.2 Hypothèses (par ordre de crédibilité)
+
+| # | Hypothèse | Test de falsification |
+|---|---|---|
+| A | Le FSM émet aux positions **courantes** (x,y) avec translation (K−1) ; le comptage "naïf" reposait sur une top-left convention **fausse** ; la demi-image résulte d'un compteur `y`/`windowCount` qui plafonne à H/2 (p. ex. lineBuffers **aliasant** au-delà de W·C·K regs?) | Waveform BMC sur le FSM (x/y/état d'émission) sur H=10,W=28 — lire `x_value/y_value` avec `simPublic()` |
+| B | Les structures persistent **et se comportent en miroir** sur la moitié basse (alias d'index des `lineBuffers` pour H > quelques rangées) | Balayage H=6,8,10,12,16,28 × W=28 — visualiser n(H) |
+| C | Le décalage colonne W=8 est un effet de **largeur non-multiple** du shifting (W·C et fenêtres K·C) — la "pop" lisant `regs(W·C−1)` (dernier) vs index supposé | W=9, 15 et W=16 comparés à W=8/28/64 — ε vs réplique numpy *du FSM* (pas du conv) |
+
+### M3.3 Risque/bénéfice
+
+- Le **risque réel** n'apparaîtrait que lorsqu'un grain de tuile (S3+) ne sera plus un simple
+  multi-ondes de la largeur/chanaux des modèles éprouvés — p. ex. WideConv 64×64 : la cible
+  S3 vérifiera à nouveau bit-exact vs coupe pleine-image ; là, l'échec sera **informatif**.
+- Le **bénéfice** de bloquer maintenant sur M3 serait faible : conventions internes validées
+  par tout le réseau en place ; la direction S3 probe touche au même endroit avec plus de
+  contexte (DMA bandes + streamer).
+
+**Décision proposée** : ne PAS bloquer ; sonder M3 avec la grille H∈{6..28}×W∈{9,15,16} via le
+harness `Im2ColContinuityTest` étendu, pendant la fenêtre S3/S4 ; la falsification C est la plus
+rapide à écarter.
 
 ---
 
@@ -277,3 +333,5 @@ pièges — il faut prendre l'habitude de lire les commentaires des primitives A
 | 2026-08 | Phase 2a | **Résidence des poids livrée** : CSR 0x10/0x14, branches fork conditionnelles (front résident = auto-fetch une fois, impulsion→verrou sticky), primitive `residentHold` sur `StreamDoubleBuffer`. Hypothèse carte §6 « presque gratuit » corrigée : sans freeze, `nextTile` tue la tuile (bank basculée vide). Portes : `WeightResidentChainTest` 2/2 modèles bit-exactes, AR poids strictement 0 en régime établi, RELOAD non-vide ; formel `StreamDoubleBufferHoldFormal` PASS (hold⇒pas de flip, flag consommé jamais effacé). Régressions 23/23. Pièges formels consignés : specs à propriétés temporelles exigent `assumeInitial(isResetActive)` + garde de vécu avant tout `$past`. |
 | 2026-08 | Phase 2b | **Préfetch des poids livré** : bit1 PREFETCH_EN ; fetch eager (reader-ready × loader-empty) hors sweep START remplissant le bank IDLE sous hold ; swap gouverné interne au buffer (`switchArmed` arme sur stageRequest×tileFilled, UN flip à la frontière de passe suivante puis `refreshSettled`) ; reArm supprimé UNIQUEMENT en monde préfetch (banks tenus = consommateurs vivants). Porte : fenêtres AR poids START→premier-beat — sérialisé motif plein, préchargé strictement zéro, les deux modèles + relocalisation weightsBase inter-passes (`WeightPrefetchChainTest`). Hygiène banks prouvée close par construction (toute entrée monde préfetch suit une génération reArmée ; invariant alternance fermé dedans). Piège formel nouveau : entrée `stageRequest` non connectée flottait en variable primaire libre ⇒ fixer explicitement les inputs hors-périmètre d'une spec (`:= False`) — régularisé après deux contre-exemples fantômes. Formels hold+legacy repassés verts post-refactor. |
 | 2026-08 | Post-2b | **Flakiness multi-seeds du `WeightPrefetchChainTest` = harnais, pas RTL** : `runMetered` lisait `outStream.stream.ready` sans jamais le piloter. Le `ready` d'un master Stream non conduit garde sa valeur INIT aléatoire Verilator (valeur 0 ou 1 selon le seed de simulation) → seed « bloquées » (ready=0, zéro beat) vs « fonctionnelles » (ready=1). Preuve : VCD — `fp!` (io_outStream_stream_ready) assigné UNE fois à l'init (0 vs 1 selon la run), jamais en transition ; tous les autres bancs utilisent l'idiome `ready #= true` (MnistTest.runInference etc.). Diagnostic par waveforms complémenté d'un mini-parser VCD (scala n'était pas nécessaire). Enseignement : tout `stream.ready` relu par le banc exige un sink drive explicite (ou `forkStimulus` sur un master `stream.ready #= True`). |
+| 2026-08 | Phase 3 S1 | **Contrôle continu livré** : `Sequential` expose `busy`/`done` (frame = finalShape.product, compté sur le fire du stream) ; Accelerator — RUN (0x1C bit0), TILE_CNT (0x18 RO), statut 0x04 busy/RUN, **curseur image interne** (avance au même edge que l'auto-START : zéro course hôte↔HW, sémantique « frames vidéo », 0x08 readback = base hôte intacte). Pièges : adresse non-alignée 4 octets interdite par AxiLite4SlaveFactory (0x02 → 0x1C) ; registre factory non tickable depuis une closure-`when` (NPE accessor — curseur dans un Reg pur). Porte : `MnistContinuousTest` — 1 START ⇒ 4 frames auto bit-exacts ×2 modèles, STOP en vol propre (exactement 1 frame déjà démarré), compteurs cohérents ; régressions 30/30. |
+| 2026-08 | Phase 3 S2 | **im2col = halo vivant (M2 vers design-intentionnel)** : stalls de couture d'une bande = exactement le comportement qu'on attend d'un swap DMA — prouvé par équivalence bit-exacte « flux continu vs stall de 300 cycles à la frontière » sur H=10/W∈{8,28,64} et H=28/W=28 ; command-clean (B-après-A == B seule) validé en W=28/64. **Nouveau mystère M3** : le comptage de fenêtres observé diffère du modèle naïf (27/107/251/350 vs 48/208/496/676) et viole le command-clean en W=8 (décalage d'une colonne après reset) — anomalies documentées dans M3, le pipeline réel reste bit-exact. |
