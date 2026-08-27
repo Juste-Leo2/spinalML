@@ -14,27 +14,58 @@ import spinalML.tensors.Tensor
  * outputs, and the exact-capacity FIFO guarantees a one-shot inference never
  * overflows the deferred path.
  */
-case class TapBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int) extends Component {
+case class TapBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int, spineDebug: Boolean = false) extends Component {
   require(depth > 0, "TapBuffer depth must be positive")
-  val entries = Math.max(1, depth / lanes)
+  val entries = Math.max(1, depth / lanes) + 1
 
   val io = new Bundle {
     val streamIn = slave(Stream(Vec(dataType, lanes)))
     val directOut = master(Stream(Vec(dataType, lanes)))
     val tapOut = master(Stream(Vec(dataType, lanes)))
+    val dbg = spineDebug match {
+      case true => new Bundle {
+        val pushVal = out UInt(16 bits)
+        val popVal = out UInt(16 bits)
+        val pushFire = out Bool()
+        val popFire = out Bool()
+        val cnt = out UInt(12 bits)
+      }
+      case false => null
+    }
   }
 
   // Deferred path: exact-capacity FIFO.
   val fifo = StreamFifo(Vec(dataType, lanes), entries)
 
   // Tee: one input handshake drives both outputs atomically.
+  // Capacity note: the FIFO holds the WHOLE tensor (entries = depth / lanes),
+  // and the direct consumer (e.g. a conv that soaks its whole input before
+  // emitting) may still sit on the LAST beat when the FIFO is exactly full:
+  // the source *re-delivers* that held beat (its valid stays high, its ready
+  // is gated by us), so the direct would otherwise consume it TWICE (M1.7
+  // bis — one duplicated fork element in the skip chain of WideResidual).
+  // A one-entry slack (cap = tensor + 1) keeps the tee fire-free: the
+  // re-delivered trailing beat is absorbed by the slack and never reaches
+  // the direct; the consumer pops stay aligned on the first `entries`.
+  // Atomic tee: the FIFO push may only fire on the SAME handshake the source
+  // (and thus the direct branch) fires — `io.streamIn.valid && io.streamIn.ready`
+  // — using the raw valid would re-acquire every held beat while the source's
+  // gearbox keeps valid high (runs of duplicated window values, the SKIP dev).
   io.streamIn.ready := io.directOut.ready && fifo.io.push.ready
   io.directOut.valid := io.streamIn.valid
   io.directOut.payload := io.streamIn.payload
-  fifo.io.push.valid := io.streamIn.valid
+  fifo.io.push.valid := io.streamIn.valid && io.streamIn.ready
   fifo.io.push.payload := io.streamIn.payload
 
   io.tapOut << fifo.io.pop
+
+  if (spineDebug) {
+    io.dbg.pushVal := fifo.io.push.payload(0).asBits.asUInt.resize(16)
+    io.dbg.popVal := fifo.io.pop.payload(0).asBits.asUInt.resize(16)
+    io.dbg.pushFire := fifo.io.push.valid && fifo.io.push.ready
+    io.dbg.popFire := fifo.io.pop.valid && fifo.io.pop.ready
+    io.dbg.cnt := fifo.io.occupancy.resize(12)
+  }
 }
 
 object TapBuffer {

@@ -21,6 +21,8 @@
 | **WideConvTilingTest** | WideConv tileHeight=64 | 271114.786 |
 | | WideConv tileHeight=16 | 268577.907 |
 | **WideResidualTilingTest** | WideResidual PLAIN chain (convK1, no fork) tiled vs replica | 327661.603 (2 sims) |
+| | WideResidual SKIP chain (tap fork) tiled vs replica — 16×16 (`S4_GATE=1 WIDE_SIDE=16 WIDE_TILES=16`) | ~30 s |
+| | WideResidual SKIP chain tiled vs replica — 64×64 (`WIDE_SIDE=64 WIDE_TILES="64,16"`) | 3192085.918 (53 min 12 s, run utilisateur) |
 | **MnistChainedTest** | Mnistw4a8: chained in one session | 17120.528 |
 | | Mnist BF16: chained in one session | 14758.030 |
 | **MnistContinuousTest** | Mnist BF16: continuous RUN auto-advance | 24237.493 |
@@ -48,7 +50,7 @@
 | | M1-A chain I8 16-1-25 slow consumer | 21.254 |
 | | M1-A cross-check legacy adapter | 34.084 (2 sims) |
 
-**Total mesuré : 38 tests verts** (le SKIP gate de WideResidual est cancelé par défaut, voir ci-dessous).
+**Total mesuré : 40+ tests verts** (dont le SKIP gate de WideResidual — voir hiérarchie ; les tests longs `spinalML.heavy.*` et `S4_GATE=1` restent hors ci-simulations).
 
 ## Hiérarchie de coût
 
@@ -57,6 +59,7 @@
 | **Tier 1 — rapide** (< 2 min) | RepackTest, StreamDoubleBufferTest, DoubleBufferStreamerTest, Im2ColContinuityTest, DagTopologyTest (runtime golden ~78 ms), RepackStallDiffTest | ~10 s cumulés |
 | **Tier 2 — moyen** (10 s → 45 s/test) | MnistChainedTest, MnistContinuousTest, WeightResidentChainTest, WeightPrefetchChainTest, BandTilingTest | ~3-4 min (les deux modèles) |
 | **Tier 3 — lourd** (5-11 min/test) | `spinalML.heavy.*` : WideConvTilingTest, WideResidualTilingTest (PLAIN) | ~20+ min (dominé par compile Verilator ~2-3 min × variants + sim 64×64) |
+| **SKIP gate** (`S4_GATE=1`) | WideResidualTilingTest — PLAIN + SKIP tiled | 16×16 : ~1 min · 64×64 : ~55 min — à lancer explicitement en local |
 
 > **Exclusion CI** : les suites Tier 3 vivent dans `spinalML/test/src/spinalML/heavy/` (et les
 > modèles `WideConv`/`WideResidual`/`WideResidualPlainChain` dans `spinalML/src/spinalML/heavy/`).
@@ -72,7 +75,7 @@
 | `MNIST_TIMEOUT=<cycles>` | borne d'attente d'un passage (défaut variable : 5 M pour Mnist*, 800 k pour Wide*) | échec rapide / CI budget |
 | `WIDE_TILES="64"` | sous-ensemble des tileHeights (WideResidualTilingTest) | T3 hors nightly |
 | `MNIST_CONT_N`, `MNIST_CHAIN_N`, `MNIST_CHAIN_SEED`, `MNIST_PREFETCH_SEED` | réduction/sélection des itérations et images | ciblage |
-| `S4_GATE=1` | active le SKIP gate de WideResidual (BLOQUÉ par M3 — ⚠️ échoue) | uniquement après M3 |
+| `S4_GATE=1` | active le SKIP gate de WideResidual (✅ VERT depuis M3.5 — fix push FIFO non gaté) | porte S4 : doit être **bit-exact** aux petites et pleines tailles |
 
 ## Commandes de référence
 
@@ -93,7 +96,14 @@
 
 # Tier 3 (à part, jamais sur le runner Radxa)
 ./mill spinalML.test.testOnly spinalML.heavy.WideConvTilingTest
-./mill spinalML.test.testOnly spinalML.heavy.WideResidualTilingTest   # PLAIN uniquement (SKIP cancelé)
+./mill spinalML.test.testOnly spinalML.heavy.WideResidualTilingTest                     # PLAIN
+
+# SKIP gate (S4) : débogage rapide 16×16 puis certification 64×64 (~55 min)
+S4_GATE=1 WIDE_SIDE=16 WIDE_TILES=16 ./mill spinalML.test.testOnly spinalML.heavy.WideResidualTilingTest
+S4_GATE=1 WIDE_SIDE=64 WIDE_TILES=64,16 ./mill spinalML.test.testOnly spinalML.heavy.WideResidualTilingTest
+
+# Probes bruts (chaîne skip composant-exacte + conv K=1/K=3 nu) — boucle S4, < 15 s
+./mill spinalML.test.testOnly spinalML.examples.ForkChainCountTest spinalML.examples.K1ConvCountTest
 
 # Robustesse multi-seeds du préfetch (cause racine réglée — à relancer si réouverture)
 for s in 1502108522 1666584426 345748929 747740128; do
@@ -108,4 +118,5 @@ PATH="$HOME/.local/bin:$PATH" ./mill spinalML.test.runMain spinalML.symbolicTest
 
 ## Notes
 - Les durées Tier 3 dominent par le **compile Verilator par variante** (un `compile` par tileHeight) + la sim 64×64 (4 images × 2 variants ≈ 11 min) — réduction possible via `WIDE_TILES` ou en réduisant les images (1 au lieu de 3).
-- Le **SKIP gate** de `WideResidualTilingTest` reste actif derrière `S4_GATE=1` : il échoue (attendu) tant que **M3** (comptage de fenêtres Im2ColOp) n'est pas résolu — voir `open-mysteries.md` M3.
+- Le **SKIP gate** de `WideResidualTilingTest` est actif derrière `S4_GATE=1` et **vert** depuis M3.5 (cause racine = push FIFO du TapBuffer non gaté sur le handshake du tee — voir `open-mysteries.md` M3.5). La certification 64×64 (WIDE_TILES="64,16") dépasse largement l'heure : privilégier le 16×16 pour la boucle.
+- **Nouveaux probes S4** : `ForkChainCountTest` (chaîne du skip au niveau composant, compteurs + séquences de valeurs + vérif des paires du Add) et `K1ConvCountTest` (conv K=1 et K=3 nus, comptage exact) — les deux < 15 s, dans `spinalML/test/src/spinalML/examples/`.

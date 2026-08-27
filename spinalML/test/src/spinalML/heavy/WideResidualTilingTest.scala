@@ -118,7 +118,10 @@ class WideResidualTilingTest extends AnyFunSuite {
             val devS = collected.zip(WideResidualReplica.logitsShifted(img, weights)).map { case (h, s) => math.abs(h.toDouble - s) }.max
             val devS4 = collected.zip(WideResidualReplica.logitsShiftK(img, weights, 4)).map { case (h, s) => math.abs(h.toDouble - s) }.max
             val devS3 = collected.zip(WideResidualReplica.logitsShiftK(img, weights, 3)).map { case (h, s) => math.abs(h.toDouble - s) }.max
-            println(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1)=$devS%.3f dev(shift3)=$devS3%.3f dev(shift4)=$devS4%.3f")
+            val devB = collected.zip(WideResidualReplica.logitsShiftB(img, weights)).map { case (h, s) => math.abs(h.toDouble - s) }.max
+            val seamBest = WideResidualReplica.logitsShiftSeamBest(img, weights, collected.map(_.toDouble)).take(5)
+            println(s"  [$tag seamBest = " + seamBest.map(x => f"${x._1}:${x._2}%.3f").mkString(", ") + "]")
+            println(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1)=$devS%.3f dev(shift3)=$devS3%.3f dev(shift4)=$devS4%.3f dev(shiftB)=$devB%.3f")
           }
           assert(dev == 0.0,
             s"[$tag tileH=$tileH image#$k] corrupted: hw ${collected.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")

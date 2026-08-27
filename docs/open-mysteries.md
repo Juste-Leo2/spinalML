@@ -16,7 +16,7 @@
 |---|---|---|---|
 | [M1](#m1--gearbox-structurée-flushable--graphe-dag) | Gearbox structurée flushable × graphe DAG | 🟡→🟢 **CAUSE RACINE RÉGIONALE PROUVÉE** (bisection C0–C8) ; règle d'élasticité au fan-out établie ; micro-mécanisme RTL = suivi optionnel | Ne bloque plus : le cloison img-legacy/poids-flushable est principé (voir M1.7) |
 | [M2](#m2--état-de-fenêtre-persistant-dim2colop) | État de fenêtre persistant d'Im2ColOp | 🟡 OUVERT-documenté | Abort/soft-reset futur ; refonte multi-tile Phase 3 |
-| [M3](#m3--comptage-de-fenêtres-dim2colop--hk1w--k1) | Comptage de fenêtres Im2ColOp ≠ (H−K+1)(W−K+1) | ✅ CLOS (artefact de harnais, pas un bug RTL — M3.4) | Le skip-chain reste ouvert pour une *autre* cause (beat supplémentaire du fork, voir M3.2b) |
+| [M3](#m3--comptage-de-fenêtres-dim2colop--hk1w--k1) | Comptage de fenêtres Im2ColOp ≠ (H−K+1)(W−K+1) **et skip-chain (beat +1 vu par le fork)** | ✅ CLOS — M3.4 (artefact de harnais + retour K=1 à stateFill) **puis M3.5** (push FIFO du TapBuffer non gaté sur le handshake) | Aucun — Phase 3 S4 (chaîne ≥ 2 tuiles avec skip) bit-exact à 16 **et** 64 |
 
 ---
 
@@ -286,6 +286,10 @@ Observations associées :
 
 ### M3.2b Nouvelle évidence Phase-3 S4 (WideResidual, 64x64, K=3 puis K=1)
 
+> **MISE À JOUR (août 2026)** : ce dossier est **clôturé** — la cause racine du beat +1 du
+> fork = push FIFO du TapBuffer non gaté (voir **M3.5**). Les comptages ci-dessous étaient le
+> symptôme ; le gate S4 est vert à 16×16 et 64×64.
+
 Comptages de la waveform (BMC-verified signals, `WideResidual/test/wave.vcd`) :
 
 | Stream | Comptage observé | Attendu |
@@ -322,12 +326,64 @@ Corrections appliquées :
    28×28 → 576 = 24×24 et 280 px alimentés → 144 = 6×24 — les formules naïves redeviennent
    exactes (les propriétés stall-équivalence / command-clean passent toujours).
 
-**Héritage M3 → skip-chain (ouverture séparée)** : le comblement du harnais n'explique PAS la
-déviation du SKIP gate (WideResidual). Les comptages réseau restent : im2col K=1 = 3845/197
-(+1), tap FIFO push 962/50 (+1 beat), join 961/49 — le +1 beat naît dans la branche fork du
-DAG (tee → TapBuffer exact-capacity 49) ; la chaîne PLAIN (mêmes comptes ailleurs) passe
-bit-exact → l'appairage de l'Add est la zone restante. Statut : OUVERT (relié à M3 dans la
-trace suivante). Le formel im2col (K=2, 3×3) passe inchangé après le patch (vérifié).
+**Héritage M3 → skip-chain (ouverture séparée, RÉSOLUE EN M3.5)** : le comblement du harnais
+n'expliquait PAS la déviation du SKIP gate (WideResidual). Les comptages réseau restaient :
+im2col K=1 = 3845/197 (+1), tap FIFO push 962/50 (+1 beat), join 961/49 — le +1 beat naissait
+dans la branche fork du DAG (tee → TapBuffer) ; la chaîne PLAIN (mêmes comptes ailleurs)
+passait bit-exact → l'appairage de l'Add était la zone restante. **Résolu en M3.5** (cause
+racine = push FIFO du TapBuffer non gaté sur le handshake du tee). Le formel im2col (K=2,
+3×3) passe inchangé après le patch (vérifié).
+
+### M3.5 CLOSURE — SKIP gate : cause racine = push FIFO non gaté sur le handshake (août 2026)
+
+Le beat +1 du fork (im2col K=1 3845/197 ; tap FIFO 962/50 pushes pour 196/49 éléments ; tap
+retardé d'un cran au join → déviation logits ~12 %, `dev(normal) = 0.813` à 16×16 et 4.469 à
+64×64) avait **une cause unique, localisée dans `memory/TapBuffer.scala`** :
+
+```scala
+fifo.io.push.valid := io.streamIn.valid                        // AVANT le fix
+fifo.io.push.valid := io.streamIn.valid && io.streamIn.ready   // FIX (1 ligne)
+```
+
+**Mécanisme** : le tee laisse passer un beat uniquement sur le handshake complet
+(`streamIn.ready := direct.ready && push.ready`), mais le push du FIFO n'était gaté que sur le
+`valid` **cru** de la source. Tant que la source (gearbox du conv 3×3, cadence ~1 fenêtre /
+5 cycles) tient `valid` haut entre ses vrais beats — comportement normal — le FIFO
+**re-acquérait le même beat en rafale** : pulsations du flux tap = valeurs dupliquées (runs
+`1,2,5,5,5…` observés directement sur les probes push/pop), la branche directe encaissait les
+re-runs (le K1 voyait 197 entrées au lieu de 196), et l'appairage du `StreamJoin` du Add se
+faisait faux par pans — d'où l'échec de toutes les répliques shift-cherchées (aucun décalage
+global ne pouvait ramener ±0).
+
+**Fixe complémentaire** : le FIFO a maintenant une **capacité + 1** (slack). Gratuit en soit,
+mais indispensable en conjonction : sans lui, à l'instant où le FIFO est exactement plein le
+tee se fige (`streamIn.ready := 0`) pendant que la source tient encore `valid` sur son dernier
+beat → le direct (gaté seulement sur `valid`) re-consommerait ce même beat — le M1.7-bis. Le
+slack absorbe la frontière : direct = 196, tap = 196, exactement.
+
+**Piste voisine essayée et rejetée (documentée pour ne pas y retomber)** : garder le fix « côté
+direct » — `directOut.valid := streamIn.valid && push.ready` — était la bonne *direction* mais
+le mauvais *fix* : avec un FIFO à capacité exacte (tensor entier) et un consommateur direct
+qui absorbe tout avant d'émettre, le gate transforme la réutilisation en **attente circulaire**
+(deadlock reproduit dans `ForkChainCountTest` : source figée, FIFO jamais vidée). Le gate doit
+vivre **côté push**, jamais côté direct.
+
+**Preuves** :
+- `ForkChainCountTest` (probe nu permanent, chaîne composant-exacte conv3→relu→fork(fifo +
+  conv1)→add→pool, drive valid-jusqu'à-accept, tous les streams publics) : **196/196/196/196/49
+  exacts, séquences = réplique bit-exacte, 0 paire (tap, n3) erronée**.
+- Gate S4 : `WideResidualTilingTest` SKIP **bit-exact** à 16×16 (`dev = 0.000`) **et à 64×64**
+  (`WIDE_SIDE=64 WIDE_TILES="64,16"`, 2/2, ~53 min) — PLAIN toujours bit-exact ; régressions
+  Tier 1/2 (20/20 + suites mémoire 7/7) vertes.
+
+**Leçon** : dans un tee à branche différée, le push du FIFO DOIT être gaté sur le fire du tee
+(`valid && ready` du `streamIn`), jamais sur `valid` seul — la backpression d'une gearbox
+amont (`valid` tenu) se traduit sinon en déversement de doublons. Famille M1.7 (couplage
+ready-dur × fork partagé) : la règle générale est « tout transfert d'une branche de fork doit
+être gaté sur le handshake *complet* de la source ». Instrumentation laissée : `spineDebug`
+sur `TapBuffer` (défaut `false`, probes push/pop/fire/occupancy) — utile pour toute
+dissection future ; invariant type « `fifo.push.fire ⇒ streamIn.fire` » serait le bon formel
+à poser.
 
 ---
 
@@ -369,3 +425,4 @@ pièges — il faut prendre l'habitude de lire les commentaires des primitives A
 | 2026-08 | Phase 3 S2 | **im2col = halo vivant (M2 vers design-intentionnel)** : stalls de couture d'une bande = exactement le comportement qu'on attend d'un swap DMA — prouvé par équivalence bit-exacte « flux continu vs stall de 300 cycles à la frontière » sur H=10/W∈{8,28,64} et H=28/W=28 ; command-clean (B-après-A == B seule) validé en W=28/64. **Mystère M3** : comptage de fenêtres ≠ modèle naïf (27/107/251/350 vs 48/208/496/676), documents en M3 ; le pipeline réel reste bit-exact. **CLOS en M3.4 (Phase-3 S4)** : cause racine = poignée de main du harnais (pixels perdus quand le consommateur n'est pas prêt) + retour K=1 à stateFill — formel im2col re-vérifié ✅. |
 | 2026-08 | Phase 3 S3 | **Bandes verticales livrées** : `tileHeight` compile-time (Sequential/Accelerator), séquenceur de bandes interne (cmd.fire = fin de bande, dernier patch partiel), buffer image = UNE bande, halo = état persistant im2col (stall-équivalence S2). Porte : MNIST tileHeight 28/14/10 ×3 images bit-exact vs répliques (BF16+W4A8) — `BandTilingTest`. Piège : harnais brute-op flaky en batch vs standalone = registres sans `init` gardant leur INIT Verilator selon la graine — remède générique : compiler les sujets op-nus avec `SpinalConfig(..., defaultConfigForClockDomains = ClockDomainConfig(resetKind = BOOT))` (déterministe 3/3 après). M3 reste ouvert (même anomalie de comptage en bandé, sans impact pipeline). |
 | 2026-08 | Phase 3 S3/D4 | **WideConv 64x64 validé** : nouveau modèle de référence (Conv3x3→ReLU→MaxPool2→Flatten→Linear 961→10, poids pseudo-aléatoires seedés partagés HW/réplique via HWFloat exact — zéro entraînement). `WideConvTilingTest` : 3 images bit-exact vs réplique, tileHeight 64 (pleine) ET 16 (4 bandes). Leçon d'orchestration : une exécution « qui ne se termine pas » peut être simplement le mur wall (6 passes 64×64 ≈ 11 min) — vérifier avec `MNIST_TIMEOUT=300000` SUR la durée avant de conclure à un hang (la 1ʳᵉ analyse a coûté un round de diagnostic inutile). |
+| 2026-08 | Phase 3 S4 | **Chaîne skip ≥ 2 tuiles livrée (SKIP gate CLOS)** : cause racine M3.5 = `TapBuffer` — push du FIFO gaté sur le `valid` CRU au lieu du fire du tee ⇒ rafales de doublons (~×5) dans le FIFO du fork, appairage Add faux (dev 0.81 @16 / 4.47 @64). Fix 1 ligne (`push.valid := streamIn.valid && streamIn.ready`). Preuves : probe `ForkChainCountTest` (valeurs+compteurs 196/196 bit-exact), SKIP bit-exact 16×16 **et** 64×64 (`WIDE_SIDE=64 WIDE_TILES="64,16"`, 2/2, ~53 min), régressions 20/20 + suites mémoire 7/7, PLAIN inchangé. Piste « gate côté direct » écartée (deadlock par attente circulaire, documenté). |
