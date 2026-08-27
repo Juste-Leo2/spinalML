@@ -204,6 +204,14 @@ class WeightPrefetchChainTest extends AnyFunSuite {
       (mem, img) => writeWords(mem, imgBase, bench.imageWords(img)),
       d => {
         val dut = d.asInstanceOf[Mnist]
+        // The output stream is a MASTER: its ready is never read by anybody
+        // inside the DUT, and the harness below only *reads* it. Without an
+        // explicit sink drive here, the undriven top-level wire keeps its
+        // Verilator random INIT value (0 or 1 per sim seed) — a 0 freezes the
+        // whole chain in a seed-dependent deadlock (CI flakiness). The
+        // harness does consume every beat, so a constant ready is the proper
+        // sink behaviour.
+        dut.io.outStream.stream.ready #= true
         PrefetchGlue(dut.clockDomain, dut.io.ctrlBus, dut.io.axiMaster,
           () => dut.io.outStream.stream.valid.toBoolean,
           () => dut.io.outStream.stream.ready.toBoolean,
@@ -222,6 +230,9 @@ class WeightPrefetchChainTest extends AnyFunSuite {
       (mem, img) => writeWords(mem, imgBase, bench.toWords(bench.imageBytes(img))),
       d => {
         val dut = d.asInstanceOf[Mnistw4a8]
+        // Undriven master-stream ready would keep its random Verilator INIT
+        // (see BF16 site): constant sink drive here.
+        dut.io.outStream.stream.ready #= true
         PrefetchGlue(dut.clockDomain, dut.io.ctrlBus, dut.io.axiMaster,
           () => dut.io.outStream.stream.valid.toBoolean,
           () => dut.io.outStream.stream.ready.toBoolean,
