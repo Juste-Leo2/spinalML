@@ -18,7 +18,7 @@ import spinalML.dtypes._
  *
  * Data files: Mnist/architecturew4a8.txt, Mnist/weights_w4a8.txt.
  */
-case class Mnistw4a8(override val axiConfig: Axi4Config) extends Accelerator(
+case class Mnistw4a8(override val axiConfig: Axi4Config, override val tileHeight: Int = -1) extends Accelerator(
   dataType    = I8(),                    // byte-addressed activation domain at entry
   inputShape  = Seq(28, 28, 1),
   modelSpec   = Seq(

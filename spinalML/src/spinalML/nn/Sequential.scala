@@ -21,7 +21,15 @@ case class Sequential(
   // Phase-2a weight residency: when set, exposes the run-mode control plane
   // (see Accelerator CSR map). Direct users of this component keep today's
   // always-fetch behaviour when left at the default.
-  val weightResidency: Boolean = false
+  val weightResidency: Boolean = false,
+  // Phase-3 activation tiling: number of IMAGE ROWS per band (vertical
+  // stripe, full width). Each inference is fetched as ceil(H/tileHeight)
+  // back-to-back 2D patch commands; on-chip image buffering is sized to ONE
+  // band instead of the whole tensor. The consumer stream is UNCHANGED:
+  // bands concatenate into the same continuous row stream (the seam is a
+  // stream stall — im2col's carried state is the halo, proven in S2).
+  // tileHeight <= 0 means "one band = the whole image" (legacy behaviour).
+  val tileHeight: Int = -1
 ) extends Component {
 
   // ============================================================
@@ -162,32 +170,63 @@ case class Sequential(
     if (totalDmaTriggers == 1) axiConfig
     else axiConfig.copy(idWidth = axiConfig.idWidth - log2Up(totalDmaTriggers))
 
-  // 1.1. Image DMA
+  // 1.1. Image DMA — banded 2D fetch (Phase-3 tiling)
+  // Each band is one 2D patch command (patchHeight = band rows, baseAddress =
+  // imgBase + band * bandBytes); consecutive commands are issued by the tiny
+  // sequencer below on cmd.fire (the 2D reader accepts a command once the
+  // previous patch's output fully crossed the trim stage — i.e. exactly when
+  // the current band has landed in a bank).
   val inputDataType = globalDataType
   val dmaImg = DMAReader2D(inputDataType, inputShape, outLanes = 1, dmaAxiConfig)
-  dmaImg.io.cmd.valid := startTriggers(triggerIdx).valid
-  startTriggers(triggerIdx).ready := dmaImg.io.cmd.ready
-  dmaImg.io.cmd.baseAddress := io.imgBaseAddress
 
-  // Stride is typically width * byteSize
+  val elemsPerRowImg = inputShape.product / inputShape.head
+  val bandRows = if (tileHeight > 0) inputShape.head.min(tileHeight) else inputShape.head
+  val nBands = (inputShape.head + bandRows - 1) / bandRows
+  val bandElements = bandRows * elemsPerRowImg
   val pixelBytes = inputDataType.getBitsWidth / 8
-  dmaImg.io.cmd.stride := inputShape(1) * pixelBytes
-  val elementsPerBeat = axiConfig.dataWidth / inputDataType.getBitsWidth
-  require(elementsPerBeat >= 1,
+  require(pixelBytes >= 1, "image dtype narrower than 8 bits is unsupported")
+  require(bandElements > 0, "band must hold at least one pixel row")
+  val strideBytesImg = inputShape(1) * pixelBytes
+  val bandBytes = bandRows * strideBytesImg
+
+  // Beat-width element sanity (kept from the legacy site).
+  require(axiConfig.dataWidth / inputDataType.getBitsWidth >= 1,
     s"Input dtype (${inputDataType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported image element size")
-  dmaImg.io.cmd.patchWidth := (scala.math.ceil(inputShape(1).toDouble / elementsPerBeat).toInt - 1).max(0)
-  dmaImg.io.cmd.patchHeight := inputShape(0)
+
+  val bandIdxW = log2Up(nBands) max 1
+  val imgBandIdx = Reg(UInt(bandIdxW bits)) init(0)
+  val imgBandActive = RegInit(False)
+  dmaImg.io.cmd.valid := imgBandActive
+  dmaImg.io.cmd.baseAddress := (io.imgBaseAddress + (U(bandBytes, axiConfig.addressWidth bits) * imgBandIdx)).resize(axiConfig.addressWidth bits)
+  dmaImg.io.cmd.stride := U(strideBytesImg, axiConfig.addressWidth bits)
+  dmaImg.io.cmd.patchWidth := 0 // ignored by the hardware, see DMAReader2D docs
+  val imgLastBandRows = inputShape.head - (nBands - 1) * bandRows
+  dmaImg.io.cmd.patchHeight := Mux(imgBandIdx === U(nBands - 1, bandIdxW bits),
+    U(imgLastBandRows, 16 bits), U(bandRows, 16 bits))
+
+  when(startTriggers(triggerIdx).valid) {
+    imgBandActive := True
+    imgBandIdx := 0
+  }
+  startTriggers(triggerIdx).ready := True // bander accepts the START immediately
+  when(dmaImg.io.cmd.fire) {
+    when(imgBandIdx === U(nBands - 1, bandIdxW bits)) {
+      imgBandActive := False
+    } otherwise {
+      imgBandIdx := imgBandIdx + 1
+    }
+  }
 
   allAxiMasters += dmaImg.io.axiMaster
   triggerIdx += 1
 
   // Use Automatic Double Buffering instead of a simple queue
   // The double-buffer contract tiles exactly `depth` elements per bank: the
-  // buffer MUST be sized to the exact tensor size (any floor like max(16, n)
-  // deadlocks small tensors, as tileReady would never assert).
-  val imgBufferSize = inputShape.product
-  // Re-arm tied to the image DMA command boundary: back-to-back starts must
-  // not observe full flags left over by the previous inference.
+  // buffer MUST be sized to the exact tile size (any floor like max(16, n)
+  // deadlocks small tensors, as tileReady would never assert). With phase-3
+  // banding the "tile" is one band; with tileHeight <= 0 it is the whole
+  // tensor (legacy).
+  val imgBufferSize = bandElements
   val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = 1)
   // Re-arm boundary: rising edge of io.start.valid. Neither io.start.fire nor
   // dmaImg.io.cmd.fire is usable here — the synchronous fork only completes
@@ -196,6 +235,8 @@ case class Sequential(
   // has already filled a bank; re-arming then clears a fresh tileReady
   // forever (pipeline deadlock). The valid rising edge occurs one cycle
   // after the host pulses START, strictly before any DMA data moves.
+  // With banding the same boundary re-arms the per-inference state (band
+  // sequencer resets on it too via startTriggers, above).
   val prevStartValid = RegNext(io.start.valid) init (False)
   imgDoubleBuffer.io.reArm := io.start.valid && !prevStartValid
   imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream

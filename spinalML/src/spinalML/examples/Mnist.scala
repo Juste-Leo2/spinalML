@@ -17,7 +17,7 @@ import spinalML.dtypes._
  * channels (adder tree) and argmax(logits) = argmax(softmax(logits)), so the
  * raw 10 logits give the same prediction.
  */
-case class Mnist(override val axiConfig: Axi4Config) extends Accelerator(
+case class Mnist(override val axiConfig: Axi4Config, override val tileHeight: Int = -1) extends Accelerator(
   dataType    = BF16(),
   inputShape  = Seq(28, 28, 1),
   modelSpec   = Seq(

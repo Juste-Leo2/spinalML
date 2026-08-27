@@ -45,7 +45,8 @@ case class Im2ColContinuityTestComp[T <: Data](dataType: HardType[T], H: Int, W:
  *    fresh sessions: M2.2 holds — no stale cell is ever read at emission.
  */
 class Im2ColContinuityTest extends AnyFunSuite {
-  private val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
+  private val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384,
+    defaultConfigForClockDomains = ClockDomainConfig(resetKind = BOOT))
 
   private def image(H: Int, W: Int, seed: Int): Seq[Int] =
     for (y <- 0 until H; x <- 0 until W) yield (y * W + x) * 7 + seed * 301 - 11
@@ -97,7 +98,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
   }
 
   test("Im2Col: band-seam stall equivalence — stalled feed == continuous feed") {
-    val K = 3
+    val K = 5
     val W = 28
     val H = 28
     val img = image(H, W, 42)
@@ -122,7 +123,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
   }
 
   test("Im2Col: two separate commands stay clean exactly like fresh sessions (M2.2)") {
-    val K = 3
+    val K = 5
     val H = 10
     val W = 28
     val imgA = image(H, W, 1)
