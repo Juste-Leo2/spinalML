@@ -16,7 +16,7 @@
 |---|---|---|---|
 | [M1](#m1--gearbox-structurée-flushable--graphe-dag) | Gearbox structurée flushable × graphe DAG | 🟡→🟢 **CAUSE RACINE RÉGIONALE PROUVÉE** (bisection C0–C8) ; règle d'élasticité au fan-out établie ; micro-mécanisme RTL = suivi optionnel | Ne bloque plus : le cloison img-legacy/poids-flushable est principé (voir M1.7) |
 | [M2](#m2--état-de-fenêtre-persistant-dim2colop) | État de fenêtre persistant d'Im2ColOp | 🟡 OUVERT-documenté | Abort/soft-reset futur ; refonte multi-tile Phase 3 |
-| [M3](#m3--comptage-de-fenêtres-dim2colop--hk1w--k1) | Comptage de fenêtres Im2ColOp ≠ (H−K+1)(W−K+1) | 🔴 OUVERT-EN COURS (S4 : DEVIENT BLOQUANT pour les DAG conv résiduels) | Bloque la porte roadmap §4 skip-chain ; ne bloque pas bandes/chaînes linéaires |
+| [M3](#m3--comptage-de-fenêtres-dim2colop--hk1w--k1) | Comptage de fenêtres Im2ColOp ≠ (H−K+1)(W−K+1) | ✅ CLOS (artefact de harnais, pas un bug RTL — M3.4) | Le skip-chain reste ouvert pour une *autre* cause (beat supplémentaire du fork, voir M3.2b) |
 
 ---
 
@@ -302,18 +302,32 @@ join du Add n'appaire plus (déviation ~12 % sur les logits, PAS un décalage de
 Constat d'impact : le port roadmap §4 « chaîne ≥2 tuiles avec skip » est BLOQUÉ par M3 — les
 bandes, les pools et les chaînes linéaires ne sont pas affectés.
 
-### M3.3 Risque/bénéfice
+### M3.4 CLOSURE — cause racine : poignée de main du harnais (août 2026)
 
-- Le **risque réel** n'apparaîtrait que lorsqu'un grain de tuile (S3+) ne sera plus un simple
-  multi-ondes de la largeur/chanaux des modèles éprouvés — p. ex. WideConv 64×64 : la cible
-  S3 vérifiera à nouveau bit-exact vs coupe pleine-image ; là, l'échec sera **informatif**.
-- Le **bénéfice** de bloquer maintenant sur M3 serait faible : conventions internes validées
-  par tout le réseau en place ; la direction S3 probe touche au même endroit avec plus de
-  contexte (DMA bandes + streamer).
+Un test nu ajouté pendant le débogage S4 (« M3 probe » : une image complète H×W alimentée à
+K=1) a révélé que les comptages anormaux provenaient du **drive du harnais, pas du FSM** :
+`runCommand` pulsait `valid` pendant UN cycle sans attendre l'acceptation ; dès que le
+consommateur (ici l'im2col lui-même, adaptatif, prêt 1 cycle sur 2 pour K=1) était `ready`
+bas, **un pixel sur deux était perdu** — ratios 1/2, ~1/4, et formules `4(W−2)+3` découlent
+tous de ces pertes (parité x / boundaries de lignes).
 
-**Décision proposée** : ne PAS bloquer ; sonder M3 avec la grille H∈{6..28}×W∈{9,15,16} via le
-harness `Im2ColContinuityTest` étendu, pendant la fenêtre S3/S4 ; la falsification C est la plus
-rapide à écarter.
+Corrections appliquées :
+
+1. `Im2ColContinuityTest.runCommand` → conduite « valid jusqu'à acceptation » (compteur
+   `aFires` + avance sur fire seulement) — la référence pour tout harnais futur.
+2. `im2col.scala` : pour **K=1**, `stateOutput` retourne à `stateFill` (pas `stateWaitA`) — le
+   `stateWaitA` absorbait un second pixel par fenêtre (pixel pair sauté), d'où le taux ×2 du
+   K=1 en pipeline machine réelle. K≥2 inchangé (vérifié : régressions S2 vertes).
+3. Nouvelle assertion « M3 probe » permanente : K=1, 16×16 → **256/256 fenêtres** ; K=5,
+   28×28 → 576 = 24×24 et 280 px alimentés → 144 = 6×24 — les formules naïves redeviennent
+   exactes (les propriétés stall-équivalence / command-clean passent toujours).
+
+**Héritage M3 → skip-chain (ouverture séparée)** : le comblement du harnais n'explique PAS la
+déviation du SKIP gate (WideResidual). Les comptages réseau restent : im2col K=1 = 3845/197
+(+1), tap FIFO push 962/50 (+1 beat), join 961/49 — le +1 beat naît dans la branche fork du
+DAG (tee → TapBuffer exact-capacity 49) ; la chaîne PLAIN (mêmes comptes ailleurs) passe
+bit-exact → l'appairage de l'Add est la zone restante. Statut : OUVERT (relié à M3 dans la
+trace suivante). Le formel im2col (K=2, 3×3) passe inchangé après le patch (vérifié).
 
 ---
 
@@ -352,6 +366,6 @@ pièges — il faut prendre l'habitude de lire les commentaires des primitives A
 | 2026-08 | Phase 2b | **Préfetch des poids livré** : bit1 PREFETCH_EN ; fetch eager (reader-ready × loader-empty) hors sweep START remplissant le bank IDLE sous hold ; swap gouverné interne au buffer (`switchArmed` arme sur stageRequest×tileFilled, UN flip à la frontière de passe suivante puis `refreshSettled`) ; reArm supprimé UNIQUEMENT en monde préfetch (banks tenus = consommateurs vivants). Porte : fenêtres AR poids START→premier-beat — sérialisé motif plein, préchargé strictement zéro, les deux modèles + relocalisation weightsBase inter-passes (`WeightPrefetchChainTest`). Hygiène banks prouvée close par construction (toute entrée monde préfetch suit une génération reArmée ; invariant alternance fermé dedans). Piège formel nouveau : entrée `stageRequest` non connectée flottait en variable primaire libre ⇒ fixer explicitement les inputs hors-périmètre d'une spec (`:= False`) — régularisé après deux contre-exemples fantômes. Formels hold+legacy repassés verts post-refactor. |
 | 2026-08 | Post-2b | **Flakiness multi-seeds du `WeightPrefetchChainTest` = harnais, pas RTL** : `runMetered` lisait `outStream.stream.ready` sans jamais le piloter. Le `ready` d'un master Stream non conduit garde sa valeur INIT aléatoire Verilator (valeur 0 ou 1 selon le seed de simulation) → seed « bloquées » (ready=0, zéro beat) vs « fonctionnelles » (ready=1). Preuve : VCD — `fp!` (io_outStream_stream_ready) assigné UNE fois à l'init (0 vs 1 selon la run), jamais en transition ; tous les autres bancs utilisent l'idiome `ready #= true` (MnistTest.runInference etc.). Diagnostic par waveforms complémenté d'un mini-parser VCD (scala n'était pas nécessaire). Enseignement : tout `stream.ready` relu par le banc exige un sink drive explicite (ou `forkStimulus` sur un master `stream.ready #= True`). |
 | 2026-08 | Phase 3 S1 | **Contrôle continu livré** : `Sequential` expose `busy`/`done` (frame = finalShape.product, compté sur le fire du stream) ; Accelerator — RUN (0x1C bit0), TILE_CNT (0x18 RO), statut 0x04 busy/RUN, **curseur image interne** (avance au même edge que l'auto-START : zéro course hôte↔HW, sémantique « frames vidéo », 0x08 readback = base hôte intacte). Pièges : adresse non-alignée 4 octets interdite par AxiLite4SlaveFactory (0x02 → 0x1C) ; registre factory non tickable depuis une closure-`when` (NPE accessor — curseur dans un Reg pur). Porte : `MnistContinuousTest` — 1 START ⇒ 4 frames auto bit-exacts ×2 modèles, STOP en vol propre (exactement 1 frame déjà démarré), compteurs cohérents ; régressions 30/30. |
-| 2026-08 | Phase 3 S2 | **im2col = halo vivant (M2 vers design-intentionnel)** : stalls de couture d'une bande = exactement le comportement qu'on attend d'un swap DMA — prouvé par équivalence bit-exacte « flux continu vs stall de 300 cycles à la frontière » sur H=10/W∈{8,28,64} et H=28/W=28 ; command-clean (B-après-A == B seule) validé en W=28/64. **Nouveau mystère M3** : le comptage de fenêtres observé diffère du modèle naïf (27/107/251/350 vs 48/208/496/676) et viole le command-clean en W=8 (décalage d'une colonne après reset) — anomalies documentées dans M3, le pipeline réel reste bit-exact. |
+| 2026-08 | Phase 3 S2 | **im2col = halo vivant (M2 vers design-intentionnel)** : stalls de couture d'une bande = exactement le comportement qu'on attend d'un swap DMA — prouvé par équivalence bit-exacte « flux continu vs stall de 300 cycles à la frontière » sur H=10/W∈{8,28,64} et H=28/W=28 ; command-clean (B-après-A == B seule) validé en W=28/64. **Mystère M3** : comptage de fenêtres ≠ modèle naïf (27/107/251/350 vs 48/208/496/676), documents en M3 ; le pipeline réel reste bit-exact. **CLOS en M3.4 (Phase-3 S4)** : cause racine = poignée de main du harnais (pixels perdus quand le consommateur n'est pas prêt) + retour K=1 à stateFill — formel im2col re-vérifié ✅. |
 | 2026-08 | Phase 3 S3 | **Bandes verticales livrées** : `tileHeight` compile-time (Sequential/Accelerator), séquenceur de bandes interne (cmd.fire = fin de bande, dernier patch partiel), buffer image = UNE bande, halo = état persistant im2col (stall-équivalence S2). Porte : MNIST tileHeight 28/14/10 ×3 images bit-exact vs répliques (BF16+W4A8) — `BandTilingTest`. Piège : harnais brute-op flaky en batch vs standalone = registres sans `init` gardant leur INIT Verilator selon la graine — remède générique : compiler les sujets op-nus avec `SpinalConfig(..., defaultConfigForClockDomains = ClockDomainConfig(resetKind = BOOT))` (déterministe 3/3 après). M3 reste ouvert (même anomalie de comptage en bandé, sans impact pipeline). |
 | 2026-08 | Phase 3 S3/D4 | **WideConv 64x64 validé** : nouveau modèle de référence (Conv3x3→ReLU→MaxPool2→Flatten→Linear 961→10, poids pseudo-aléatoires seedés partagés HW/réplique via HWFloat exact — zéro entraînement). `WideConvTilingTest` : 3 images bit-exact vs réplique, tileHeight 64 (pleine) ET 16 (4 bandes). Leçon d'orchestration : une exécution « qui ne se termine pas » peut être simplement le mur wall (6 passes 64×64 ≈ 11 min) — vérifier avec `MNIST_TIMEOUT=300000` SUR la durée avant de conclure à un hang (la 1ʳᵉ analyse a coûté un round de diagnostic inutile). |

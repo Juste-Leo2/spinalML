@@ -20,15 +20,23 @@ import spinalML.dtypes.FloatML
  * seams — the roadmap's "two-plus-tile chain with skip, boundary continuity
  * bit-exact" gate.
  *
- * Env: WIDE_TILES="64,16" subset, MNIST_TIMEOUT.
+ * Env: WIDE_SIDE (square image side, default 64) shrinks the chain for fast
+ * debug iteration; WIDE_TILES="64,16" is a tile-case subset; MNIST_TIMEOUT
+ * bounds each pass.
  */
 class WideResidualTilingTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   private val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
 
+  private val side = sys.env.get("WIDE_SIDE").map(_.toInt).getOrElse(64)
+  private val weights = WideResidualWeights.ofSide(side)
   private val imgBase = 0x10000L
   private val weightBase = 0x20000L
-  private val tileCases = sys.env.get("WIDE_TILES").map(_.split(",").map(_.toInt).toSeq).getOrElse(Seq(64, 16))
+  private val tileCases = sys.env.get("WIDE_TILES").map(_.split(",").map(_.toInt).toSeq).getOrElse {
+    if (side > 4 && side % 4 == 0) Seq(side, side / 4) else Seq(side)
+  }
+  private val images = Seq(5L).take(sys.env.get("WIDE_IMAGES").map(_.toInt).getOrElse(1))
+    .map(randomImage)
 
   private val bf16Bits: Float => Int = f => (java.lang.Float.floatToIntBits(f) >>> 16) & 0xFFFF
   private val word: Seq[Int] => BigInt = elems =>
@@ -40,24 +48,22 @@ class WideResidualTilingTest extends AnyFunSuite {
     elems ++ Seq.fill(capacity - elems.length)(0.0f)
   }
   private val weightWords: () => Seq[BigInt] = () =>
-    packFloats(padded(WideResidualWeights.convW3) ++ padded(WideResidualWeights.convB3) ++
-      padded(WideResidualWeights.convW1) ++ padded(WideResidualWeights.convB1) ++
-      padded(WideResidualWeights.fcW.flatten) ++ padded(WideResidualWeights.fcB))
+    packFloats(padded(weights.convW3) ++ padded(weights.convB3) ++
+      padded(weights.convW1) ++ padded(weights.convB1) ++
+      padded(weights.fcW.flatten) ++ padded(weights.fcB))
   private def imageWords(img: Seq[String]): Seq[BigInt] =
     packFloats(img.flatMap(_.map(c => if (c == '1') 1.0f else 0.0f)))
   private def writeWords(mem: SparseMemory, base: Long, words: Seq[BigInt]): Unit =
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
   private def randomImage(seed: Long): Seq[String] = {
     val rng = new scala.util.Random(seed)
-    Seq.fill(64)(Seq.fill(64)(if (rng.nextInt(2) == 0) '0' else '1').mkString)
+    Seq.fill(side)(Seq.fill(side)(if (rng.nextInt(2) == 0) '0' else '1').mkString)
   }
   private def getFloat(p: Data): Float = {
     val f = p.asInstanceOf[FloatML]
     val bits = ((if (f.sign.toBoolean) 1 else 0) << 15) | ((f.exponent.toInt & 0xFF) << 7) | (f.mantissa.toInt & 0x7F)
     java.lang.Float.intBitsToFloat(bits << 16)
   }
-
-  private val images = Seq(randomImage(5))
 
   private def runVariant[M <: Accelerator[_]](makeModel: Int => M,
                                               replica: Seq[String] => Seq[Double],
@@ -109,8 +115,10 @@ class WideResidualTilingTest extends AnyFunSuite {
           val expected = replica(img)
           val dev = collected.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
           if (tag == "SKIP") {
-            val devS = collected.zip(WideResidualReplica.logitsShifted(img)).map { case (h, s) => math.abs(h.toDouble - s) }.max
-            println(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1elem)=$devS%.3f")
+            val devS = collected.zip(WideResidualReplica.logitsShifted(img, weights)).map { case (h, s) => math.abs(h.toDouble - s) }.max
+            val devS4 = collected.zip(WideResidualReplica.logitsShiftK(img, weights, 4)).map { case (h, s) => math.abs(h.toDouble - s) }.max
+            val devS3 = collected.zip(WideResidualReplica.logitsShiftK(img, weights, 3)).map { case (h, s) => math.abs(h.toDouble - s) }.max
+            println(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1)=$devS%.3f dev(shift3)=$devS3%.3f dev(shift4)=$devS4%.3f")
           }
           assert(dev == 0.0,
             s"[$tag tileH=$tileH image#$k] corrupted: hw ${collected.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")
@@ -122,8 +130,8 @@ class WideResidualTilingTest extends AnyFunSuite {
   }
 
   test("WideResidual PLAIN chain (convK1, no fork) tiled vs replica") {
-    runVariant(tileH => WideResidualPlainChain(axiConfig, tileHeight = tileH),
-      WideResidualPlainChainReplica.logits _, tag = "PLAIN")
+    runVariant(tileH => WideResidualPlainChain(axiConfig, tileHeight = tileH, side = side),
+      WideResidualPlainChainReplica.logits(_, weights), tag = "PLAIN")
   }
 
   test("WideResidual SKIP chain (tap fork) tiled vs replica") {
@@ -133,7 +141,7 @@ class WideResidualTilingTest extends AnyFunSuite {
     // Green pipeline requires M3 resolution first; run this gate explicitly
     // with S4_GATE=1 once M3 is fixed.
     assume(sys.env.contains("S4_GATE"), "S4_GATE unset - SKIP gate awaits M3 resolution")
-    runVariant(tileH => WideResidual(axiConfig, tileHeight = tileH),
-      WideResidualReplica.logits _, tag = "SKIP")
+    runVariant(tileH => WideResidual(axiConfig, tileHeight = tileH, side = side),
+      WideResidualReplica.logits(_, weights), tag = "SKIP")
   }
 }

@@ -24,9 +24,9 @@ import spinalML.dtypes._
  * gate checks tile-boundary continuity AND the deferred-branch exactness in
  * one differential against the JVM replica.
  */
-case class WideResidualPlainChain(override val axiConfig: Axi4Config, override val tileHeight: Int = -1) extends Accelerator(
+case class WideResidualPlainChain(override val axiConfig: Axi4Config, override val tileHeight: Int = -1, side: Int = 64) extends Accelerator(
   dataType    = BF16(),
-  inputShape  = Seq(64, 64, 1),
+  inputShape  = Seq(side, side, 1),
   modelSpec   = Seq(
     Conv2D(inChannels = 1, outChannels = 1, kernelSize = 3),
     ReLU(),
@@ -34,7 +34,7 @@ case class WideResidualPlainChain(override val axiConfig: Axi4Config, override v
     ReLU(),
     MaxPool2D(poolSize = 2, stride = 2),
     Flatten(),
-    Linear(inFeatures = 961, outFeatures = 10)
+    Linear(inFeatures = ((side - 2) / 2) * ((side - 2) / 2), outFeatures = 10)
   ),
   axiConfig   = axiConfig,
   weightResidencyCSR = true,

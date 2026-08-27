@@ -58,6 +58,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
                          stallAtPixel: Int = -1,
                          stallCycles: Int = 300): Seq[Seq[Int]] = {
     val got = scala.collection.mutable.ArrayBuffer[Seq[Int]]()
+    var aFires = 0
     compiled.doSim { (dut: Im2ColContinuityTestComp[SInt]) =>
       dut.clockDomain.forkStimulus(10)
       dut.io.c.stream.ready #= true
@@ -74,18 +75,14 @@ class Im2ColContinuityTest extends AnyFunSuite {
           for (_ <- 0 until stallCycles) { dut.clockDomain.waitSampling() }
           stalled = true
         }
-        if (stream.ready.toBoolean && pixelIdx < source.length) {
-          stream.valid #= true
-          stream.payload(0) #= source(pixelIdx)
-          dut.clockDomain.waitSampling()
-          pixelIdx += 1
-          stream.valid #= false
+        if (stream.valid.toBoolean && stream.ready.toBoolean) {
+          aFires += 1
+          if (pixelIdx < source.length) pixelIdx += 1
           quiet = 0
-        } else {
-          stream.valid #= false
-          dut.clockDomain.waitSampling()
-          quiet += 1
-        }
+        } else quiet += 1
+        stream.valid #= pixelIdx < source.length
+        if (pixelIdx < source.length) stream.payload(0) #= source(pixelIdx)
+        dut.clockDomain.waitSampling()
         if (dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean) {
           got += (0 until dut.io.c.stream.payload.length).map(i => dut.io.c.stream.payload(i).toInt)
           quiet = 0
@@ -94,6 +91,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
         assert(timeout < 400000, "drive loop hung")
       }
     }
+    println(f"  run: accepted $aFires pixels, emitted ${got.length} windows")
     got.toSeq
   }
 
@@ -120,6 +118,19 @@ class Im2ColContinuityTest extends AnyFunSuite {
         s"seam window $i differs: continuous ${continuous(i)} vs stalled ${stalled(i)}")
     }
     println(s"Im2Col band-seam equivalence: ${continuous.length} windows identical with vs without a 300-cycle seam stall")
+  }
+
+  test("Im2Col: K=1 window count over a full frame (M3 probe)") {
+    val K = 1
+    val W = 16
+    val H = 16
+    val img = image(H, W, 42)
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
+      .compile(Im2ColContinuityTestComp(SInt(16 bits), H, W, 1, K, K * K))
+    val got = runCommand(compiled, img, stallAtPixel = -1)
+    println(s"Im2Col M3 probe: K=1, ${H}x$W -> ${got.length} windows (input pixels: ${img.length})")
+    assert(got.length == img.length,
+      s"M3: K=1 im2col emitted ${got.length} windows for ${img.length} pixels")
   }
 
   test("Im2Col: two separate commands stay clean exactly like fresh sessions (M2.2)") {

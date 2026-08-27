@@ -18,9 +18,22 @@ import spinalML.dtypes.FloatML
  * on a wide geometry (4-beat-aligned by 64-bit AXI, K=3 windows) where the
  * halo-carried state necessarily spans two + seams.
  */
+/**
+ * Env: WIDE_SIDE (side of the square image, default 64) shrinks the whole
+ * classifier for fast debug iterations; WIDE_TILES stays a tile-case subset;
+ * MNIST_TIMEOUT bounds each pass.
+ */
 class WideConvTilingTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   private val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
+
+  private val side = sys.env.get("WIDE_SIDE").map(_.toInt).getOrElse(64)
+  private val tileCases = sys.env.get("WIDE_TILES").map(_.split(",").map(_.toInt).toSeq).getOrElse {
+    if (side > 4 && side % 4 == 0) Seq(side, side / 4) else Seq(side)
+  }
+  private val images = Seq(7L, 23L, 99L).take(sys.env.get("WIDE_IMAGES").map(_.toInt).getOrElse(1))
+    .map(randomImage)
+  private val weights = WideConvWeights.ofSide(side)
 
   private val imgBase = 0x10000L
   private val weightBase = 0x20000L
@@ -38,8 +51,8 @@ class WideConvTilingTest extends AnyFunSuite {
   }
 
   private def weightWords(): Seq[BigInt] =
-    packFloats(padded(WideConvWeights.convW) ++ padded(WideConvWeights.convB) ++
-      padded(WideConvWeights.fcW.flatten) ++ padded(WideConvWeights.fcB))
+    packFloats(padded(weights.convW) ++ padded(weights.convB) ++
+      padded(weights.fcW.flatten) ++ padded(weights.fcB))
 
   private def imageWords(img: Seq[String]): Seq[BigInt] =
     packFloats(img.flatMap(_.map(c => if (c == '1') 1.0f else 0.0f)))
@@ -49,7 +62,7 @@ class WideConvTilingTest extends AnyFunSuite {
 
   private def randomImage(seed: Long): Seq[String] = {
     val rng = new scala.util.Random(seed)
-    Seq.fill(64)(Seq.fill(64)(if (rng.nextInt(2) == 0) '0' else '1').mkString)
+    Seq.fill(side)(Seq.fill(side)(if (rng.nextInt(2) == 0) '0' else '1').mkString)
   }
 
   private def getFloat(p: Data): Float = {
@@ -87,11 +100,11 @@ class WideConvTilingTest extends AnyFunSuite {
     collected.toSeq
   }
 
-  test("WideConv BF16: 64x64 tiled (tileHeight 64 vs 16) matches the replica") {
+  test("WideConv BF16: side x side tiled matches the replica") {
     val images = Seq(randomImage(7), randomImage(23), randomImage(99))
-    for (tileH <- Seq(64, 16)) {
+    for (tileH <- tileCases) {
       val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
-        .compile(WideConv(axiConfig, tileHeight = tileH))
+        .compile(WideConv(axiConfig, tileHeight = tileH, side = side))
       compiled.doSim { dut: WideConv =>
         dut.clockDomain.forkStimulus(10)
         val memorySim = AxiMemorySim(axi = dut.io.axiMaster, clockDomain = dut.clockDomain,
@@ -116,14 +129,14 @@ class WideConvTilingTest extends AnyFunSuite {
 
         for ((img, k) <- images.zipWithIndex) {
           val got = runInference(dut, memorySim.memory, img, writeAxiLite)
-          val expected = WideConvReplica.logits(img)
+          val expected = WideConvReplica.logits(img, weights)
           val dev = got.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
           assert(dev == 0.0,
             s"[WideConv tileH=$tileH image#$k] corrupted: hw ${got.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")
           println(f"[WideConv tileH=$tileH%-3d image#$k predicted ${got.indexOf(got.max)} max|hw-sw|=$dev%.3f")
         }
       }
-      println(s"WideConv tileHeight=$tileH: ${images.length} x64x64 images bit-exact")
+      println(s"WideConv tileHeight=$tileH: ${images.length} x${side}x$side images bit-exact")
     }
   }
 }

@@ -153,7 +153,11 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
             when(windowCount.willOverflowIfInc) {
               goto(stateDone)
             } otherwise {
-              goto(stateWaitA)
+              // K = 1: every input pixel is a window, and stateFill already
+              // shifts + counts exactly one pixel per beat — forwarding to
+              // stateWaitA would absorb a second pixel per window and emit
+              // every other one (the M3 window-count anomaly).
+              if (K == 1) goto(stateFill) else goto(stateWaitA)
             }
           }
         }

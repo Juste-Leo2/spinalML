@@ -16,16 +16,20 @@ import spinalML.dtypes._
  *
  * Conv 3x3 (1->1) -> ReLU -> MaxPool 2x2 -> Flatten -> Linear 961->10.
  * The LogSoftmax head is omitted (argmax(logits) argmax(softmax(logits))).
+ *
+ * `side` shrinks the square input (the FC size derives from it: fc =
+ * ((side-2)/2)^2) so the gate can run as a small, fast debug configuration:
+ * `WideConv(axiConfig, tileHeight = 16, side = 16)`.
  */
-case class WideConv(override val axiConfig: Axi4Config, override val tileHeight: Int = -1) extends Accelerator(
+case class WideConv(override val axiConfig: Axi4Config, override val tileHeight: Int = -1, side: Int = 64) extends Accelerator(
   dataType    = BF16(),
-  inputShape  = Seq(64, 64, 1),
+  inputShape  = Seq(side, side, 1),
   modelSpec   = Seq(
     Conv2D(inChannels = 1, outChannels = 1, kernelSize = 3),
     ReLU(),
     MaxPool2D(poolSize = 2, stride = 2),
     Flatten(),
-    Linear(inFeatures = 961, outFeatures = 10)
+    Linear(inFeatures = ((side - 2) / 2) * ((side - 2) / 2), outFeatures = 10)
   ),
   axiConfig   = axiConfig,
   weightResidencyCSR = true,
