@@ -179,10 +179,10 @@ class WeightResidentChainTest extends AnyFunSuite {
   // =====================================================================
   test("Mnistw4a8: residency keeps logits bit-exact with zero weight DDR traffic") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = Mnistw4a8.defaultModelSpec.collectFirst { case l: spinalML.nn.Linear => l.effLanes }.getOrElse(288)
+    val w4Lanes = W4A8Knob.lanes()
     val cases = passCases(nSteady + 3)
 
-    SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig)).doSim { dut =>
+    SimConfig.withVerilator.withConfig(spinalConfig).compile(W4A8Knob.make(axiConfig)).doSim { dut =>
       dut.clockDomain.forkStimulus(10)
       val memorySim = AxiMemorySim(axi = dut.io.axiMaster, clockDomain = dut.clockDomain,
         config = AxiMemorySimConfig(maxOutstandingReads = 8))

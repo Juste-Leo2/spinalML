@@ -48,11 +48,11 @@ class MnistChainedTest extends AnyFunSuite {
 
   test("Mnistw4a8: chained inferences in one session match the replica") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = Mnistw4a8.defaultModelSpec.collectFirst { case l: spinalML.nn.Linear => l.effLanes }.getOrElse(288)
+    val w4Lanes = W4A8Knob.lanes()
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
       .withWave
-      .compile(Mnistw4a8(axiConfig))
+      .compile(W4A8Knob.make(axiConfig))
 
     // Same digit repeated first (deterministic staleness fingerprint)
     val cases = chainCases

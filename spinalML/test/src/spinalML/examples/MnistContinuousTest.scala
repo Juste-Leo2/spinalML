@@ -203,8 +203,8 @@ class MnistContinuousTest extends AnyFunSuite {
 
   test("Mnistw4a8: continuous RUN auto-advances bit-exact frames, STOP is clean") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = Mnistw4a8.defaultModelSpec.collectFirst { case l: spinalML.nn.Linear => l.effLanes }.getOrElse(288)
-    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig))
+    val w4Lanes = W4A8Knob.lanes()
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(W4A8Knob.make(axiConfig))
     continuousBody(
       compiled,
       d => {
