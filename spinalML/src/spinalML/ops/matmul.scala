@@ -18,12 +18,21 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   shapeB: Seq[Int],
   lanes: Int,
   parallelN: Boolean = false,
-  pipelineTree: Boolean = true
+  pipelineTree: Boolean = true,
+  // Rows-in-flight bound for the output accumulator table. 0 = legacy: the
+  // whole MxN partial table is materialized (large registers + index mux).
+  // > 0: the accumulation is drained row-by-row as soon as each row is
+  // complete, so the table shrinks to min(temporal, M) x N slots — the sum
+  // order (and therefore bit-exactness) is unchanged; only storage shrinks.
+  temporal: Int = 0
 ) extends Component {
   val M = shapeA(0)
   val K = shapeA(1)
   val N = shapeB(1)
   require(shapeB(0) == K, "Inner dimensions must match (A.cols == B.rows)")
+  require(temporal >= 0, s"temporal=$temporal must be >= 0")
+  require(temporal == 0 || !parallelN,
+    s"temporal=$temporal requires the sequential-N matmul (parallelN=false)")
   
   val chunksK = (K + lanes - 1) / lanes
   val paddedK = chunksK * lanes
@@ -260,17 +269,116 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     
     val treeOutput = buildAdderTree(multRegs, stage3_enable)
     
+    // Accumulator table + slot selection. Legacy (temporal = 0): the whole
+    // MxN partial table is registered, indexed by (row, col). Windowed
+    // (temporal > 0): min(temporal, M) row-slots circularly indexed — each
+    // row is drained the moment it completes, so the table + index mux
+    // shrink. The sum order (row, col, chunk) is IDENTICAL in both modes.
+    val (accTable, accIdxSel): (Vec[TAcc], (UInt, UInt) => UInt) = if (temporal >= 1) {
+      val slots = scala.math.min(temporal, M)
+      val wt = Vec(Reg(accType), N * slots)
+      wt.foreach(acc => acc.init(acc.getZero))
+      val slotBits = scala.math.max(1, log2Up(slots + 1))
+      val nBits = scala.math.max(1, log2Up(N + 1))
+      val wIdx = (r: UInt, n: UInt) =>
+        ((r % U(slots, slotBits bits)) * U(N) + n.resize(nBits)).resized
+      (wt, wIdx)
+    } else {
+      (accumulators, (r: UInt, n: UInt) => getAccIdx(r * N + n))
+    }
+
     when(tree_valid) {
-      val flatIdx = tree_row * N + tree_n
-      val currentAcc = accumulators(getAccIdx(flatIdx))
+      val flatIdx = accIdxSel(tree_row, tree_n)
+      val currentAcc = accTable(flatIdx)
       val nextAcc = ((currentAcc, treeOutput) match {
         case (acc: SInt, sum: SInt) => (acc + sum).resized.asInstanceOf[TAcc]
         case (acc: UInt, sum: UInt) => (acc + sum).resized.asInstanceOf[TAcc]
         case (acc: spinalML.dtypes.FloatML, sum: spinalML.dtypes.FloatML) => spinalML.utils.Float.add(acc, sum).asInstanceOf[TAcc]
       })
-      accumulators(getAccIdx(flatIdx)) := nextAcc
+      accTable(flatIdx) := nextAcc
     }
-    
+
+    if (temporal >= 1) {
+      // Windowed-drain FSM: after each row's last product beats, the tree
+      // pipeline (3 + treeLatency) is flushed, then the completed row is
+      // emitted N beats to the output; only then is the next row loaded.
+      val rowBits = scala.math.max(1, log2Up(M + 1))
+      val emitIdx = Reg(UInt(rowBits bits)) init (U(0))
+      val emitLast = Reg(Bool) init (False)
+      val emitCounter = Counter(N)
+
+      val fsmW = new StateMachine {
+        val stateWaitTile: State = new State with EntryPoint {
+          whenIsActive {
+            when(bufferB.io.tileReady) {
+              goto(stateLoadA)
+            }
+          }
+        }
+
+        val stateLoadA: State = new State {
+          whenIsActive {
+            io.a.stream.ready := True
+            when(io.a.stream.valid) {
+              memA.write(loadACounter.value, io.a.stream.payload)
+              loadACounter.increment()
+              when(loadACounter.willOverflowIfInc) {
+                goto(stateComputeN)
+              }
+            }
+          }
+        }
+
+        val stateComputeN: State = new State {
+          whenIsActive {
+            stage1_fire := True
+            computeACounter.increment()
+            when(computeACounter.willOverflowIfInc) {
+              nCounter.increment()
+              when(nCounter.willOverflowIfInc) {
+                emitIdx := rowCounter.value.resize(rowBits)
+                emitLast := rowCounter.value.resize(rowBits) === U(M - 1, rowBits bits)
+                rowCounter.increment()
+                when(rowCounter.willOverflowIfInc) {
+                  bufferB.io.nextTile := True
+                }
+                goto(stateWaitFlush)
+              }
+            }
+          }
+        }
+
+        val stateWaitFlush: State = new State {
+          val waitCounter = Counter(3 + treeLatency)
+          whenIsActive {
+            waitCounter.increment()
+            when(waitCounter.willOverflowIfInc) {
+              goto(stateEmitRow)
+            }
+          }
+        }
+
+        val stateEmitRow: State = new State {
+          whenIsActive {
+            io.c.stream.valid := True
+            io.c.stream.payload(0) := accTable(accIdxSel(emitIdx, emitCounter.value.resize(scala.math.max(1, log2Up(N + 1)))))
+            when(io.c.stream.ready) {
+              val idx = accIdxSel(emitIdx, emitCounter.value.resize(scala.math.max(1, log2Up(N + 1))))
+              accTable(idx) := accTable(idx).getZero
+              emitCounter.increment()
+              when(emitCounter.willOverflowIfInc) {
+                when(emitLast) {
+                  emitLast := False
+                  goto(stateWaitTile)
+                } otherwise {
+                  goto(stateLoadA)
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
     val fsm = new StateMachine {
       val stateWaitTile: State = new State with EntryPoint {
         whenIsActive {
@@ -347,11 +455,12 @@ case class MatmulOp[T <: Data, TAcc <: Data](
         }
       }
     }
+    }
   }
 }
 
 object matmul {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None, temporal: Int = 0): Tensor[TAcc] = {
     val rankA = a.shape.length
     val rankB = b.shape.length
     require(rankA >= 2 && rankB >= 2, "Matmul requires at least 2D tensors")
@@ -373,7 +482,7 @@ object matmul {
 
     val outShape = batchDimsA ++ Seq(M, N)
 
-    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN)
+    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal)
     matmulComp.io.reArm := reArm.getOrElse(False)
     
     // Connect the continuous batched streams directly to the 2D MatmulOp.

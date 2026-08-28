@@ -77,6 +77,7 @@
 | `MNIST_CONT_N`, `MNIST_CHAIN_N`, `MNIST_CHAIN_SEED`, `MNIST_PREFETCH_SEED` | réduction/sélection des itérations et images | ciblage |
 | `S4_GATE=1` | active le SKIP gate de WideResidual (✅ VERT depuis M3.5 — fix push FIFO non gaté) | porte S4 : doit être **bit-exact** aux petites et pleines tailles |
 | `MNIST_WLANES=96` | largeur de K-band du Linear (`LayerSpec.Linear.weightLanes`, M2) — BF16 et W4A8 bit-exacts à 288/96/32 | décomposition LUT de la couche finale |
+| `MNIST_TEMPORAL=16` | fenêtre temporelle des ops à réduction (`Accelerator/Sequential.temporal`, M3) — 0 = hérité (table M×N complète), ≥1 = drain par rangée, table ≤ min(temporal, M)×N — bit-exact identique | charnière DFT : coupe les ~18 k FF + mux d'acc du conv |
 | `SML_DEBUG=1` | logs `[DEBUG]` (tables nœuds, détails par couche, équilibre des flux) | diagnostic — défaut : `[INFO]` seul |
 | `SML_DEBUG=2` | logs `[TRACE]` (beats/fires, spine back-pressure, per-frame) — flot massif | mesure ciblée (pipe vers fichier) |
 | `SML_DEBUG_TAG=TAP` | restreint DEBUG/TRACE à un seul tag, ex. `TAP`, `ENGINE`, `WIDE` | TRACE focusée sans noyer la sortie |
@@ -141,4 +142,11 @@ PATH="$HOME/.local/bin:$PATH" ./mill spinalML.test.runMain spinalML.symbolicTest
 ## Notes
 - Les durées Tier 3 dominent par le **compile Verilator par variante** (un `compile` par tileHeight) + la sim 64×64 (4 images × 2 variants ≈ 11 min) — réduction possible via `WIDE_TILES` ou en réduisant les images (1 au lieu de 3).
 - Le **SKIP gate** de `WideResidualTilingTest` est actif derrière `S4_GATE=1` et **vert** depuis M3.5 (cause racine = push FIFO du TapBuffer non gaté sur le handshake du tee — voir `open-mysteries.md` M3.5). La certification 64×64 (WIDE_TILES="64,16") dépasse largement l'heure : privilégier le 16×16 pour la boucle.
+
+> **⚠️ M4 (à ne pas oublier)** : depuis que `Mnistw4a8.defaultModelSpec` porte `weightLanes=4`
+> (M2), le couple {prefetch résident, résidence} + flux poids découpé en chunks de 4 est
+> **corrompu** (`WeightPrefetchChainTest`, `WeightResidentChainTest` — échec reproductible
+> sur le commit M2, antérieur au patch temporal M3). La bande-tiling et les autres suites
+> W4A8 sont vertes. À investiguer dans une session dédiée (piste : compteurs/swap du
+> staging prefetch calibrés sur un battement = une rangée-neuron, désormais 72 battements).
 - **Nouveaux probes S4** : `ForkChainCountTest` (chaîne du skip au niveau composant, compteurs + séquences de valeurs + vérif des paires du Add) et `K1ConvCountTest` (conv K=1 et K=3 nus, comptage exact) — les deux < 15 s, dans `spinalML/test/src/spinalML/examples/`.

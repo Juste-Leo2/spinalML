@@ -29,8 +29,14 @@ case class Sequential(
   // bands concatenate into the same continuous row stream (the seam is a
   // stream stall — im2col's carried state is the halo, proven in S2).
   // tileHeight <= 0 means "one band = the whole image" (legacy behaviour).
-  val tileHeight: Int = -1
+  val tileHeight: Int = -1,
+  // Rows-in-flight bound for the reduction ops (M3: the matmul accumulator
+  // table). 0 = legacy (whole MxN partial table in registers, potentially
+  // huge); > 0 = the layer drains row-by-row, table shrinks to <= temporal
+  // rows (bit-exactness is preserved: the accumulation order is unchanged).
+  val temporal: Int = 0
 ) extends Component {
+  require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
 
   // ============================================================
   // 0. Topology analysis (pure elaboration-time, no hardware yet)
@@ -495,7 +501,7 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
-        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire))
+        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
 
       case _: ReLU =>
         relu(inTensor)
@@ -578,9 +584,9 @@ case class Sequential(
         layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
-              false, 1024, Option(weightDmaFire))
+              false, 1024, Option(weightDmaFire), temporal = temporal)
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire))
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), temporal = temporal)
         }
 
       case rq: Requantize =>
