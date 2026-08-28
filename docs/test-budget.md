@@ -76,6 +76,7 @@
 | `WIDE_TILES="64"` | sous-ensemble des tileHeights (WideResidualTilingTest) | T3 hors nightly |
 | `MNIST_CONT_N`, `MNIST_CHAIN_N`, `MNIST_CHAIN_SEED`, `MNIST_PREFETCH_SEED` | réduction/sélection des itérations et images | ciblage |
 | `S4_GATE=1` | active le SKIP gate de WideResidual (✅ VERT depuis M3.5 — fix push FIFO non gaté) | porte S4 : doit être **bit-exact** aux petites et pleines tailles |
+| `MNIST_WLANES=96` | largeur de K-band du Linear (`LayerSpec.Linear.weightLanes`, M2) — BF16 et W4A8 bit-exacts à 288/96/32 | décomposition LUT de la couche finale |
 | `SML_DEBUG=1` | logs `[DEBUG]` (tables nœuds, détails par couche, équilibre des flux) | diagnostic — défaut : `[INFO]` seul |
 | `SML_DEBUG=2` | logs `[TRACE]` (beats/fires, spine back-pressure, per-frame) — flot massif | mesure ciblée (pipe vers fichier) |
 | `SML_DEBUG_TAG=TAP` | restreint DEBUG/TRACE à un seul tag, ex. `TAP`, `ENGINE`, `WIDE` | TRACE focusée sans noyer la sortie |

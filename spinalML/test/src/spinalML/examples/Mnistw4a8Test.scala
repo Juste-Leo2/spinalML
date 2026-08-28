@@ -5,8 +5,10 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
-import spinalML.dtypes.FloatML
+import spinalML.dtypes.{I8, FloatML}
 import spinalML.utils.MemLayout
+import spinalML.nn.{Accelerator, Linear => LinearSpec}
+import spinalML.utils.SimLog
 
 /**
  * Black-box SoC validation of the W4A8 Mnist accelerator under Verilator.
@@ -146,7 +148,7 @@ class Mnistw4a8Test extends AnyFunSuite {
   }
 
   /** One full inference protocol; returns the 10 collected logits. */
-  def runInference(dut: Mnistw4a8, mem: SparseMemory, image: Seq[String],
+  def runInference(dut: Accelerator[SInt], mem: SparseMemory, image: Seq[String],
                    writeAxiLite: (BigInt, BigInt) => Unit): Seq[Float] = {
     writeWords(mem, imgBase, toWords(imageBytes(image)))
 
@@ -181,9 +183,21 @@ class Mnistw4a8Test extends AnyFunSuite {
 
   test("Mnistw4a8 SoC black-box: logits match the software replica") {
     val cases = buildCases()
+    // M2: the model spec carries the Linear K-chunk width (default weightLanes
+    // has moved into Mnistw4a8.defaultModelSpec); MNIST_WLANES overrides it.
+    val spec = sys.env.get("MNIST_WLANES") match {
+      case Some(s) => Mnistw4a8.defaultModelSpec.map {
+        case l: LinearSpec => l.copy(weightLanes = s.toInt)
+        case o => o
+      }
+      case None => Mnistw4a8.defaultModelSpec
+    }
+    val wLanes = spec.collectFirst { case l: LinearSpec => l.effLanes }.getOrElse(288)
+    SimLog.info("MNIST")(s"Mnistw4a8 model wLanes=$wLanes (inFeatures=288, cases=${cases.size})")
 
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
-    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig))
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      new Accelerator(dataType = I8(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig))
 
     var maxDev = 0.0
     for (tc <- cases) {
@@ -217,7 +231,7 @@ class Mnistw4a8Test extends AnyFunSuite {
 
         val logits = runInference(dut, memorySim.memory, tc.image, writeAxiLite _)
 
-        val expected = Mnistw4a8Replica.logits(tc.image)
+        val expected = Mnistw4a8Replica.logitsK(tc.image, wLanes)
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         maxDev = math.max(maxDev, dev)
         assert(dev <= sys.env.get("REPLICA_TOL").map(_.toDouble).getOrElse(0.0),
