@@ -231,7 +231,10 @@ object MnistReplica {
   private def kernelFields(kernel: Seq[Float]): Seq[F] = kernel.map(bf16Fields)
 
   /** Full-network logits (decoded doubles) for one binarized image. */
-  def logits(img: Seq[String]): Seq[Double] = {
+  def logits(img: Seq[String]): Seq[Double] = logitsK(img, 288)
+
+  /** Same oracle with the M2 K-chunk width of the Linear (wLanes). */
+  def logitsK(img: Seq[String], wLanes: Int): Seq[Double] = {
     val pix = Array.ofDim[Int](28, 28)
     for (y <- 0 until 28; x <- 0 until 28) pix(y)(x) = if (img(y)(x) == '1') 1 else 0
 
@@ -255,15 +258,27 @@ object MnistReplica {
       acts += v
     }
 
-    linearLayer(acts, MnistWeights.fcW.map(row => row.map(bf16Fields)), MnistWeights.fcB.map(bf16Fields), EB, MB)
+    linearLayer(acts, MnistWeights.fcW.map(row => row.map(bf16Fields)), MnistWeights.fcB.map(bf16Fields), EB, MB, wLanes)
   }
 
-  /** Shared tail: logits[o] = (+0 + tree(act . w[o])) + b[o], RN-rounded. */
-  def linearLayer(acts: Seq[F], w: Seq[Seq[F]], b: Seq[F], expBits: Int, mantBits: Int): Seq[Double] = {
+  /** Shared tail: logits[o] = (+0 + tree(act . w[o])) + b[o], RN-rounded.
+    *
+    * M2: the hardware matmul splits the K axis into chunks of `wLanes`
+    * lanes, accumulating `fadd(acc, tree(chunk))` per chunk in order — a
+    * full-width single tree when wLanes == K (legacy, byte-identical). */
+  def linearLayer(acts: Seq[F], w: Seq[Seq[F]], b: Seq[F], expBits: Int, mantBits: Int,
+                  wLanes: Int = 288): Seq[Double] = {
+    require(wLanes > 0 && acts.length % wLanes == 0,
+      s"wLanes=$wLanes must divide the K dimension ${acts.length}")
+    val chunks = acts.length / wLanes
     val out = ArrayBuffer[Double]()
     for (o <- w.indices) {
-      val prods = acts.indices.map(k => fmul(acts(k), w(o)(k), expBits, mantBits))
-      val acc = fadd(PZERO, tree(prods, expBits, mantBits), expBits, mantBits)
+      var acc = PZERO
+      for (c <- 0 until chunks) {
+        val prods = for (k <- c * wLanes until (c + 1) * wLanes)
+          yield fmul(acts(k), w(o)(k), expBits, mantBits)
+        acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+      }
       out += decode(fadd(acc, b(o), expBits, mantBits), expBits, mantBits)
     }
     out.toSeq
@@ -298,7 +313,10 @@ object Mnistw4a8Replica {
   def fieldsOfByte(b: Int): F = F((b >> 7 & 1) == 1, (b >> 3) & 0xF, b & 7)
 
   /** Full-network logits for one binarized image. */
-  def logits(img: Seq[String]): Seq[Double] = {
+  def logits(img: Seq[String]): Seq[Double] = logitsK(img, 288)
+
+  /** Same oracle with the M2 K-chunk width of the Linear (wLanes). */
+  def logitsK(img: Seq[String], wLanes: Int): Seq[Double] = {
     val pix = Array.ofDim[Int](28, 28)
     for (y <- 0 until 28; x <- 0 until 28) pix(y)(x) = if (img(y)(x) == '1') 1 else 0
 
@@ -323,6 +341,6 @@ object Mnistw4a8Replica {
 
     val w = Mnistw4a8Weights.fcW.map(row => row.map(v => fieldsOfByte(fp8Byte(v))))
     val b = Mnistw4a8Weights.fcB.map(v => fieldsOfByte(fp8Byte(v)))
-    MnistReplica.linearLayer(acts, w, b, EB, MB)
+    MnistReplica.linearLayer(acts, w, b, EB, MB, wLanes)
   }
 }

@@ -300,7 +300,7 @@ case class Sequential(
       val requiredLanes = layer match {
         case c: Conv2D => c.kernelSize * c.kernelSize
         case c: Conv1D => c.kernelSize * c.inChannels
-        case l: Linear => l.inFeatures
+        case l: Linear => l.effLanes
         case bn: BatchNorm1D => bn.features
         case ln: LayerNorm1D => ln.features
         case a: ClassicalAttention => a.embedDim
@@ -568,7 +568,11 @@ case class Sequential(
         // combinationally onto the node0 tee corrupted the OTHER fork branch
         // (skip-FIFO lost/duplicated the boundary element — ResidualMLP).
         // Bisection evidence + elasticity rule: docs/open-mysteries.md M1.7.
-        val repackedTensor = repack(reshaped, l.inFeatures)
+        // M2: the beat width is `weightLanes` (<= inFeatures); the matmul
+        // accumulates the K chunks internally in order, so bit-exactness is
+        // preserved as long as the oracle reproduces the same chunk fold
+        // (MnistReplica.linearLayer wLanes).
+        val repackedTensor = repack(reshaped, l.effLanes)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.
         layerWeights.dataType() match {
