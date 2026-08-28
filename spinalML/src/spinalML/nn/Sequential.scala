@@ -5,7 +5,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
 import spinalML.tensors.Tensor
-import spinalML.utils.MemLayout
+import spinalML.utils.{MemLayout, SimLog}
 import spinalML.dtypes.FloatML
 import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => LinearHW, batchnorm}
 import spinalML.ops.{reshape, repack, flatten, cast}
@@ -52,6 +52,11 @@ case class Sequential(
     dx.getClass == dy.getClass && dx.getBitsWidth == dy.getBitsWidth
   }
 
+  private def hardTypeName(t: HardType[Data]): String = {
+    val d = t()
+    s"${d.getClass.getSimpleName}(${d.getBitsWidth}b)"
+  }
+
   val consumers = Array.fill(nNodes)(scala.collection.mutable.ArrayBuffer[Int]())
   for (i <- layers.indices; n <- consumedNodes(i)) {
     require(n <= i,
@@ -67,6 +72,11 @@ case class Sequential(
 
   val nodeShapes = scala.collection.mutable.ArrayBuffer[Seq[Int]](inputShape)
   val nodeTypes = scala.collection.mutable.ArrayBuffer[HardType[Data]](globalDataType)
+
+  // SimLog audit record: per-layer weight footprint, filled by the build loop.
+  private val auditWeightLanes = scala.collection.mutable.ArrayBuffer[Int]()
+  private val auditWeightElements = scala.collection.mutable.ArrayBuffer[Int]()
+  private val auditWeightBeats = scala.collection.mutable.ArrayBuffer[Int]()
 
   for (i <- layers.indices) {
     val l = layers(i)
@@ -379,6 +389,13 @@ case class Sequential(
 
       layerWeights = Tensor(wType, wShape, requiredLanes)
       layerWeights.stream << wStreamer.io.streamOut
+      auditWeightLanes += requiredLanes
+      auditWeightElements += elements
+      auditWeightBeats += beats
+    } else {
+      auditWeightLanes += 0
+      auditWeightElements += 0
+      auditWeightBeats += 0
     }
 
     // Fetch Bias
@@ -660,5 +677,23 @@ case class Sequential(
       arbiter.io.inputs(i) <> allAxiMasters(i)
     }
     io.axiMaster <> arbiter.io.output
+  }
+
+  // ---- SimLog audit: model summary (INFO) + per-node table (DEBUG) --------
+  SimLog.info("MODEL")(s"Sequential: $nNodes nodes, " +
+    s"dtypes=${(0 until nNodes).map(i => hardTypeName(nodeTypes(i))).mkString(" -> ")}")
+  SimLog.info("MODEL")(s"shapes: ${nodeShapes.map(_.mkString("x")).mkString(" -> ")}; " +
+    s"outElems=${finalShape.product}, weightElems=${auditWeightElements.sum}, " +
+    s"weightLanesMax=${if (auditWeightLanes.nonEmpty) auditWeightLanes.max else 0}")
+  if (auditWeightLanes.nonEmpty && auditWeightLanes.max > 64)
+    SimLog.warn("MODEL")(s"weightLanes=${auditWeightLanes.max} exceeds the 64-lane sanity threshold — large LUT footprint " +
+      s"(lane decomposition is the M2 roadmap item)")
+  if (SimLog.isDebug) {
+    SimLog.debug("MODEL")(s"n0 INPUT shape=${inputShape.mkString("x")} dtype=${hardTypeName(nodeTypes(0))}")
+    for (i <- layers.indices)
+      SimLog.debug("MODEL")(s"n${i + 1} ${layers(i).getClass.getSimpleName} in=${nodeShapes(i).mkString("x")} " +
+        s"out=${nodeShapes(i + 1).mkString("x")} dtype=${hardTypeName(nodeTypes(i + 1))} " +
+        s"elems=${nodeShapes(i + 1).product} wLanes=${auditWeightLanes(i)} " +
+        s"wElems=${auditWeightElements(i)} wBeats=${auditWeightBeats(i)}")
   }
 }

@@ -6,6 +6,7 @@ import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.ops.Im2ColOp
+import spinalML.utils.SimLog
 
 /**
  * Sim wrapper: exposes the Im2ColOp ports at the top level (components must
@@ -91,7 +92,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
         assert(timeout < 400000, "drive loop hung")
       }
     }
-    println(f"  run: accepted $aFires pixels, emitted ${got.length} windows")
+    SimLog.info("IM2COL")(f"  run: accepted $aFires pixels, emitted ${got.length} windows")
     got.toSeq
   }
 
@@ -117,7 +118,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
       assert(continuous(i) == stalled(i),
         s"seam window $i differs: continuous ${continuous(i)} vs stalled ${stalled(i)}")
     }
-    println(s"Im2Col band-seam equivalence: ${continuous.length} windows identical with vs without a 300-cycle seam stall")
+    SimLog.info("IM2COL")(s"Im2Col band-seam equivalence: ${continuous.length} windows identical with vs without a 300-cycle seam stall")
   }
 
   test("Im2Col: K=1 window count over a full frame (M3 probe)") {
@@ -128,7 +129,7 @@ class Im2ColContinuityTest extends AnyFunSuite {
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
       .compile(Im2ColContinuityTestComp(SInt(16 bits), H, W, 1, K, K * K))
     val got = runCommand(compiled, img, stallAtPixel = -1)
-    println(s"Im2Col M3 probe: K=1, ${H}x$W -> ${got.length} windows (input pixels: ${img.length})")
+    SimLog.info("IM2COL")(s"Im2Col M3 probe: K=1, ${H}x$W -> ${got.length} windows (input pixels: ${img.length})")
     assert(got.length == img.length,
       s"M3: K=1 im2col emitted ${got.length} windows for ${img.length} pixels")
   }
@@ -151,6 +152,6 @@ class Im2ColContinuityTest extends AnyFunSuite {
     assert(aAlone.nonEmpty && bAlone.nonEmpty)
     assert(bAlone == bAfterA,
       s"command-clean violated: fresh-B ${bAlone.length} windows differs from B-after-A ${bAfterA.length}")
-    println(s"Im2Col command-clean: B-after-A identical to fresh B (${bAlone.length} windows) — no stale leak")
+    SimLog.info("IM2COL")(s"Im2Col command-clean: B-after-A identical to fresh B (${bAlone.length} windows) — no stale leak")
   }
 }

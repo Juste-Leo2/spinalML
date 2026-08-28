@@ -118,6 +118,7 @@ spinalML/
 │   │   └── utils/
 │   │       ├── Float.scala     # float bit-manipulation helpers
 │   │       ├── PWL.scala       # piece-wise linear approximation (for transcendentals)
+│   │       ├── SimLog.scala    # structured logs: [LEVEL] [TAG] msg, SML_DEBUG=1/2, SML_DEBUG_TAG
 │   │       └── math_luts.scala # look-up tables for math functions
 │   └── test/src/spinalML/      # ScalaTest mirrors of src/, one *Test.scala per file
 │       ├── dtypes/             # FP4Test, FP8Test, FloatMathTest, I8Test

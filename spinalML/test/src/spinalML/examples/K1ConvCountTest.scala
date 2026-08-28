@@ -9,6 +9,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.BF16
 import spinalML.dtypes.FloatML
 import spinalML.layers.Conv2D
+import spinalML.utils.SimLog
 
 /** Raw probe: does a K=1 Conv2DLayer emit exactly (H-K+1)*(W-K+1) output
  *  elements (the skip-chain entry probe for the "+1 beat" of M3.2b)? */
@@ -35,7 +36,8 @@ class K1ConvCountTest extends AnyFunSuite {
   private def bf16Bits(f: Float): Int = (java.lang.Float.floatToIntBits(f) >>> 16) & 0xFFFF
 
   test("K1Conv: exactly (H-K+1)*(W-K+1) y fires for one clean frame (K=1 then K=3)") {
-    val H = 16
+    SimLog.bench("K1ConvCountTest", "K1") {
+      val H = 16
     val W = 16
     val K = if (sys.env.get("PROBE_K").map(_.toInt).getOrElse(0) == 3) 3 else 1
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
@@ -83,8 +85,9 @@ class K1ConvCountTest extends AnyFunSuite {
         timeout += 1
       }
       dut.clockDomain.waitSampling(10)
-      println(s"K1Conv probe: $H x $W, K=$K -> $fires y fires (expected $expected)")
+      SimLog.info("K1")(s"K1Conv probe: $H x $W, K=$K -> $fires y fires (expected $expected)")
       assert(fires == expected, s"K1 conv emitted $fires vs expected $expected")
+    }
     }
   }
 }

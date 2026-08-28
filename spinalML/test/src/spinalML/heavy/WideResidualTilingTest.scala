@@ -5,7 +5,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
-import spinalML.utils.MemLayout
+import spinalML.utils.{MemLayout, SimLog}
 import spinalML.nn.Accelerator
 import spinalML.dtypes.FloatML
 
@@ -120,31 +120,32 @@ class WideResidualTilingTest extends AnyFunSuite {
             val devS3 = collected.zip(WideResidualReplica.logitsShiftK(img, weights, 3)).map { case (h, s) => math.abs(h.toDouble - s) }.max
             val devB = collected.zip(WideResidualReplica.logitsShiftB(img, weights)).map { case (h, s) => math.abs(h.toDouble - s) }.max
             val seamBest = WideResidualReplica.logitsShiftSeamBest(img, weights, collected.map(_.toDouble)).take(5)
-            println(s"  [$tag seamBest = " + seamBest.map(x => f"${x._1}:${x._2}%.3f").mkString(", ") + "]")
-            println(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1)=$devS%.3f dev(shift3)=$devS3%.3f dev(shift4)=$devS4%.3f dev(shiftB)=$devB%.3f")
+            SimLog.debug("WIDE")(s"  [$tag seamBest = " + seamBest.map(x => f"${x._1}:${x._2}%.3f").mkString(", ") + "]")
+            SimLog.info("WIDE")(f"[$tag tileH=$tileH%-3d image#$k dev(normal)=$dev%.3f dev(shift1)=$devS%.3f dev(shift3)=$devS3%.3f dev(shift4)=$devS4%.3f dev(shiftB)=$devB%.3f")
           }
           assert(dev == 0.0,
             s"[$tag tileH=$tileH image#$k] corrupted: hw ${collected.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")
-          println(f"[$tag tileH=$tileH%-3d image#$k predicted ${collected.indexOf(collected.max)} max|hw-sw|=$dev%.3f")
+          SimLog.info("WIDE")(f"[$tag tileH=$tileH%-3d image#$k predicted ${collected.indexOf(collected.max)} max|hw-sw|=$dev%.3f")
         }
       }
-      println(s"[$tag] tileHeight=$tileH bit-exact (${images.length} image)")
+      SimLog.info("WIDE")(s"[$tag] tileHeight=$tileH bit-exact (${images.length} image)")
     }
   }
 
   test("WideResidual PLAIN chain (convK1, no fork) tiled vs replica") {
-    runVariant(tileH => WideResidualPlainChain(axiConfig, tileHeight = tileH, side = side),
-      WideResidualPlainChainReplica.logits(_, weights), tag = "PLAIN")
+    SimLog.bench("WideResidual PLAIN", "WIDE") {
+      runVariant(tileH => WideResidualPlainChain(axiConfig, tileHeight = tileH, side = side),
+        WideResidualPlainChainReplica.logits(_, weights), tag = "PLAIN")
+    }
   }
 
   test("WideResidual SKIP chain (tap fork) tiled vs replica") {
-    // ROADMAP §4 gate — BLOCKED by mystery M3 (Im2ColOp window accounting:
-    // the K=1 im2col in the fork emits 3845 windows and the tap FIFO only
-    // receives 962 of the 3844 node-2 elements, mispairing the Add join).
-    // Green pipeline requires M3 resolution first; run this gate explicitly
-    // with S4_GATE=1 once M3 is fixed.
+    // ROADMAP §4 gate — validated in M3.5: SKIP is bit-exact at 16 and 64
+    // (see docs/open-mysteries.md M3.5); run this gate explicitly with S4_GATE=1.
     assume(sys.env.contains("S4_GATE"), "S4_GATE unset - SKIP gate awaits M3 resolution")
-    runVariant(tileH => WideResidual(axiConfig, tileHeight = tileH, side = side),
-      WideResidualReplica.logits(_, weights), tag = "SKIP")
+    SimLog.bench("WideResidual SKIP", "WIDE") {
+      runVariant(tileH => WideResidual(axiConfig, tileHeight = tileH, side = side),
+        WideResidualReplica.logits(_, weights), tag = "SKIP")
+    }
   }
 }

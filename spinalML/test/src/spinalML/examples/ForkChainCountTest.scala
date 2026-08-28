@@ -14,6 +14,7 @@ import spinalML.ops.add
 import spinalML.poolings.maxpool2d
 import spinalML.memory.TapBuffer
 import scala.collection.mutable.ArrayBuffer
+import spinalML.utils.SimLog
 import spinalML.examples.{HWFloat, MnistReplica}
 import HWFloat.{F, PZERO, decode, fmul, fadd, tree}
 import MnistReplica.bf16Fields
@@ -37,7 +38,7 @@ case class ForkChainCountComp(H: Int, W: Int, K: Int) extends Component {
   val n2 = relu(n1)
 
   val Hc = H - K + 1
-  println(s"[ForkChain] n2 shape=${n2.shape} lanes=${n2.lanes} elements=${n2.shape.product}")
+  SimLog.debug("FORK")(s"n2 shape=${n2.shape} lanes=${n2.lanes} elements=${n2.shape.product}")
   val tee = TapBuffer(BF16(), 196, 1, spineDebug = true)
   tee.io.streamIn << n2.stream
   val tiles = Seq(
@@ -112,7 +113,8 @@ class ForkChainCountTest extends AnyFunSuite {
   }
 
   test("ForkChain: per-node payload sequence on one 16x16 frame") {
-    val H = 16
+    SimLog.bench("ForkChainCountTest", "FORK") {
+      val H = 16
     val W = 16
     val K = 3
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
@@ -176,49 +178,49 @@ class ForkChainCountTest extends AnyFunSuite {
         if (dut.io.done.toBoolean) doneCount += 1
         cycles += 1
         if (cycles % 10000 == 0) {
-          println(s"  [t=$cycles] x=$xIdx done=$doneCount lens=" +
+          SimLog.debug("FORK")(s"[t=$cycles] x=$xIdx done=$doneCount lens=" +
             recs.map(_.size).mkString(","))
         }
       }
       dut.io.x.stream.valid #= false
       dut.clockDomain.waitSampling(20)
-      println(s"  [t=$cycles] drained done=$doneCount lens=" + recs.map(_.size).mkString(","))
+      SimLog.debug("FORK")(s"[t=$cycles] drained done=$doneCount lens=" + recs.map(_.size).mkString(","))
 
       val names = streams.map(_._1)
       val (n2ref, n3ref) = refChain((1 to total).map(_.toFloat), H, W, K)
 
-      println("== lengths ==")
-      for (i <- names.indices) println(f"  ${names(i)}%-7s len=${recs(i).size}")
+      SimLog.info("FORK")("== lengths ==")
+      for (i <- names.indices) SimLog.info("FORK")(f"  ${names(i)}%-7s len=${recs(i).size}")
 
       def idxOf(seq: Seq[F], v: Int): Int =
         seq.zipWithIndex.minBy { case (w, _) => java.lang.Math.abs(decode(w, EB, MB) - decoded(v)) }._2
 
       val direct = recs(names.indexOf("direct"))
-      println(s"  PUSH seq [first 14] = " + pushRec.take(14).map(decoded _).mkString(", "))
-      println(s"  POP  seq [first 14] = " + popRec.take(14).map(decoded _).mkString(", "))
-      println(s"  PUSH times first   = " + pushTime.take(14).mkString(","))
-      println(s"  POP  times first   = " + popTime.take(14).mkString(","))
-      println(s"  len(pop)=${popRec.size} len(push)=${pushRec.size} tail pop=" + popRec.takeRight(8).map(decoded _).mkString(", "))
+      SimLog.info("FORK")(s"  PUSH seq [first 14] = " + pushRec.take(14).map(decoded _).mkString(", "))
+      SimLog.info("FORK")(s"  POP  seq [first 14] = " + popRec.take(14).map(decoded _).mkString(", "))
+      SimLog.info("FORK")(s"  PUSH times first   = " + pushTime.take(14).mkString(","))
+      SimLog.info("FORK")(s"  POP  times first   = " + popTime.take(14).mkString(","))
+      SimLog.info("FORK")(s"  len(pop)=${popRec.size} len(push)=${pushRec.size} tail pop=" + popRec.takeRight(8).map(decoded _).mkString(", "))
       val n2seq = recs(names.indexOf("n2"))
       val n1seq = recs(names.indexOf("n1"))
-      println("== source raw records ==")
-      println(s"  n1[0..9] = ${n1seq.take(10).map(decoded _).mkString(", ")}")
-      println(s"  n2[0..9] = ${n2seq.take(10).map(decoded _).mkString(", ")}")
-      println(s"  n2 first/cycles = ${n2seq.zip(recAt(names.indexOf("n2"))).take(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
-      println(s"  direct first/cycles = ${direct.zip(recAt(names.indexOf("direct"))).take(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
-      println(s"  direct last/cycles = ${direct.zip(recAt(names.indexOf("direct"))).takeRight(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
-      println("== direct (fork -> conv1) vs n2ref ==")
-      println(s"  direct[0..7]      = ${direct.take(8).map(decoded).mkString(", ")}")
-      println(s"  n2ref [0..7]      = ${n2ref.take(8).map(x => decode(x, EB, MB)).mkString(", ")}")
+      SimLog.info("FORK")("== source raw records ==")
+      SimLog.info("FORK")(s"  n1[0..9] = ${n1seq.take(10).map(decoded _).mkString(", ")}")
+      SimLog.info("FORK")(s"  n2[0..9] = ${n2seq.take(10).map(decoded _).mkString(", ")}")
+      SimLog.info("FORK")(s"  n2 first/cycles = ${n2seq.zip(recAt(names.indexOf("n2"))).take(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
+      SimLog.info("FORK")(s"  direct first/cycles = ${direct.zip(recAt(names.indexOf("direct"))).take(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
+      SimLog.info("FORK")(s"  direct last/cycles = ${direct.zip(recAt(names.indexOf("direct"))).takeRight(6).map { case (v, t) => f"$v%.0f@$t" }.mkString(", ")}")
+      SimLog.info("FORK")("== direct (fork -> conv1) vs n2ref ==")
+      SimLog.info("FORK")(s"  direct[0..7]      = ${direct.take(8).map(decoded).mkString(", ")}")
+      SimLog.info("FORK")(s"  n2ref [0..7]      = ${n2ref.take(8).map(x => decode(x, EB, MB)).mkString(", ")}")
       val map = direct.map(v => idxOf(n2ref, v))
-      println(s"  direct->n2idx[0..9] = ${map.take(10).mkString(", ")}")
+      SimLog.info("FORK")(s"  direct->n2idx[0..9] = ${map.take(10).mkString(", ")}")
       val firstDiff = map.zipWithIndex.find { case (idx, j) => idx != j }
-      println(s"  first diff at j=$firstDiff (expected idx==j)")
-      println(s"  direct->n2idx tail  = ${map.takeRight(10).mkString(", ")}")
+      SimLog.info("FORK")(s"  first diff at j=$firstDiff (expected idx==j)")
+      SimLog.info("FORK")(s"  direct->n2idx tail  = ${map.takeRight(10).mkString(", ")}")
 
       val n3seq = recs(names.indexOf("n3"))
       val n3map = n3seq.map(v => idxOf(n3ref, v))
-      println(s"  n3->idx[0..9]    = ${n3map.take(10).mkString(", ")}  tail=${n3map.takeRight(10).mkString(", ")}")
+      SimLog.info("FORK")(s"  n3->idx[0..9]    = ${n3map.take(10).mkString(", ")}  tail=${n3map.takeRight(10).mkString(", ")}")
 
       val tap = recs(names.indexOf("tap"))
       val n4seq = recs(names.indexOf("n4"))
@@ -228,10 +230,11 @@ class ForkChainCountTest extends AnyFunSuite {
         val refPair = fadd(bf16Fields(decoded(tap(k)).toFloat), bf16Fields(decoded(n3seq(k)).toFloat), EB, MB)
         if (refPair != bf16Fields(decoded(n4seq(k)).toFloat)) mism += 1
       }
-      println("== pairs ==")
-      println(s"  n4 = tap + n3 mismatch count = $mism / $maxK")
+      SimLog.info("FORK")("== pairs ==")
+      SimLog.info("FORK")(s"  n4 = tap + n3 mismatch count = $mism / $maxK")
       for (k <- 0 until java.lang.Math.min(6, maxK))
-        println(f"  pair$k: tap=${decoded(tap(k))}%.6f n3=${decoded(n3seq(k))}%.6f n4=${decoded(n4seq(k))}%.6f")
+        SimLog.info("FORK")(f"  pair$k: tap=${decoded(tap(k))}%.6f n3=${decoded(n3seq(k))}%.6f n4=${decoded(n4seq(k))}%.6f")
+    }
     }
   }
 }

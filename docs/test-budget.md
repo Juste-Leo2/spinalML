@@ -76,6 +76,27 @@
 | `WIDE_TILES="64"` | sous-ensemble des tileHeights (WideResidualTilingTest) | T3 hors nightly |
 | `MNIST_CONT_N`, `MNIST_CHAIN_N`, `MNIST_CHAIN_SEED`, `MNIST_PREFETCH_SEED` | réduction/sélection des itérations et images | ciblage |
 | `S4_GATE=1` | active le SKIP gate de WideResidual (✅ VERT depuis M3.5 — fix push FIFO non gaté) | porte S4 : doit être **bit-exact** aux petites et pleines tailles |
+| `SML_DEBUG=1` | logs `[DEBUG]` (tables nœuds, détails par couche, équilibre des flux) | diagnostic — défaut : `[INFO]` seul |
+| `SML_DEBUG=2` | logs `[TRACE]` (beats/fires, spine back-pressure, per-frame) — flot massif | mesure ciblée (pipe vers fichier) |
+| `SML_DEBUG_TAG=TAP` | restreint DEBUG/TRACE à un seul tag, ex. `TAP`, `ENGINE`, `WIDE` | TRACE focusée sans noyer la sortie |
+
+## Logs SimLog (niveaux, tags)
+
+Tous les tests/benches passent par `spinalML/utils/SimLog.scala` — format `[LEVEL] [TAG] msg` :
+
+| Niveau | Déchencheur | Usage |
+|---|---|---|
+| `[ERROR]` `/` `[WARN]` `/` `[INFO]` | toujours | verdicts, exclusions de knobs, audit modèle, produits des probes |
+| `[DEBUG]` | `SML_DEBUG=1` | tables complètes nœuds, valeurs (décimal + bits ≤8b), counts/stalls |
+| `[TRACE]` | `SML_DEBUG=2` | per-beat / per-fire / per-frame |
+
+Tags standards : `[DAG] [TAP] [SIM] [MODEL] [WIDE] [MNIST] [FORMAL]` + tags de probes `[FORK] [K1] [IM2COL]`.
+Chaque suite renomme ses prints en `SimLog.info/debug(…)` — **aucun `println` nouveau**.
+
+> **V2 logs (à venir, PAS dans la V1)** : observation en direct de tous les tenseurs internes du
+> `Sequential` complet (ports de diagnostic `diag` optionnels) — aujourd'hui les suites haut
+> niveau (import du modèle complet) ne voient que l'entrée et la sortie ; les valeurs de couches
+> internes viennent des probes op-nus (DAG construit à plat dans les tests).
 
 ## Commandes de référence
 
