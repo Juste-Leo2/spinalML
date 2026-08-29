@@ -253,6 +253,7 @@ case class Sequential(
 
   val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = 1)
   imgStreamer.io.readData := imgDoubleBuffer.io.readData
+  imgStreamer.io.reArm := io.start.valid && !prevStartValid
   imgStreamer.io.tileReady := imgDoubleBuffer.io.tileReady
   imgDoubleBuffer.io.readAddr := imgStreamer.io.readAddr
   imgDoubleBuffer.io.nextTile := imgStreamer.io.nextTile
@@ -380,6 +381,7 @@ case class Sequential(
         stagedW := True
       }
       wDoubleBuffer.io.reArm := reqW.fire && !prefetchWorldW
+      wStreamer.io.reArm := reqW.fire && !prefetchWorldW
       wDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       wDoubleBuffer.io.stageRequest.foreach(_ := stagedW)
       when(wDoubleBuffer.io.refreshSettled) {
@@ -459,6 +461,7 @@ case class Sequential(
         stagedB := True
       }
       bDoubleBuffer.io.reArm := reqB.fire && !prefetchWorldB
+      bStreamer.io.reArm := reqB.fire && !prefetchWorldB
       bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       bDoubleBuffer.io.stageRequest.foreach(_ := stagedB)
       when(bDoubleBuffer.io.refreshSettled) {

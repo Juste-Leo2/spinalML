@@ -21,6 +21,12 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     
     // Output Stream Interface
     val streamOut = master(Stream(Vec(dataType, lanes)))
+
+    // Command-boundary re-arm pulse: resets the read FSM and flushes the
+    // delivery FIFO so a back-to-back refetch can never keep streaming a
+    // stale tile mid-flight (StreamDoubleBuffer reArm flips the banks
+    // underneath an in-flight streamer otherwise).
+    val reArm     = in Bool() default(False)
   }
   
   // State Machine for reading
@@ -64,4 +70,13 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
   val delayedValid = RegNext(reqStream.fire) init(False)
   fifo.io.push.valid := delayedValid
   fifo.io.push.payload := io.readData
+
+  fifo.io.flush := False
+
+  when(io.reArm) {
+    isReading := False
+    readCounter.clear()
+    fifo.io.flush := True
+    delayedValid := False
+  }
 }
