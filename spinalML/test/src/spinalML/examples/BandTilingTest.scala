@@ -93,12 +93,11 @@ class BandTilingTest extends AnyFunSuite {
 
   test("Mnistw4a8: banded tileHeight variants match the replica (differential vs full)") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = Mnistw4a8.defaultModelSpec.collectFirst { case l: spinalML.nn.Linear => l.effLanes }.getOrElse(288)
     bandedCase[Mnistw4a8](
       tileH => Mnistw4a8(axiConfig, tileHeight = tileH),
       () => bench.weightWords(),
       (mem, idx) => writeWords(mem, imgBase, bench.toWords(bench.imageBytes(MnistData.images(idx)))),
       (dut, mem, img, csr) => bench.runInference(dut, mem, img, csr),
-      (img: Seq[String]) => Mnistw4a8Replica.logitsK(img, w4Lanes), tag = "W4A8")
+      Mnistw4a8Replica.logits _, tag = "W4A8")
   }
 }

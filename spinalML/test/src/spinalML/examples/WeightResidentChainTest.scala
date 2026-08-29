@@ -179,10 +179,9 @@ class WeightResidentChainTest extends AnyFunSuite {
   // =====================================================================
   test("Mnistw4a8: residency keeps logits bit-exact with zero weight DDR traffic") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = W4A8Knob.lanes()
     val cases = passCases(nSteady + 3)
 
-    SimConfig.withVerilator.withConfig(spinalConfig).compile(W4A8Knob.make(axiConfig)).doSim { dut =>
+    SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig)).doSim { dut =>
       dut.clockDomain.forkStimulus(10)
       val memorySim = AxiMemorySim(axi = dut.io.axiMaster, clockDomain = dut.clockDomain,
         config = AxiMemorySimConfig(maxOutstandingReads = 8))
@@ -195,7 +194,7 @@ class WeightResidentChainTest extends AnyFunSuite {
         bench.runInference(dut, memorySim.memory, MnistData.images(idx), csr)
 
       def check(step: String, idx: Int, logits: Seq[Float]): Unit = {
-        val expected = Mnistw4a8Replica.logitsK(MnistData.images(idx), w4Lanes)
+        val expected = Mnistw4a8Replica.logits(MnistData.images(idx))
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         assert(dev == 0.0,
           s"[W4A8/$step image#$idx] corrupted under residency: hw ${logits.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")

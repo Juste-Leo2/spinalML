@@ -63,18 +63,8 @@ case class Linear(
   outFeatures: Int,
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
-  weightScales: Seq[Double] = Seq(1.0),
-  // K-axis chunk width of the matmul weight/activation beats (M2): the
-  // weight memory layout is unchanged (linear [inFeatures x outFeatures]);
-  // only the per-beat lane count and the matmul's internal K chunking
-  // change. -1 (default) = inFeatures, the legacy full-width beats.
-  weightLanes: Int = -1
+  weightScales: Seq[Double] = Seq(1.0)
 ) extends LayerSpec {
-  require(weightLanes == -1 || (weightLanes > 0 && inFeatures % weightLanes == 0),
-    s"Linear weightLanes=$weightLanes must be -1 or a positive divisor of inFeatures=$inFeatures")
-
-  /** Effective per-beat width: inFeatures when the default (-1) is left untouched. */
-  def effLanes: Int = if (weightLanes <= 0) inFeatures else weightLanes
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   

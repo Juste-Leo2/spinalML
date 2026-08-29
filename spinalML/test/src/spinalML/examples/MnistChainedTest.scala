@@ -48,11 +48,10 @@ class MnistChainedTest extends AnyFunSuite {
 
   test("Mnistw4a8: chained inferences in one session match the replica") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = W4A8Knob.lanes()
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig)
       .withWave
-      .compile(W4A8Knob.make(axiConfig))
+      .compile(Mnistw4a8(axiConfig))
 
     // Same digit repeated first (deterministic staleness fingerprint)
     val cases = chainCases
@@ -86,7 +85,7 @@ class MnistChainedTest extends AnyFunSuite {
         val logits = bench.runInference(dut, memorySim.memory,
           MnistData.images(idx), writeAxiLite)
 
-        val expected = Mnistw4a8Replica.logitsK(MnistData.images(idx), w4Lanes)
+        val expected = Mnistw4a8Replica.logits(MnistData.images(idx))
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         println(f"[step $step] image#$idx predicted ${logits.indexOf(logits.max)}" +
           f" (label ${MnistData.labels(idx)})  max|hw-sw|=$dev%.3f")

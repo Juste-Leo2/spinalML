@@ -24,10 +24,7 @@ class Accelerator[T <: Data](
   val weightResidencyCSR: Boolean = true,
   // Phase-3 activation tiling: image rows per vertical band (see Sequential).
   // <= 0 keeps the legacy full-image behaviour.
-  val tileHeight: Int = -1,
-  // M3: rows-in-flight bound for the reduction ops (see Sequential.temporal).
-  // 0 = legacy full MxN accumulator table; > 0 = windowed row drain.
-  val temporal: Int = 0
+  val tileHeight: Int = -1
 ) extends Component {
 
   val axiLiteConfig = AxiLite4Config(addressWidth = 8, dataWidth = 32)
@@ -37,7 +34,7 @@ class Accelerator[T <: Data](
 
   // 1. Instantiate the neural network datapath first to infer its output shape
   val model = Sequential(globalDataType, inputShape, modelSpec, axiConfig,
-    weightResidency = weightResidencyCSR, tileHeight = tileHeight, temporal = temporal)
+    weightResidency = weightResidencyCSR, tileHeight = tileHeight)
   
   val io = new Bundle {
     // High-speed Master for DDR access

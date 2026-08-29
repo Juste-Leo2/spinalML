@@ -5,10 +5,8 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
-import spinalML.dtypes.{BF16, FloatML}
+import spinalML.dtypes.FloatML
 import spinalML.utils.MemLayout
-import spinalML.nn.{Accelerator, Linear => LinearSpec}
-import spinalML.utils.SimLog
 
 /**
  * Black-box SoC validation of the Mnist accelerator under Verilator.
@@ -108,7 +106,7 @@ class MnistTest extends AnyFunSuite {
   }
 
   /** One full inference protocol; returns the 10 collected logits. */
-  def runInference(dut: Accelerator[FloatML], mem: SparseMemory, image: Seq[String],
+  def runInference(dut: Mnist, mem: SparseMemory, image: Seq[String],
                    writeAxiLite: (BigInt, BigInt) => Unit): Seq[Float] = {
     writeWords(mem, imgBase, imageWords(image))
 
@@ -143,26 +141,11 @@ class MnistTest extends AnyFunSuite {
 
   test("Mnist SoC black-box: logits match the software replica") {
     val cases = buildCases()
-    // The Linear K-chunk width of the model (default weightLanes = inFeatures);
-    // MNIST_WLANES overrides it (M2).
-    val spec = sys.env.get("MNIST_WLANES") match {
-      case Some(s) => Mnist.defaultModelSpec.map {
-        case l: LinearSpec => l.copy(weightLanes = s.toInt)
-        case o => o
-      }
-      case None => Mnist.defaultModelSpec
-    }
-    val wLanes = spec.collectFirst { case l: LinearSpec => l.effLanes }.getOrElse(288)
-    val temporal = sys.env.get("MNIST_TEMPORAL").map(_.toInt).getOrElse(0)
-    SimLog.info("MNIST")(s"Mnist model wLanes=$wLanes temporal=$temporal (inFeatures=288, cases=${cases.size})")
 
     // The 288-lane BF16 weight beats are 4608 bits wide, above the default
     // bitVectorWidthMax sanity limit (4096); raise it for this wide model.
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
-    // NOTE: the accelerator must be constructed INSIDE the (by-name) compile
-    // generator — outside it there is no elaboration context for Component.
-    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
-      new Accelerator(dataType = BF16(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig, temporal = temporal))
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnist(axiConfig))
 
     var maxDev = 0.0
     for (tc <- cases) {
@@ -196,7 +179,7 @@ class MnistTest extends AnyFunSuite {
 
         val logits = runInference(dut, memorySim.memory, tc.image, writeAxiLite)
 
-        val expected = MnistReplica.logitsK(tc.image, wLanes)
+        val expected = MnistReplica.logits(tc.image)
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         maxDev = math.max(maxDev, dev)
         assert(dev <= sys.env.get("REPLICA_TOL").map(_.toDouble).getOrElse(0.0),

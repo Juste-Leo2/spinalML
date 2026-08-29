@@ -203,8 +203,7 @@ class MnistContinuousTest extends AnyFunSuite {
 
   test("Mnistw4a8: continuous RUN auto-advances bit-exact frames, STOP is clean") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = W4A8Knob.lanes()
-    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(W4A8Knob.make(axiConfig))
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig))
     continuousBody(
       compiled,
       d => {
@@ -217,6 +216,6 @@ class MnistContinuousTest extends AnyFunSuite {
       },
       () => bench.weightWords(),
       idx => bench.toWords(bench.imageBytes(MnistData.images(idx))),
-      (img: Seq[String]) => Mnistw4a8Replica.logitsK(img, w4Lanes), tag = "W4A8")
+      Mnistw4a8Replica.logits _, tag = "W4A8")
   }
 }

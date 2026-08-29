@@ -223,8 +223,7 @@ class WeightPrefetchChainTest extends AnyFunSuite {
 
   test("Mnistw4a8: eager weight prefetch overlaps DDR with compute") {
     val bench = new Mnistw4a8Test
-    val w4Lanes = W4A8Knob.lanes()
-    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(W4A8Knob.make(axiConfig))
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(Mnistw4a8(axiConfig))
     prefetchBody(
       compiled,
       () => bench.weightWords(),
@@ -240,6 +239,6 @@ class WeightPrefetchChainTest extends AnyFunSuite {
           () => bench.getFloat(dut.io.outStream.stream.payload(0)),
           () => dut.clockDomain.waitSampling(3000))
       },
-      (img: Seq[String]) => Mnistw4a8Replica.logitsK(img, w4Lanes), tag = "W4A8")
+      Mnistw4a8Replica.logits _, tag = "W4A8")
   }
 }

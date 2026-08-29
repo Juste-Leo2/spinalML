@@ -29,14 +29,8 @@ case class Sequential(
   // bands concatenate into the same continuous row stream (the seam is a
   // stream stall — im2col's carried state is the halo, proven in S2).
   // tileHeight <= 0 means "one band = the whole image" (legacy behaviour).
-  val tileHeight: Int = -1,
-  // Rows-in-flight bound for the reduction ops (M3: the matmul accumulator
-  // table). 0 = legacy (whole MxN partial table in registers, potentially
-  // huge); > 0 = the layer drains row-by-row, table shrinks to <= temporal
-  // rows (bit-exactness is preserved: the accumulation order is unchanged).
-  val temporal: Int = 0
+  val tileHeight: Int = -1
 ) extends Component {
-  require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
 
   // ============================================================
   // 0. Topology analysis (pure elaboration-time, no hardware yet)
@@ -306,7 +300,7 @@ case class Sequential(
       val requiredLanes = layer match {
         case c: Conv2D => c.kernelSize * c.kernelSize
         case c: Conv1D => c.kernelSize * c.inChannels
-        case l: Linear => l.effLanes
+        case l: Linear => l.inFeatures
         case bn: BatchNorm1D => bn.features
         case ln: LayerNorm1D => ln.features
         case a: ClassicalAttention => a.embedDim
@@ -501,7 +495,7 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
-        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
+        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire))
 
       case _: ReLU =>
         relu(inTensor)
@@ -574,19 +568,15 @@ case class Sequential(
         // combinationally onto the node0 tee corrupted the OTHER fork branch
         // (skip-FIFO lost/duplicated the boundary element — ResidualMLP).
         // Bisection evidence + elasticity rule: docs/open-mysteries.md M1.7.
-        // M2: the beat width is `weightLanes` (<= inFeatures); the matmul
-        // accumulates the K chunks internally in order, so bit-exactness is
-        // preserved as long as the oracle reproduces the same chunk fold
-        // (MnistReplica.linearLayer wLanes).
-        val repackedTensor = repack(reshaped, l.effLanes)
+        val repackedTensor = repack(reshaped, l.inFeatures)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.
         layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
-              false, 1024, Option(weightDmaFire), temporal = temporal)
+              false, 1024, Option(weightDmaFire))
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), temporal = temporal)
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire))
         }
 
       case rq: Requantize =>

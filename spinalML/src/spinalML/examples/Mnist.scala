@@ -17,27 +17,18 @@ import spinalML.dtypes._
  * channels (adder tree) and argmax(logits) = argmax(softmax(logits)), so the
  * raw 10 logits give the same prediction.
  */
-case class Mnist(
-  override val axiConfig: Axi4Config,
-  override val tileHeight: Int = -1,
-  // M2: overridable spec — tests inject Linear weightLanes via copy().
-  override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnist.defaultModelSpec
-) extends Accelerator(
+case class Mnist(override val axiConfig: Axi4Config, override val tileHeight: Int = -1) extends Accelerator(
   dataType    = BF16(),
   inputShape  = Seq(28, 28, 1),
-  modelSpec   = modelSpec,
-  axiConfig   = axiConfig
-)
-
-object Mnist {
-  def defaultModelSpec: Seq[spinalML.nn.LayerSpec] = Seq(
+  modelSpec   = Seq(
     Conv2D(inChannels = 1, outChannels = 2, kernelSize = 5),
     ReLU(),
     MaxPool2D(poolSize = 2, stride = 2),
     Flatten(),
     Linear(inFeatures = 288, outFeatures = 10)
-  )
-}
+  ),
+  axiConfig   = axiConfig
+)
 
 /**
  * Trained parameters, hard-coded from Mnist/weights.txt (BF16-exact decimals).
