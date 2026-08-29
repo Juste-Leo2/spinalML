@@ -194,7 +194,7 @@ class WeightResidentChainTest extends AnyFunSuite {
         bench.runInference(dut, memorySim.memory, MnistData.images(idx), csr)
 
       def check(step: String, idx: Int, logits: Seq[Float]): Unit = {
-        val expected = Mnistw4a8Replica.logits(MnistData.images(idx))
+        val expected = Mnistw4a8Replica.logitsK(MnistData.images(idx), 4)
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         assert(dev == 0.0,
           s"[W4A8/$step image#$idx] corrupted under residency: hw ${logits.map(_.toFloat)} vs sw ${expected.map(f => f.toFloat)}")

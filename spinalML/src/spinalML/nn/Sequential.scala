@@ -253,6 +253,7 @@ case class Sequential(
 
   val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = 1)
   imgStreamer.io.readData := imgDoubleBuffer.io.readData
+  imgStreamer.io.reArm := io.start.valid && !prevStartValid
   imgStreamer.io.tileReady := imgDoubleBuffer.io.tileReady
   imgDoubleBuffer.io.readAddr := imgStreamer.io.readAddr
   imgDoubleBuffer.io.nextTile := imgStreamer.io.nextTile
@@ -287,6 +288,10 @@ case class Sequential(
     // Fire of this layer's weight DMA (null when weightless): threaded into
     // matmul-based layers so their internal weight buffer re-arms per command.
     var weightDmaFire: Bool = null
+    // Fire of the bias DMA (null when no bias): re-arms the bias cache
+    // (BiasAddOp) at the command boundary so a stale generation bias cannot
+    // contaminate the last tile of a pass.
+    var biasDmaFire: Bool = null
 
     var layerWeights: Tensor[Data] = null
     var layerBias: Tensor[Data] = null
@@ -300,7 +305,7 @@ case class Sequential(
       val requiredLanes = layer match {
         case c: Conv2D => c.kernelSize * c.kernelSize
         case c: Conv1D => c.kernelSize * c.inChannels
-        case l: Linear => l.inFeatures
+        case l: Linear => l.effLanes
         case bn: BatchNorm1D => bn.features
         case ln: LayerNorm1D => ln.features
         case a: ClassicalAttention => a.embedDim
@@ -380,6 +385,7 @@ case class Sequential(
         stagedW := True
       }
       wDoubleBuffer.io.reArm := reqW.fire && !prefetchWorldW
+      wStreamer.io.reArm := reqW.fire
       wDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       wDoubleBuffer.io.stageRequest.foreach(_ := stagedW)
       when(wDoubleBuffer.io.refreshSettled) {
@@ -458,7 +464,9 @@ case class Sequential(
       when(reqB.fire && prefetchWorldB) {
         stagedB := True
       }
-      bDoubleBuffer.io.reArm := reqB.fire && !prefetchWorldB
+      biasDmaFire = reqB.fire
+      bDoubleBuffer.io.reArm := reqB.fire
+      bStreamer.io.reArm := reqB.fire
       bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       bDoubleBuffer.io.stageRequest.foreach(_ := stagedB)
       when(bDoubleBuffer.io.refreshSettled) {
@@ -568,15 +576,19 @@ case class Sequential(
         // combinationally onto the node0 tee corrupted the OTHER fork branch
         // (skip-FIFO lost/duplicated the boundary element — ResidualMLP).
         // Bisection evidence + elasticity rule: docs/open-mysteries.md M1.7.
-        val repackedTensor = repack(reshaped, l.inFeatures)
+        // M2: the beat width is `weightLanes` (<= inFeatures); the matmul
+        // accumulates the K chunks internally in order, so bit-exactness is
+        // preserved as long as the oracle reproduces the same chunk fold
+        // (MnistReplica.linearLayer wLanes).
+        val repackedTensor = repack(reshaped, l.effLanes)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.
         layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
-              false, 1024, Option(weightDmaFire))
+              false, 1024, Option(weightDmaFire), biasReArm = Option(biasDmaFire))
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire))
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire))
         }
 
       case rq: Requantize =>

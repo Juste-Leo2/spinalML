@@ -40,6 +40,8 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     val y = master(Tensor(accType, Seq(M, N), lanes = 1)) // Output can be processed sequentially
     // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
     val reArm = in Bool()
+    // Command-boundary re-arm for the bias cache (see BiasAddOp)
+    val biasReArm = in Bool()
   }
   
   // Weight-only quantization path: SInt weights feeding a FloatML activation
@@ -59,13 +61,14 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm))
   
   // 2. Add Bias (Broadcast): (A * W_deq) + b
-  io.y <> bias_add(matmulResult, io.b)
+  io.y <> bias_add(matmulResult, io.b, reArm = Some(io.biasReArm))
 }
 
 object Linear {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean, reArm: Option[Bool] = None): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean, reArm: Option[Bool] = None, biasReArm: Option[Bool] = None): Tensor[TAcc] = {
     val comp = LinearLayer(a.dataType, a.dataType, accType, a.shape, w.shape, a.lanes, Seq(1.0), tileSize, parallelN)
     comp.io.reArm := reArm.getOrElse(False)
+    comp.io.biasReArm := biasReArm.getOrElse(False)
     comp.io.a <> a
     comp.io.w <> w
     comp.io.b <> b
@@ -87,9 +90,10 @@ object Linear {
   // Weight-only quantization (wXaY): weights stored as SInt (I4/I8) plus
   // compile-time scale(s), activations in the float domain. No default
   // arguments here: only one overload of Linear may define defaults.
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean, tileSize: Int, reArm: Option[Bool]): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean, tileSize: Int, reArm: Option[Bool], biasReArm: Option[Bool]): Tensor[TAcc] = {
     val comp = LinearLayer(a.dataType, w.dataType, accType, a.shape, w.shape, a.lanes, weightScales, tileSize, parallelN)
     comp.io.reArm := reArm.getOrElse(False)
+    comp.io.biasReArm := biasReArm.getOrElse(False)
     comp.io.a <> a
     comp.io.w <> w
     comp.io.b <> b

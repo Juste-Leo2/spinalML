@@ -85,7 +85,7 @@ class MnistChainedTest extends AnyFunSuite {
         val logits = bench.runInference(dut, memorySim.memory,
           MnistData.images(idx), writeAxiLite)
 
-        val expected = Mnistw4a8Replica.logits(MnistData.images(idx))
+        val expected = Mnistw4a8Replica.logitsK(MnistData.images(idx), 4)
         val dev = logits.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
         println(f"[step $step] image#$idx predicted ${logits.indexOf(logits.max)}" +
           f" (label ${MnistData.labels(idx)})  max|hw-sw|=$dev%.3f")

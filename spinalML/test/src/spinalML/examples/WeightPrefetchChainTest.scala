@@ -239,6 +239,6 @@ class WeightPrefetchChainTest extends AnyFunSuite {
           () => bench.getFloat(dut.io.outStream.stream.payload(0)),
           () => dut.clockDomain.waitSampling(3000))
       },
-      Mnistw4a8Replica.logits _, tag = "W4A8")
+      Mnistw4a8Replica.logitsK(_, 4), tag = "W4A8")
   }
 }

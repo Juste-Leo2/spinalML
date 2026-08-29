@@ -98,6 +98,6 @@ class BandTilingTest extends AnyFunSuite {
       () => bench.weightWords(),
       (mem, idx) => writeWords(mem, imgBase, bench.toWords(bench.imageBytes(MnistData.images(idx)))),
       (dut, mem, img, csr) => bench.runInference(dut, mem, img, csr),
-      Mnistw4a8Replica.logits _, tag = "W4A8")
+      Mnistw4a8Replica.logitsK(_, 4), tag = "W4A8")
   }
 }
