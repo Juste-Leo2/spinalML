@@ -17,6 +17,9 @@ case class BiasAddFormalComp() extends Component {
   }
 
   val dut = BiasAddOp(I8(), Seq(2, 2), Seq(1, 2), lanes = 2)
+  // Command-boundary re-arm: disabled in the formal protocol proof
+  // (the spec covers the legacy no-boundary behaviour exactly).
+  dut.io.reArm := False
   dut.io.a <> io.a
   dut.io.b <> io.b
   io.c <> dut.io.c

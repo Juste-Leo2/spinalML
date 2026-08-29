@@ -22,12 +22,17 @@ case class Mnistw4a8(
   override val axiConfig: Axi4Config,
   override val tileHeight: Int = -1,
   // M2: overridable spec — tests inject Linear weightLanes via copy().
-  override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnistw4a8.defaultModelSpec
+  override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnistw4a8.defaultModelSpec,
+  // M3: windowed matmul discharge — the synthesized W4A8 target uses 16
+  // rows-in-flight (the Conv accumulation is the LUT wall); 0 or a larger
+  // value overrides. Kept separate from the BF16/Mnist top (legacy 0).
+  override val temporal: Int = 16
 ) extends Accelerator(
   dataType    = I8(),                    // byte-addressed activation domain at entry
   inputShape  = Seq(28, 28, 1),
   modelSpec   = modelSpec,
-  axiConfig   = axiConfig
+  axiConfig   = axiConfig,
+  temporal    = temporal
 )
 
 object Mnistw4a8 {

@@ -27,7 +27,8 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   lanes: Int,
   weightScales: Seq[Double] = Seq(1.0),
   tileSize: Int = 1024,
-  parallelN: Boolean = false
+  parallelN: Boolean = false,
+  temporal: Int = 0
 ) extends Component {
   val M = shapeA(0)
   val K = shapeA(1)
@@ -57,16 +58,16 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     else io.w.asInstanceOf[Tensor[T]]
   
   // 1. Matrix Multiplication: A * W_deq (reArm re-arms the internal B buffer,
-  //    which carries this layer's weights)
-  val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm))
+  //    which carries this layer's weights; temporal bounds the rows in flight)
+  val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal)
   
   // 2. Add Bias (Broadcast): (A * W_deq) + b
   io.y <> bias_add(matmulResult, io.b, reArm = Some(io.biasReArm))
 }
 
 object Linear {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean, reArm: Option[Bool] = None, biasReArm: Option[Bool] = None): Tensor[TAcc] = {
-    val comp = LinearLayer(a.dataType, a.dataType, accType, a.shape, w.shape, a.lanes, Seq(1.0), tileSize, parallelN)
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], tileSize: Int, parallelN: Boolean, reArm: Option[Bool] = None, biasReArm: Option[Bool] = None, temporal: Int = 0): Tensor[TAcc] = {
+    val comp = LinearLayer(a.dataType, a.dataType, accType, a.shape, w.shape, a.lanes, Seq(1.0), tileSize, parallelN, temporal)
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.biasReArm := biasReArm.getOrElse(False)
     comp.io.a <> a
@@ -90,8 +91,8 @@ object Linear {
   // Weight-only quantization (wXaY): weights stored as SInt (I4/I8) plus
   // compile-time scale(s), activations in the float domain. No default
   // arguments here: only one overload of Linear may define defaults.
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean, tileSize: Int, reArm: Option[Bool], biasReArm: Option[Bool]): Tensor[TAcc] = {
-    val comp = LinearLayer(a.dataType, w.dataType, accType, a.shape, w.shape, a.lanes, weightScales, tileSize, parallelN)
+  def apply[T <: Data, TAcc <: Data](a: Tensor[T], w: Tensor[SInt], b: Tensor[TAcc], accType: HardType[TAcc], weightScales: Seq[Double], parallelN: Boolean, tileSize: Int, reArm: Option[Bool], biasReArm: Option[Bool], temporal: Int): Tensor[TAcc] = {
+    val comp = LinearLayer(a.dataType, w.dataType, accType, a.shape, w.shape, a.lanes, weightScales, tileSize, parallelN, temporal)
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.biasReArm := biasReArm.getOrElse(False)
     comp.io.a <> a

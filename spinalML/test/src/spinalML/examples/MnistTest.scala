@@ -153,7 +153,8 @@ class MnistTest extends AnyFunSuite {
       case None => Mnist.defaultModelSpec
     }
     val wLanes = spec.collectFirst { case l: LinearSpec => l.effLanes }.getOrElse(288)
-    SimLog.info("MNIST")(s"Mnist model wLanes=$wLanes (inFeatures=288, cases=${cases.size})")
+    val temporal = sys.env.get("MNIST_TEMPORAL").map(_.toInt).getOrElse(0)
+    SimLog.info("MNIST")(s"Mnist model wLanes=$wLanes temporal=$temporal (inFeatures=288, cases=${cases.size})")
 
     // The 288-lane BF16 weight beats are 4608 bits wide, above the default
     // bitVectorWidthMax sanity limit (4096); raise it for this wide model.
@@ -161,7 +162,7 @@ class MnistTest extends AnyFunSuite {
     // NOTE: the accelerator must be constructed INSIDE the (by-name) compile
     // generator — outside it there is no elaboration context for Component.
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
-      new Accelerator(dataType = BF16(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig))
+      new Accelerator(dataType = BF16(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig, temporal = temporal))
 
     var maxDev = 0.0
     for (tc <- cases) {

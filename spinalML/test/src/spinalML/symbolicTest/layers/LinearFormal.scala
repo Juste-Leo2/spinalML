@@ -25,6 +25,9 @@ case class LinearTestComp[T <: Data, TAcc <: Data](
   
   val dut = LinearLayer(dataType, dataType, accType, Seq(M, K), Seq(K, N), lanes, tileSize = 4, parallelN = parallelN)
   dut.io.reArm := False
+  // Command-boundary re-arm for the bias cache: disabled in the formal
+  // protocol proof (the spec covers the legacy no-boundary behaviour).
+  dut.io.biasReArm := False
   dut.io.a <> io.a
   dut.io.w <> io.w
   dut.io.b <> io.b

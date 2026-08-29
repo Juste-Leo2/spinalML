@@ -38,7 +38,7 @@ case class LinearQuantTestComp[T <: Data](dataType: HardType[T], weightDt: HardT
     val b = slave(Tensor(dataType, Seq(1, 1), lanes = 1))
     val y = master(Tensor(dataType, Seq(1, 1), lanes = 1))
   }
-  io.y <> Linear(io.a, io.w, io.b, dataType, scales, false, 1024, None, None)
+  io.y <> Linear(io.a, io.w, io.b, dataType, scales, false, 1024, None, None, 0)
 }
 
 case class LinearQuantTestCompMulti[T <: Data](dataType: HardType[T], weightDt: HardType[SInt], scales: Seq[Double] = Seq(1.0)) extends Component {
@@ -48,7 +48,7 @@ case class LinearQuantTestCompMulti[T <: Data](dataType: HardType[T], weightDt: 
     val b = slave(Tensor(dataType, Seq(1, 4), lanes = 1))
     val y = master(Tensor(dataType, Seq(2, 4), lanes = 1))
   }
-  io.y <> Linear(io.a, io.w, io.b, dataType, scales, false, 1024, None, None)
+  io.y <> Linear(io.a, io.w, io.b, dataType, scales, false, 1024, None, None, 0)
 }
 
 class LinearTest extends AnyFunSuite {

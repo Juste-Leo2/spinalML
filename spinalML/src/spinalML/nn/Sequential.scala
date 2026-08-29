@@ -29,8 +29,16 @@ case class Sequential(
   // bands concatenate into the same continuous row stream (the seam is a
   // stream stall — im2col's carried state is the halo, proven in S2).
   // tileHeight <= 0 means "one band = the whole image" (legacy behaviour).
-  val tileHeight: Int = -1
+  val tileHeight: Int = -1,
+  // M3: rows-in-flight bound of the matmul-based layers' output accumulator
+  // tables. 0 = legacy full MxN table (the M4A8 Conv matmul is the LUT wall:
+  // M=576 windows x N=2 channels in registers + the wide index mux);
+  // > 0 = each row is drained as soon as it completes and the table shrinks
+  // to <= min(temporal, M) x N slots. Bit-exactness is preserved by
+  // construction (the fadd sum order is unchanged).
+  val temporal: Int = 0
 ) extends Component {
+  require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
 
   // ============================================================
   // 0. Topology analysis (pure elaboration-time, no hardware yet)
@@ -483,7 +491,7 @@ case class Sequential(
 
     val nextTensor: Tensor[Data] = layer match {
       case c: Conv1D =>
-        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire))
+        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
 
       case c: Conv2D =>
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
@@ -503,7 +511,7 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
-        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire))
+        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
 
       case _: ReLU =>
         relu(inTensor)
@@ -586,9 +594,9 @@ case class Sequential(
         layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
-              false, 1024, Option(weightDmaFire), biasReArm = Option(biasDmaFire))
+              false, 1024, Option(weightDmaFire), Option(biasDmaFire), temporal)
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire))
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire), temporal)
         }
 
       case rq: Requantize =>

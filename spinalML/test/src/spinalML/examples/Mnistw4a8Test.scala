@@ -193,11 +193,14 @@ class Mnistw4a8Test extends AnyFunSuite {
       case None => Mnistw4a8.defaultModelSpec
     }
     val wLanes = spec.collectFirst { case l: LinearSpec => l.effLanes }.getOrElse(288)
-    SimLog.info("MNIST")(s"Mnistw4a8 model wLanes=$wLanes (inFeatures=288, cases=${cases.size})")
+    // Aligned with the Mnistw4a8 top default (16); override with
+    // MNIST_TEMPORAL=0 to exercise the legacy full-table path.
+    val temporal = sys.env.get("MNIST_TEMPORAL").map(_.toInt).getOrElse(16)
+    SimLog.info("MNIST")(s"Mnistw4a8 model wLanes=$wLanes temporal=$temporal (inFeatures=288, cases=${cases.size})")
 
     val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
-      new Accelerator(dataType = I8(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig))
+      new Accelerator(dataType = I8(), inputShape = Seq(28, 28, 1), modelSpec = spec, axiConfig = axiConfig, temporal = temporal))
 
     var maxDev = 0.0
     for (tc <- cases) {
