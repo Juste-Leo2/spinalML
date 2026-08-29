@@ -288,6 +288,10 @@ case class Sequential(
     // Fire of this layer's weight DMA (null when weightless): threaded into
     // matmul-based layers so their internal weight buffer re-arms per command.
     var weightDmaFire: Bool = null
+    // Fire of the bias DMA (null when no bias): re-arms the bias cache
+    // (BiasAddOp) at the command boundary so a stale generation bias cannot
+    // contaminate the last tile of a pass.
+    var biasDmaFire: Bool = null
 
     var layerWeights: Tensor[Data] = null
     var layerBias: Tensor[Data] = null
@@ -460,6 +464,7 @@ case class Sequential(
       when(reqB.fire && prefetchWorldB) {
         stagedB := True
       }
+      biasDmaFire = reqB.fire
       bDoubleBuffer.io.reArm := reqB.fire
       bStreamer.io.reArm := reqB.fire
       bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
@@ -581,9 +586,9 @@ case class Sequential(
         layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
-              false, 1024, Option(weightDmaFire))
+              false, 1024, Option(weightDmaFire), biasReArm = Option(biasDmaFire))
           case _ =>
-            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire))
+            LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire))
         }
 
       case rq: Requantize =>

@@ -23,6 +23,7 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
     val a = slave(Tensor(dataType, shapeA, lanes))
     val b = slave(Tensor(dataType, shapeB, 1)) // Bias arrives sequentially with lanes=1
     val c = master(Tensor(dataType, shapeA, lanes))
+    val reArm = in Bool() // command-boundary re-arm (abort pass, re-load bias)
   }
 
   // Memory to store the N bias elements
@@ -50,6 +51,9 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
           when(loadCounter.willOverflowIfInc) {
             goto(stateProcess)
           }
+        }
+        when(io.reArm) {
+          loadCounter.clear()
         }
       }
     }
@@ -82,6 +86,13 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
             goto(stateDone)
           }
         }
+
+        // Command-boundary re-arm: abandon the current pass and wait for a
+        // fresh bias load (prevents stale generation-bias on the last tile).
+        when(io.reArm) {
+          aCounter.clear()
+          goto(stateLoadBias)
+        }
       }
     }
     
@@ -96,12 +107,13 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
 }
 
 object bias_add {
-  def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], b: Tensor[T], reArm: Option[Bool] = None): Tensor[T] = {
     require(b.lanes == 1, "Bias must have 1 lane for BiasAddOp")
     
     val comp = BiasAddOp(a.dataType, a.shape, b.shape, a.lanes)
     comp.io.a <> a
     comp.io.b <> b
+    comp.io.reArm := reArm.getOrElse(False)
     comp.io.c
   }
 }
