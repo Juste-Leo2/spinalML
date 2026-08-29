@@ -216,6 +216,6 @@ class MnistContinuousTest extends AnyFunSuite {
       },
       () => bench.weightWords(),
       idx => bench.toWords(bench.imageBytes(MnistData.images(idx))),
-      Mnistw4a8Replica.logits _, tag = "W4A8")
+      Mnistw4a8Replica.logitsK(_, 4), tag = "W4A8")
   }
 }
