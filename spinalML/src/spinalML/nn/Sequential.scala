@@ -381,7 +381,7 @@ case class Sequential(
         stagedW := True
       }
       wDoubleBuffer.io.reArm := reqW.fire && !prefetchWorldW
-      wStreamer.io.reArm := reqW.fire && !prefetchWorldW
+      wStreamer.io.reArm := reqW.fire
       wDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       wDoubleBuffer.io.stageRequest.foreach(_ := stagedW)
       when(wDoubleBuffer.io.refreshSettled) {
@@ -460,8 +460,8 @@ case class Sequential(
       when(reqB.fire && prefetchWorldB) {
         stagedB := True
       }
-      bDoubleBuffer.io.reArm := reqB.fire && !prefetchWorldB
-      bStreamer.io.reArm := reqB.fire && !prefetchWorldB
+      bDoubleBuffer.io.reArm := reqB.fire
+      bStreamer.io.reArm := reqB.fire
       bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       bDoubleBuffer.io.stageRequest.foreach(_ := stagedB)
       when(bDoubleBuffer.io.refreshSettled) {
