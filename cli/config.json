@@ -1,0 +1,17 @@
+{
+  "tools": {
+    "oss-cad-suite": {
+      "windows-x64": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-09-01/oss-cad-suite-windows-x64-20260901.tgz",
+      "linux-x64": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-09-01/oss-cad-suite-linux-x64-20260901.tgz",
+      "darwin-arm64": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-09-01/oss-cad-suite-darwin-arm64-20260901.tgz",
+      "darwin-x64": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-09-01/oss-cad-suite-darwin-x64-20260901.tgz"
+    },
+    "mill": {
+      "sh": "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/1.1.8/mill-dist-1.1.8-mill.sh",
+      "bat": "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/1.1.8/mill-dist-1.1.8-mill.bat"
+    },
+    "w64devkit": {
+      "windows-x64": "https://github.com/skeeto/w64devkit/releases/download/v2.9.1/w64devkit-x64-2.9.1.7z.exe"
+    }
+  }
+}
