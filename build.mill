@@ -6,11 +6,11 @@ object spinalML extends ScalaModule {
   def scalaVersion = "2.12.18"
 
   override def mvnDeps = Seq(
-    mvn"com.github.spinalhdl::spinalhdl-core:1.14.2",
-    mvn"com.github.spinalhdl::spinalhdl-lib:1.14.2"
+    mvn"com.github.spinalhdl::spinalhdl-core:1.15.0",
+    mvn"com.github.spinalhdl::spinalhdl-lib:1.15.0"
   )
 
-  override def scalacPluginMvnDeps = Seq(mvn"com.github.spinalhdl::spinalhdl-idsl-plugin:1.14.2")
+  override def scalacPluginMvnDeps = Seq(mvn"com.github.spinalhdl::spinalhdl-idsl-plugin:1.15.0")
 
   object test extends ScalaTests with TestModule.ScalaTest {
     override def mvnDeps = super.mvnDeps() ++ Seq(
