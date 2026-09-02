@@ -2,6 +2,7 @@ import subprocess
 import sys
 import typer
 from typing import List
+from pathlib import Path
 
 from .config import load_config, get_bin_path, CLI_DIR
 from .installer import setup_tools
@@ -19,14 +20,16 @@ def setup(debug: bool = typer.Option(False, "--debug", help="Show verbose raw lo
     config = load_config()
     setup_tools(config, debug=debug)
 
-def run_tool(tool_name: str, args: List[str]):
+def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int:
     """Helper to run an installed tool and pass along arguments."""
     bin_path = get_bin_path(tool_name)
     
     if not bin_path.exists():
         typer.echo(f"Error: {tool_name} is not installed at {bin_path}.", err=True)
         typer.echo("Please run 'spinalml setup' first.", err=True)
-        raise typer.Exit(code=1)
+        if exit_on_error:
+            raise typer.Exit(code=1)
+        return 1
     
     # Build command
     cmd = [str(bin_path)] + args
@@ -57,15 +60,19 @@ def run_tool(tool_name: str, args: List[str]):
     os.environ["PATH"] = combined_path
     os.environ["Path"] = combined_path
     
-    # Run the command, replace the current process (cross-platform approach via subprocess)
+    # Run the command
     try:
         result = subprocess.run(cmd, cwd=str(CLI_DIR.parent))
-        sys.exit(result.returncode)
+        if exit_on_error and result.returncode != 0:
+            sys.exit(result.returncode)
+        return result.returncode
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as e:
         typer.echo(f"Error executing {tool_name}: {e}", err=True)
-        sys.exit(1)
+        if exit_on_error:
+            sys.exit(1)
+        return 1
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def mill(ctx: typer.Context):
@@ -108,3 +115,117 @@ def open_fpga_loader(ctx: typer.Context):
     Run openFPGALoader
     """
     run_tool("openFPGALoader", ctx.args)
+
+@app.command()
+def compile(
+    file: Path = typer.Argument(..., help="Path to the Scala file to compile"),
+    out: Path = typer.Option(None, "-o", "--out", help="Output directory for generated Verilog files")
+):
+    """
+    Compile a Scala file into Verilog by running it within the workspace module.
+    """
+    import shutil
+    import os
+    import glob
+    
+    if not file.exists():
+        typer.echo(f"Error: File {file} does not exist.", err=True)
+        raise typer.Exit(code=1)
+        
+    import re
+    import shutil
+    import glob
+    
+    content = file.read_text(encoding="utf-8")
+    
+    pkg_match = re.search(r'^\s*package\s+([\w\.]+)', content, re.MULTILINE)
+    pkg = pkg_match.group(1) if pkg_match else ""
+    
+    app_match = re.search(r'^\s*object\s+(\w+)\s+extends\s+App', content, re.MULTILINE)
+    
+    workspace_src = CLI_DIR.parent / "spinalML" / "src" / "cli_temp"
+    
+    if workspace_src.exists():
+        shutil.rmtree(workspace_src)
+    workspace_src.mkdir(parents=True, exist_ok=True)
+    
+    # Check if file is already in spinalML/src
+    spinalml_src = CLI_DIR.parent / "spinalML" / "src"
+    try:
+        is_internal = file.resolve().is_relative_to(spinalml_src.resolve())
+    except AttributeError:
+        is_internal = str(file.resolve()).startswith(str(spinalml_src.resolve()))
+        
+    if not is_internal:
+        shutil.copy(file, workspace_src / file.name)
+        typer.echo(f"Copied external file {file.name} to temporary workspace.")
+
+    full_main = ""
+    auto_generated = False
+    
+    if app_match:
+        main_class = app_match.group(1)
+        full_main = f"{pkg}.{main_class}" if pkg else main_class
+    else:
+        # Try to find a Component or Accelerator
+        comp_match = re.search(r'(?:case\s+)?class\s+(\w+).*?(?:extends\s+Component|extends\s+Accelerator)', content, re.MULTILINE | re.DOTALL)
+        if not comp_match:
+            typer.echo(f"Error: {file.name} does not contain 'object <Name> extends App' nor a Component.", err=True)
+            typer.echo("Please add an App entry point to generate Verilog.", err=True)
+            shutil.rmtree(workspace_src)
+            raise typer.Exit(code=1)
+            
+        comp_name = comp_match.group(1)
+        import_stmt = f"import {pkg}.{comp_name}" if pkg else ""
+        target_dir = str(out.resolve()).replace('\\', '/') if out else "."
+        auto_runner_code = f"""
+package spinalml_auto
+import spinal.core._
+{import_stmt}
+
+object AutoRunner extends App {{
+  SpinalConfig(targetDirectory = "{target_dir}").generateVerilog(new {comp_name}())
+}}
+"""
+        (workspace_src / "AutoRunner.scala").write_text(auto_runner_code, encoding="utf-8")
+        full_main = "spinalml_auto.AutoRunner"
+        auto_generated = True
+        typer.echo(f"Auto-generating runner for component {comp_name}...")
+    
+    project_root = CLI_DIR.parent
+    existing_v_files = set(glob.glob(str(project_root / "*.v")))
+    
+    typer.echo(f"Running Mill spinalML.runMain {full_main}...")
+    ret_code = run_tool("mill", ["spinalML.runMain", full_main], exit_on_error=False)
+        
+    if workspace_src.exists():
+        shutil.rmtree(workspace_src)
+        
+    if ret_code != 0:
+        if auto_generated:
+            typer.echo("\n" + "="*60, err=True)
+            typer.echo("Failed to auto-instantiate the component.", err=True)
+            typer.echo("If your component requires mandatory arguments (like Axi4Config),", err=True)
+            typer.echo("please add an `object YourGenerator extends App` block in your file.", err=True)
+            typer.echo("="*60 + "\n", err=True)
+        raise typer.Exit(code=ret_code)
+        
+    # 4. Move generated .v files if --out is specified (for non-auto-generated or fallback)
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+        # Check if the component verilog exists in project_root and move it
+        comp_v = project_root / f"{comp_name}.v" if not app_match else None
+        if comp_v and comp_v.exists():
+            shutil.move(str(comp_v), str(out / comp_v.name))
+            typer.echo(f"Moved generated {comp_v.name} to {out}")
+        else:
+            current_v_files = set(glob.glob(str(project_root / "*.v")))
+            new_v_files = current_v_files - existing_v_files
+            for v_file in new_v_files:
+                dest_v = out / Path(v_file).name
+                shutil.move(v_file, dest_v)
+                typer.echo(f"Moved generated {Path(v_file).name} to {out}")
+            if not new_v_files and not (out / f"{comp_name}.v" if not app_match else False).exists():
+                typer.echo(f"Generated Verilog files are in {out}")
+    else:
+        typer.echo("Compilation complete. (Verilog files are in the project root)")
