@@ -22,7 +22,7 @@ import spinalML.dtypes._
  * The builder forks node 0 automatically: the immediate consumer reads the
  * direct path while the deferred Add consumer drains an exact-capacity FIFO.
  */
-case class ResidualMLPTemplate(override val axiConfig: Axi4Config) extends Accelerator(
+case class ResidualMLPTemplate(override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)) extends Accelerator(
   dataType = BF16(),
   inputShape = Seq(2, 4),
 

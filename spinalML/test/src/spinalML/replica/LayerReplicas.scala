@@ -164,18 +164,22 @@ object LayerReplicas {
     mantBits: Int,
     weightLanes: Int
   ): Seq[F] = {
-    val inFeatures = input.length
+    val inFeatures = weights.head.length
     val outFeatures = weights.length
+    val rows = input.length / inFeatures
     val out = ArrayBuffer[F]()
 
-    for (o <- 0 until outFeatures) {
-      var acc = PZERO
-      for (chunk <- 0 until inFeatures by weightLanes) {
-        val len = math.min(weightLanes, inFeatures - chunk)
-        val prods = (0 until len).map(k => fmul(input(chunk + k), weights(o)(chunk + k), expBits, mantBits))
-        acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+    for (r <- 0 until rows) {
+      val rowInput = input.slice(r * inFeatures, (r + 1) * inFeatures)
+      for (o <- 0 until outFeatures) {
+        var acc = PZERO
+        for (chunk <- 0 until inFeatures by weightLanes) {
+          val len = math.min(weightLanes, inFeatures - chunk)
+          val prods = (0 until len).map(k => fmul(rowInput(chunk + k), weights(o)(chunk + k), expBits, mantBits))
+          acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+        }
+        out += fadd(acc, bias(o), expBits, mantBits)
       }
-      out += fadd(acc, bias(o), expBits, mantBits)
     }
     out.toSeq
   }
