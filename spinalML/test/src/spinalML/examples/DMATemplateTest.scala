@@ -41,7 +41,7 @@ object DMATemplateTest {
       io.axiMaster.b.ready := False
     }
 
-    SimConfig.withVerilator.withFstWave.workspacePath("sim_build").compile {
+    SimConfig.withVerilator.withWave.workspacePath("sim_build").compile {
       val dut = DMATemplateTestWrapper()
       dut.setDefinitionName("DMATemplateTestComp")
       dut

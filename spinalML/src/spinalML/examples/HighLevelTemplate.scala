@@ -12,7 +12,7 @@ import spinalML.dtypes._
  * to automatically generate a complete neural network hardware accelerator with built-in AXI4 
  * DMA management. You do not need to manually route streams, calculate dimensions, or build DMAs!
  */
-case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Accelerator(
+case class HighLevelTemplate(override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)) extends Accelerator(
   dataType = I8(),            // Global quantization format for the network
   inputShape = Seq(28, 1),    // The expected shape of the input tensor (e.g. 1D signal of length 28)
   

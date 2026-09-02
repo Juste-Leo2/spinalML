@@ -10,7 +10,7 @@ object TemplateTest {
   def main(args: Array[String]): Unit = {
     
     // 1. Compile the component into a Verilator simulation model
-    SimConfig.withVerilator.withFstWave.workspacePath("sim_build").compile({
+    SimConfig.withVerilator.withWave.workspacePath("sim_build").compile({
       // We choose BF16 as our test datatype
       val dataType = FloatML(expBits = 8, mantBits = 7)
       Template(dataType, shape = Seq(16), lanes = 4)

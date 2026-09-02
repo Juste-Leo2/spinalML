@@ -8,7 +8,7 @@ object SimpleCNNTest {
     // SimpleCNN uses BF16 by default for this example test
     import spinal.core.sim._
 
-    SimConfig.withVerilator.withFstWave.workspacePath("sim_build").compile({
+    SimConfig.withVerilator.withWave.workspacePath("sim_build").compile({
       SimpleCNN(FloatML(8, 7)).setDefinitionName("SimpleCNNTestComp")
     }).doSim { dut =>
       dut.clockDomain.forkStimulus(10)
