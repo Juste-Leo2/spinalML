@@ -14,7 +14,7 @@ import spinalML.dtypes._
  * 
  * This top-level component can be synthesized directly onto an FPGA.
  */
-case class SequentialCNN(override val axiConfig: Axi4Config) extends Accelerator(
+case class SequentialCNN(override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)) extends Accelerator(
   dataType = I16(),
   inputShape = Seq(8, 8),
   modelSpec = Seq(

@@ -4,6 +4,7 @@ import spinal.core.HardType
 import spinal.core.Data
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.nn._
+import spinalML.dtypes.FloatML
 import spinalML.utils.MemLayout
 import HWArithmetic._
 
@@ -21,7 +22,11 @@ object WeightMemoryLayout {
     weightOffset: Int,
     biasOffset: Int,
     weightValues: Seq[F],
-    biasValues: Seq[F]
+    biasValues: Seq[F],
+    weightInts: Seq[Long] = Nil,
+    biasInts: Seq[Long] = Nil,
+    weightDtype: HardType[Data] = null,
+    biasDtype: HardType[Data] = null
   )
 
   case class PackedWeightsResult(
@@ -29,6 +34,30 @@ object WeightMemoryLayout {
     layers: Seq[LayerWeightInfo],
     totalBytes: Int
   )
+
+  def packRawBits(rawBits: Seq[Long], elemBits: Int): Seq[Byte] = {
+    elemBits match {
+      case 4 =>
+        rawBits.grouped(2).map { g =>
+          val low = (g.head & 0xF).toInt
+          val high = if (g.length > 1) (g(1) & 0xF).toInt else 0
+          (low | (high << 4)).toByte
+        }.toSeq
+      case 8 =>
+        rawBits.map(b => (b & 0xFF).toByte)
+      case 16 =>
+        rawBits.flatMap(w => Seq((w & 0xFF).toByte, ((w >> 8) & 0xFF).toByte))
+      case 32 =>
+        rawBits.flatMap(w => Seq(
+          (w & 0xFF).toByte,
+          ((w >> 8) & 0xFF).toByte,
+          ((w >> 16) & 0xFF).toByte,
+          ((w >> 24) & 0xFF).toByte
+        ))
+      case _ =>
+        throw new IllegalArgumentException(s"Unsupported elemBits: $elemBits")
+    }
+  }
 
   /**
    * Builds deterministic weights for a given sequence of LayerSpecs.
@@ -51,8 +80,23 @@ object WeightMemoryLayout {
     // Memory buffer as byte array
     val memoryBytes = scala.collection.mutable.ArrayBuffer.fill(65536)(0.toByte)
 
+    val nodeTypes = scala.collection.mutable.ArrayBuffer[HardType[Data]](pipelineDataType)
+    for (i <- layers.indices) {
+      val l = layers(i)
+      val outType = l match {
+        case ad: Add => nodeTypes(ad.a)
+        case cc: Concat => nodeTypes(cc.a)
+        case _ => l.outType(nodeTypes(i))
+      }
+      nodeTypes += outType
+    }
+
     for (i <- layers.indices) {
       val layer = layers(i)
+      val layerInputType = nodeTypes(i)
+      val wType = layer.weightType(layerInputType)
+      val bType = layer.outType(layerInputType)
+
       val wShape = layer.getWeightShape()
       val bShape = layer.getBiasShape()
 
@@ -63,51 +107,86 @@ object WeightMemoryLayout {
       var bOffset = -1
       var wValues = Seq[F]()
       var bValues = Seq[F]()
+      var wInts = Seq[Long]()
+      var bInts = Seq[Long]()
 
       if (wElems > 0) {
         currentOffset = MemLayout.alignToBeat(currentOffset, beatBytes)
         wOffset = currentOffset
 
-        // Generate small non-zero deterministic floats between 0.125 and 0.5
-        wValues = (0 until wElems).map { idx =>
-          val floatVal = (((idx % 7) + 1) * 0.0625).toFloat
-          fromDouble(floatVal, expBits, mantBits)
+        val wData = wType()
+        val wElemBits = wData.getBitsWidth
+        val isFloat = wData.isInstanceOf[FloatML]
+
+        val rawBits: Seq[Long] = if (isFloat) {
+          val fType = wData.asInstanceOf[FloatML]
+          val eW = fType.expBits
+          val mW = fType.mantBits
+          wValues = (0 until wElems).map { idx =>
+            val floatVal = (((idx % 7) + 1) * 0.0625).toFloat
+            fromDouble(floatVal, eW, mW)
+          }
+          wValues.map { f =>
+            val sign = if (f.s) 1L else 0L
+            (sign << (eW + mW)) | ((f.e.toLong & ((1L << eW) - 1)) << mW) | (f.m.toLong & ((1L << mW) - 1))
+          }
+        } else {
+          // Integer domain (e.g. I4, I8, I16)
+          wInts = (0 until wElems).map { idx =>
+            ((idx % 7) + 1).toLong
+          }
+          val mask = if (wElemBits >= 64) -1L else (1L << wElemBits) - 1
+          wValues = wInts.map(v => fromSInt(v, wElemBits, expBits, mantBits))
+          wInts.map(v => v & mask)
         }
 
-        // Pack 16-bit BF16 into bytes
-        for (idx <- 0 until wElems) {
-          val f = wValues(idx)
-          val bits = ((if (f.s) 1 else 0) << 15) | ((f.e & 0xFF) << 7) | (f.m & 0x7F)
-          val addr = wOffset + idx * 2
-          while (memoryBytes.length <= addr + 2) memoryBytes += 0.toByte
-          memoryBytes(addr) = (bits & 0xFF).toByte
-          memoryBytes(addr + 1) = ((bits >> 8) & 0xFF).toByte
+        val packedBytes = packRawBits(rawBits, wElemBits)
+        while (memoryBytes.length < wOffset + packedBytes.length) memoryBytes += 0.toByte
+        for (idx <- packedBytes.indices) {
+          memoryBytes(wOffset + idx) = packedBytes(idx)
         }
 
-        val wBytes = MemLayout.regionBytes(wElems, 16)
-        currentOffset += wBytes
+        val wBytes = MemLayout.regionBytes(wElems, wElemBits)
+        currentOffset = MemLayout.alignToBeat(wOffset + wBytes, beatBytes)
       }
 
       if (bElems > 0) {
         currentOffset = MemLayout.alignToBeat(currentOffset, beatBytes)
         bOffset = currentOffset
 
-        bValues = (0 until bElems).map { idx =>
-          val floatVal = (((idx % 5) + 1) * 0.03125).toFloat
-          fromDouble(floatVal, expBits, mantBits)
+        val bData = bType()
+        val bElemBits = bData.getBitsWidth
+        val isFloat = bData.isInstanceOf[FloatML]
+
+        val rawBits: Seq[Long] = if (isFloat) {
+          val fType = bData.asInstanceOf[FloatML]
+          val eW = fType.expBits
+          val mW = fType.mantBits
+          bValues = (0 until bElems).map { idx =>
+            val floatVal = (((idx % 5) + 1) * 0.03125).toFloat
+            fromDouble(floatVal, eW, mW)
+          }
+          bValues.map { f =>
+            val sign = if (f.s) 1L else 0L
+            (sign << (eW + mW)) | ((f.e.toLong & ((1L << eW) - 1)) << mW) | (f.m.toLong & ((1L << mW) - 1))
+          }
+        } else {
+          bInts = (0 until bElems).map { idx =>
+            ((idx % 5) + 1).toLong
+          }
+          val mask = if (bElemBits >= 64) -1L else (1L << bElemBits) - 1
+          bValues = bInts.map(v => fromSInt(v, bElemBits, expBits, mantBits))
+          bInts.map(v => v & mask)
         }
 
-        for (idx <- 0 until bElems) {
-          val f = bValues(idx)
-          val bits = ((if (f.s) 1 else 0) << 15) | ((f.e & 0xFF) << 7) | (f.m & 0x7F)
-          val addr = bOffset + idx * 2
-          while (memoryBytes.length <= addr + 2) memoryBytes += 0.toByte
-          memoryBytes(addr) = (bits & 0xFF).toByte
-          memoryBytes(addr + 1) = ((bits >> 8) & 0xFF).toByte
+        val packedBytes = packRawBits(rawBits, bElemBits)
+        while (memoryBytes.length < bOffset + packedBytes.length) memoryBytes += 0.toByte
+        for (idx <- packedBytes.indices) {
+          memoryBytes(bOffset + idx) = packedBytes(idx)
         }
 
-        val bBytes = MemLayout.regionBytes(bElems, 16)
-        currentOffset += bBytes
+        val bBytes = MemLayout.regionBytes(bElems, bElemBits)
+        currentOffset = MemLayout.alignToBeat(bOffset + bBytes, beatBytes)
       }
 
       layerInfos += LayerWeightInfo(
@@ -118,7 +197,11 @@ object WeightMemoryLayout {
         weightOffset = wOffset,
         biasOffset = bOffset,
         weightValues = wValues,
-        biasValues = bValues
+        biasValues = bValues,
+        weightInts = wInts,
+        biasInts = bInts,
+        weightDtype = wType,
+        biasDtype = bType
       )
     }
 

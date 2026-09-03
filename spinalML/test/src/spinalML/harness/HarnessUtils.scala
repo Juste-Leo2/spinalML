@@ -21,6 +21,15 @@ object MemoryHarness {
     elems ++ Seq.fill(capacity - elems.length)(0.0f)
   }
 
+  def packBytes(bytes: Seq[Int]): Seq[BigInt] = {
+    val capacity = MemLayout.alignToBeat(bytes.length, 8)
+    val padded = bytes ++ Seq.fill(capacity - bytes.length)(0)
+    padded.grouped(8).map { g =>
+      g.zipWithIndex.foldLeft(BigInt(0))((acc, e) =>
+        acc | (BigInt(e._1 & 0xFF) << (8 * e._2)))
+    }.toSeq
+  }
+
   def writeWords(mem: SparseMemory, base: Long, words: Seq[BigInt]): Unit =
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
 }

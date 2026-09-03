@@ -208,4 +208,85 @@ object LayerReplicas {
   }
 
   def concat(a: Seq[F], b: Seq[F]): Seq[F] = a ++ b
+
+  // --- Integer Domain Operations ---
+  def conv2DInt(
+    input: Array[Array[Array[Long]]], // [C_in][H][W]
+    weights: Seq[Seq[Long]],          // [C_out][K * K * C_in]
+    bias: Seq[Long],                  // [C_out]
+    inChannels: Int,
+    outChannels: Int,
+    kernelSize: Int
+  ): Array[Array[Array[Long]]] = {
+    val h = input(0).length
+    val w = input(0)(0).length
+    val hOut = h - kernelSize + 1
+    val wOut = w - kernelSize + 1
+    val out = Array.ofDim[Long](outChannels, hOut, wOut)
+
+    for (cOut <- 0 until outChannels; y <- 0 until hOut; x <- 0 until wOut) {
+      var acc = if (cOut < bias.length) bias(cOut) else 0L
+      var wIdx = 0
+      for (cIn <- 0 until inChannels; r <- 0 until kernelSize; k <- 0 until kernelSize) {
+        val pix = input(cIn)(y + r)(x + k)
+        val weight = weights(cOut)(wIdx)
+        wIdx += 1
+        acc += pix * weight
+      }
+      out(cOut)(y)(x) = acc
+    }
+    out
+  }
+
+  def reluInt(input: Seq[Long]): Seq[Long] = input.map(v => math.max(v, 0L))
+
+  def maxPool2DInt(
+    input: Array[Array[Array[Long]]],
+    poolSize: Int,
+    stride: Int
+  ): Array[Array[Array[Long]]] = {
+    val c = input.length; val h = input(0).length; val w = input(0)(0).length
+    val hOut = (h - poolSize) / stride + 1
+    val wOut = (w - poolSize) / stride + 1
+    val out = Array.ofDim[Long](c, hOut, wOut)
+
+    for (i <- 0 until c; y <- 0 until hOut; x <- 0 until wOut) {
+      var maxVal = input(i)(y * stride)(x * stride)
+      for (r <- 0 until poolSize; k <- 0 until poolSize) {
+        val v = input(i)(y * stride + r)(x * stride + k)
+        maxVal = math.max(maxVal, v)
+      }
+      out(i)(y)(x) = maxVal
+    }
+    out
+  }
+
+  def flattenInt(input: Array[Array[Array[Long]]]): Seq[Long] = {
+    val c = input.length; val h = input(0).length; val w = input(0)(0).length
+    val out = ArrayBuffer[Long]()
+    for (y <- 0 until h; x <- 0 until w; i <- 0 until c) {
+      out += input(i)(y)(x)
+    }
+    out.toSeq
+  }
+
+  def castIntToFloat(
+    input: Seq[Long],
+    inWidth: Int,
+    outExp: Int,
+    outMant: Int,
+    scales: Seq[Double]
+  ): Seq[F] = {
+    val useScale = scales.nonEmpty && !(scales.length == 1 && scales.head == 1.0)
+    val scaleLits = if (useScale) scales.map(s => fromDouble(s, outExp, outMant)) else Nil
+    input.zipWithIndex.map { case (v, idx) =>
+      val converted = fromSInt(v, inWidth, outExp, outMant)
+      if (useScale) {
+        val scaleLit = if (scaleLits.length == 1) scaleLits.head else scaleLits(idx % scaleLits.length)
+        fmul(converted, scaleLit, outExp, outMant)
+      } else {
+        converted
+      }
+    }
+  }
 }

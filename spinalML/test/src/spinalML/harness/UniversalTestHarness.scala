@@ -21,10 +21,25 @@ object UniversalTestHarness {
 
   def decodeFloat(p: Data): Float = p match {
     case f: FloatML =>
-      val bits = ((if (f.sign.toBoolean) 1 else 0) << 15) | ((f.exponent.toInt & 0xFF) << 7) | (f.mantissa.toInt & 0x7F)
-      java.lang.Float.intBitsToFloat(bits << 16)
+      val eW = f.exponent.getWidth
+      val mW = f.mantissa.getWidth
+      if (eW == 8 && mW == 7) {
+        val bits = ((if (f.sign.toBoolean) 1 else 0) << 15) | ((f.exponent.toInt & 0xFF) << 7) | (f.mantissa.toInt & 0x7F)
+        java.lang.Float.intBitsToFloat(bits << 16)
+      } else {
+        val sign = if (f.sign.toBoolean) -1.0 else 1.0
+        val rawE = f.exponent.toInt
+        val rawM = f.mantissa.toInt
+        val bias = (1 << (eW - 1)) - 1
+        val mag =
+          if (rawE == 0) rawM.toDouble * math.pow(2.0, 1 - bias - mW)
+          else (1.0 + rawM.toDouble / (1 << mW)) * math.pow(2.0, rawE - bias)
+        (sign * mag).toFloat
+      }
     case s: SInt =>
       s.toBigInt.toFloat
+    case u: UInt =>
+      u.toBigInt.toFloat
     case _ =>
       0.0f
   }
