@@ -46,7 +46,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 ## Data Conversion
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `Cast` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | SInt -> FloatML conversion (any SInt width, any float format). Only one direction for now; UInt not supported yet. Optional compile-time `scales` turns it into the weight dequantizer for wXaY (`W_float = FloatML(W_int) * scale`, per-tensor or per-channel). |
+| `Cast` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | SInt -> FloatML conversion (any SInt width, any float format), SInt -> SInt widening, and FloatML -> FloatML. Fully integrated into the Universal Test Engine (`ModelReplica`). Optional compile-time `scales` turns it into the weight dequantizer for wXaY (`W_float = FloatML(W_int) * scale`, per-tensor or per-channel). |
 | `Requantize` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | Shift + saturate larger SInt (e.g. I32) to smaller SInt (I8/I16). SInt -> SInt only; no float, no UInt. |
 
 ## Neural Network Layers
@@ -101,6 +101,30 @@ Non-operator modules (streaming, memory, numeric units) are verified with the sa
 | `Float` unit (fromSInt) | — | ✅ | `FloatFormal` : SInt -> FloatML conversion (FP8 E4M3), plus `Float.zero`. |
 | DTypes (I4/I8/I16/I32/U4/U8/FP4) | ✅ | ✅ | Quantization round-trip per dtype. |
 | PWL / Math LUTs | ✅ | ✅ | `PWLFormal`, `math_lutsFormal` (exp/rsqrt/sqrt/reciprocal units). |
+
+## Universal Bit-Exact Test Engine Support Matrix (`cli test`)
+
+The Universal Bit-Exact Test Engine (`spinalml test <model.scala>`) automatically generates a Verilator SoC simulation harness, creates beat-aligned DDR weights/activations, and checks RTL output against the bit-exact software oracle (`ModelReplica`).
+
+See [universalTestEngine.md](universalTestEngine.md) for full architectural documentation.
+
+| Layer / Construct | Floating-Point (`FloatML`) | Integer Domain (`SInt`) | Quantized / Hybrid (`wXaY`) | Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| `Conv2D` | ✅ (`BF16`, `FP8`) | ✅ (`I4`, `I8`, `I16`) | ✅ (Hybrid W4A8) | Integer multi-channel (`inChannels > 1`) pending features-last alignment. |
+| `Conv1D` | ✅ (`BF16`) | ❌ | ❌ | Integer domain replica not yet implemented. |
+| `Linear` | ✅ (`BF16`, `FP8`) | ❌ | ✅ (`wXaY` via Cast) | Pure integer Linear without Cast pending `ModelReplica` int support. |
+| `ReLU` | ✅ | ✅ | ✅ | Identity/clipping bit-exact. |
+| `LeakyReLU` | ✅ | ❌ | ❌ | Arithmetic shift right in float. |
+| `MaxPool2D` | ✅ | ✅ | ✅ | Bit-exact spatial pooling. |
+| `MaxPool1D` | ✅ | ❌ | ❌ | Bit-exact 1D pooling. |
+| `AvgPool2D` / `AvgPool1D` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` interpreter wiring. |
+| `Cast` | ✅ (Float -> Float) | ✅ (Int -> Int) | ✅ (Int -> Float + scale) | Bridging integer and float domains. |
+| `Flatten` | ✅ | ✅ | ✅ | Features-last flatten. |
+| `BatchNorm1D` | ✅ | ❌ | ❌ | Floating-point scale & bias. |
+| `Add` / `Concat` (DAG) | ✅ | ✅ | ✅ | Skip connections & branch merges. |
+| `Sigmoid` / `Tanh` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` LUT wiring. |
+| `Softmax` | ⚠️ | ⚠️ | ⚠️ | Pass-through in replica (compares pre-softmax logits). |
+| `ClassicalAttention` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` attention block interpreter. |
 
 ## Quantization Schemes (wXaY) — *(experimental)*
 
