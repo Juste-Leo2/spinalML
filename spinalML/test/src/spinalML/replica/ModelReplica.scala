@@ -265,11 +265,36 @@ object ModelReplica {
           val outFeatures = l.outFeatures
           val lanes = l.effLanes
           nextShape = Seq(1, outFeatures)
-          val ft = curTensor.asInstanceOf[FloatTensor]
-          val fcW = (0 until outFeatures).map(o => wInfo.weightValues.slice(o * inFeatures, (o + 1) * inFeatures))
-          val fcB = (0 until outFeatures).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
-          val out = LayerReplicas.linear(ft.asFloats, fcW, fcB, ft.expBits, ft.mantBits, lanes)
-          nextTensor = FloatTensor(nextShape, out, ft.expBits, ft.mantBits)
+          curTensor match {
+            case ft: FloatTensor =>
+              val fcW = (0 until outFeatures).map(o => wInfo.weightValues.slice(o * inFeatures, (o + 1) * inFeatures))
+              val fcB = (0 until outFeatures).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
+              val out = LayerReplicas.linear(ft.asFloats, fcW, fcB, ft.expBits, ft.mantBits, lanes)
+              nextTensor = FloatTensor(nextShape, out, ft.expBits, ft.mantBits)
+            case it: IntTensor =>
+              val raw = it.asInts
+              val outBits = if (wInfo.biasDtype != null) wInfo.biasDtype().getBitsWidth else it.bitWidth
+              def wrap(v: Long): Long = {
+                if (outBits >= 64) v
+                else {
+                  val mask = (1L << outBits) - 1
+                  val unsigned = v & mask
+                  if ((unsigned & (1L << (outBits - 1))) != 0) unsigned - (1L << outBits) else unsigned
+                }
+              }
+              val outInts = (0 until outFeatures).map { o =>
+                val fcW = wInfo.weightInts.slice(o * inFeatures, (o + 1) * inFeatures)
+                val fcB = if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L
+                var acc = fcB
+                for (k <- 0 until inFeatures) {
+                  val v = if (k < raw.length) raw(k) else 0L
+                  val w = if (k < fcW.length) fcW(k) else 0L
+                  acc += v * w
+                }
+                wrap(acc)
+              }
+              nextTensor = IntTensor(nextShape, outInts, outBits)
+          }
 
         case bn: BatchNorm1D =>
           val feat = bn.features
