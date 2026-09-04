@@ -31,8 +31,9 @@ python cli/main.py setup
 
 # 4. Verify & test hardware circuits
 python cli/main.py test spinalML/src/spinalML/examples/Mnistw4a8.scala
-python cli/main.py test-all
-python cli/main.py test-all-formal
+python cli/main.py test-all          # 75 ScalaTest dynamic simulations
+python cli/main.py test-all-formal   # 56 SymbiYosys formal proofs
+python cli/main.py test-all-python   # Python/Cocotb co-simulations
 ```
 
 For detailed usage and advanced options, see the [CLI Reference](docs/cli.md).

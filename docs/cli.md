@@ -293,7 +293,48 @@ All 56 formal verification suites passed successfully!
 
 ---
 
-## 6. Low-Level EDA Tool Passthroughs
+## 6. Python Hardware Co-Simulations (`test-all-python`)
+
+SpinalML features end-to-end Python/Cocotb hardware co-simulations to test neural network layers and operators directly against Python golden models (Torch/NumPy).
+
+> [!NOTE]
+> **Platform Requirements**: Cocotb's official VPI bridge architecture for Verilator requires a POSIX environment (`libcocotbvpi_verilator.so` and `-ldl`).
+> * **Linux / ARM64 / Radxa Rock**: Supported natively.
+> * **Windows**: Supported via **WSL (Windows Subsystem for Linux)** (`wsl python cli/main.py test-all-python`).
+> *(Note: ScalaTest dynamic simulations `test-all` and Formal Verification `test-all-formal` run 100% natively on both Windows and Linux without WSL!)*
+
+`test-all-python` automatically injects `VERILATOR_ROOT`, `oss-cad-suite/bin`, and `mill` into the simulation environment so that tests run out-of-the-box:
+
+```bash
+# Linux or inside WSL:
+python cli/main.py test-all-python
+
+# From Windows PowerShell via WSL:
+wsl python cli/main.py test-all-python
+
+# Or with verbose Cocotb output
+python cli/main.py test-all-python -v
+```
+
+### Options & Filtering
+
+* **Filter tests by name pattern** (`-k`, `--filter`):
+  ```bash
+  python cli/main.py test-all-python -k "matmul"
+  ```
+* **Stop on first failure** (`-x`, `--fail-fast`):
+  ```bash
+  python cli/main.py test-all-python --fail-fast
+  ```
+* **Debug true mathematical precision** (`--debug-math`):
+  Generates `true_math_errors.log` comparing hardware bits against high-precision float golden models:
+  ```bash
+  python cli/main.py test-all-python --debug-math
+  ```
+
+---
+
+## 7. Low-Level EDA Tool Passthroughs
 
 The CLI provides transparent wrappers around all bundled FPGA tools, automatically configuring `PATH`, `VERILATOR_ROOT`, and GCC toolchain paths:
 

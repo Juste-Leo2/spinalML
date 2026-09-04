@@ -412,6 +412,62 @@ def test_all_formal(
     if code != 0:
         raise typer.Exit(code=code)
 
+@app.command(name="test-all-python", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def test_all_python(
+    ctx: typer.Context,
+    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (pytest -k)"),
+    fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output (-s, -v)"),
+    debug_math: bool = typer.Option(False, "--debug-math", help="Generate true_math_errors.log with detailed precision errors"),
+):
+    """
+    Run Python Cocotb/Pytest hardware co-simulations with Verilator.
+    Requires Linux (or Windows via WSL) due to Cocotb VPI bridge architecture.
+    """
+    if sys.platform == "win32":
+        typer.secho(
+            "\n[Notice] Cocotb + Verilator hardware co-simulations require a Linux environment (Linux, Radxa ARM64, or Windows via WSL).\n"
+            "Cocotb's official VPI bridge does not support Verilator on native Windows.\n\n"
+            "To run Python co-simulations on Windows, please run inside WSL:\n"
+            "  wsl python cli/main.py test-all-python\n\n"
+            "Note: Native Windows fully supports Scala dynamic simulations and formal proofs:\n"
+            "  python cli/main.py test-all\n"
+            "  python cli/main.py test-all-formal\n",
+            fg=typer.colors.YELLOW,
+            bold=True
+        )
+        raise typer.Exit(code=1)
 
+    from .test_runner import setup_tool_env
+    env = setup_tool_env()
+    
+    cmd = [sys.executable, "-m", "pytest", "tests/python"]
+    if filter:
+        cmd.extend(["-k", filter])
+    if fail_fast:
+        cmd.append("-x")
+    if verbose:
+        cmd.extend(["-s", "-v"])
+    else:
+        cmd.append("-s")
+    if debug_math:
+        cmd.append("--debug-math")
+        
+    if ctx.args:
+        cmd.extend(ctx.args)
+        
+    typer.echo(f"Running Python hardware co-simulations: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(CLI_DIR.parent), env=env)
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
 
-
+@app.command(name="test-python", hidden=True, context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def test_python_alias(
+    ctx: typer.Context,
+    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (pytest -k)"),
+    fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output (-s, -v)"),
+    debug_math: bool = typer.Option(False, "--debug-math", help="Generate true_math_errors.log with detailed precision errors"),
+):
+    """Alias for test-all-python."""
+    test_all_python(ctx=ctx, filter=filter, fail_fast=fail_fast, verbose=verbose, debug_math=debug_math)

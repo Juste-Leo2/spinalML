@@ -109,27 +109,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check and Install Co-Sim Dependencies
-        run: |
-          if ! command -v iverilog &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends iverilog
-          fi
-
       - name: Setup uv Package Manager
         run: |
           if ! command -v uv &> /dev/null; then
             curl -LsSf https://astral.sh/uv/install.sh | sh
           fi
 
-      - name: Setup Python Environment
+      - name: Setup Python & SpinalML Tools
         run: |
           export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           uv venv -p 3.11 || uv venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
+          python cli/main.py setup
 
       - name: Run Pytest Co-Simulations
         run: |
-          export PATH="$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export VERILATOR_ROOT="$HOME/.spinalml_tools/oss-cad-suite/share/verilator"
           source .venv/bin/activate
-          taskset -c 0,1,2,3 pytest tests/python/ -s
+          taskset -c 0,1,2,3 python cli/main.py test-all-python -v
