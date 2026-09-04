@@ -9,7 +9,7 @@ import spinalML.dtypes._
  * An example of using the new High-Level Sequential API to generate
  * a hardware neural network accelerator that chains all available 1D operations.
  */
-case class Comprehensive1DCNN(override val axiConfig: Axi4Config) extends Accelerator(
+case class Comprehensive1DCNN(override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)) extends Accelerator(
   dataType = I16(),
   inputShape = Seq(16, 1), // Sequence of length 16, 1 channel
   modelSpec = Seq(

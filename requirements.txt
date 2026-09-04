@@ -1,6 +1,13 @@
+# Test python
+
 pytest==8.0.0
 pytest-cov==4.1.0
 cocotb==1.9.1
 cocotb-test==0.2.6
 numpy==1.26.3
 cocotbext-axi==0.1.24
+
+# CLI
+typer>=0.9.0
+requests>=2.31.0
+rich>=13.0.0

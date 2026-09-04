@@ -5,6 +5,7 @@ mill.*
 
 # SpinalHDL / Verilator Simulation
 simWorkspace/
+out_verilog/
 *.v
 *.vcd
 *.bin

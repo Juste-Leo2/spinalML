@@ -42,7 +42,7 @@ case class DMAReader2DTestWrapper() extends Component {
 class DMAReader2DTest extends AnyFunSuite {
 
   test("DMAReader2D Hardware Sim") {
-    SimConfig.withVerilator.withFstWave.workspacePath("sim_build").compile {
+    SimConfig.withVerilator.withWave.workspacePath("sim_build").compile {
       val dut = DMAReader2DTestWrapper()
       dut.setDefinitionName("DMAReader2DTestComp")
       dut

@@ -24,7 +24,7 @@ class DMAReaderFormal extends Component {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 0)
   // maxBurstBeats = 4 shrinks the burst-splitting loop so chained bursts are
   // reachable within a handful of BMC steps (256 would need 256+ cycles).
-  val dut = new DMAReader(UInt(8 bits), shape = Seq(4), outLanes = 4, axiConfig, maxBurstBeats = 4)
+  val dut = FormalDut(new DMAReader(UInt(8 bits), shape = Seq(4), outLanes = 4, axiConfig, maxBurstBeats = 4))
 
   anyseq(dut.io.cmd.valid)
   anyseq(dut.io.cmd.payload)

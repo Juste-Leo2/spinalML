@@ -23,7 +23,7 @@ import spinalML.dtypes._
  *             -> Linear(4->10)       [10, 1]  (computed in I32)
  *             -> Requantize(I8)
  */
-case class HighLevel2DTemplate(override val axiConfig: Axi4Config) extends Accelerator(
+case class HighLevel2DTemplate(override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)) extends Accelerator(
   dataType = I8(),            // Global quantization format for the network
   inputShape = Seq(8, 8, 1),  // Input image [H, W, C]
 

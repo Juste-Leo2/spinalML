@@ -19,7 +19,7 @@ import spinalML.dtypes._
  * Data files: Mnist/architecturew4a8.txt, Mnist/weights_w4a8.txt.
  */
 case class Mnistw4a8(
-  override val axiConfig: Axi4Config,
+  override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 4),
   override val tileHeight: Int = -1,
   // M2: overridable spec — tests inject Linear weightLanes via copy().
   override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnistw4a8.defaultModelSpec,

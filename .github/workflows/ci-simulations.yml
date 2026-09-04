@@ -1,4 +1,4 @@
-name: CI - Hardware Simulations
+name: CI - Hardware & Software Verification
 
 on:
   push:
@@ -6,71 +6,126 @@ on:
   workflow_dispatch: 
 
 jobs:
-  build:
+  # =========================================================================
+  # 1. SCALATEST DYNAMIC SIMULATIONS (75 SUITES)
+  # =========================================================================
+  simulation-tests:
+    name: ScalaTest Dynamic Simulations
     runs-on: [self-hosted, arm64, radxa]
-    strategy:
-      fail-fast: false
-      matrix:
-        test_group: [
-          "ops",
-          "layers",
-          "examples",
-          "activations poolings",
-          "accelerator interfaces tensors dtypes memory test"
-        ]
+    env:
+      COURSIER_JVM: system
+      JAVA_HOME: /usr/lib/jvm/default-java
+      JAVA_OPTS: "-Xmx8G"
+      MAKEFLAGS: "-j 1"
     steps:
       - uses: actions/checkout@v4
 
       - name: Check and Install System Dependencies
         run: |
-          if ! command -v javac &> /dev/null || ! command -v verilator &> /dev/null; then
-            echo "Dependencies missing, installing default-jdk and verilator..."
-            sudo apt-get update
-            sudo apt-get install -y default-jdk verilator curl
-          else
-            echo "System dependencies (Java, Verilator) are already installed."
-          fi
-
-      - name: Check and install Mill
-        run: |
-          if ! command -v mill &> /dev/null; then
-            echo "Mill is not installed. Installing..."
-            sudo curl -L https://github.com/com-lihaoyi/mill/releases/download/0.11.7/0.11.7 > /usr/local/bin/mill
-            sudo chmod +x /usr/local/bin/mill
-          else
-            echo "Mill is already installed."
-          fi
-
-      - name: Run spinalML tests
-        env:
-          COURSIER_JVM: system
-          JAVA_HOME: /usr/lib/jvm/default-java
-          JAVA_OPTS: "-Xmx8G"
-          MAKEFLAGS: "-j 1"
-        run: |
-          TARGET_GROUPS="${{ matrix.test_group }}"
-          echo "Starting sequential tests for groups: $TARGET_GROUPS"
-          
-          # Ensure script stops if any test fails
-          set -e
-          
-          for GRP in $TARGET_GROUPS; do
-            echo ">>> Processing directory: spinalML/test/src/spinalML/$GRP"
-            # Find all .scala files in the current group directory
-            TEST_FILES=$(find spinalML/test/src/spinalML/$GRP -name "*.scala")
-            
-            for FILE in $TEST_FILES; do
-              # Extract class name from file name
-              CLASS_NAME=$(basename "$FILE" .scala)
-              
-              echo "=========================================================="
-              echo "Running test on LITTLE cores: spinalML.$GRP.$CLASS_NAME"
-              echo "=========================================================="
-              
-              # Run specifically this test class restricted to cores 0, 1, 2, 3 (LITTLE cores)
-              taskset -c 0,1,2,3 mill --no-server --disable-ticker spinalML.test.testOnly "spinalML.$GRP.$CLASS_NAME"
-              
-              echo "Cooling down for 1 second..."
-              sleep 1
-            done
+          DEPS_TO_INSTALL=""
+          for PKG in default-jdk curl python3-dev build-essential; do
+            if ! dpkg -s $PKG &> /dev/null; then
+              DEPS_TO_INSTALL="$DEPS_TO_INSTALL $PKG"
+            fi
           done
+          if [ -n "$DEPS_TO_INSTALL" ]; then
+            echo "Installing missing system packages:$DEPS_TO_INSTALL..."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends $DEPS_TO_INSTALL
+          else
+            echo "All core system packages are already installed."
+          fi
+
+      - name: Setup uv Package Manager
+        run: |
+          if ! command -v uv &> /dev/null; then
+            echo "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+
+      - name: Setup Python & SpinalML Tools
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          uv venv -p 3.11 || uv venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          # Setup and verify Mill and OSS CAD Suite (instant if already cached)
+          python cli/main.py setup
+
+      - name: Run Dynamic Hardware Simulations (75 Suites)
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          source .venv/bin/activate
+          # Restricted to LITTLE cores (0,1,2,3) on Radxa Rock to prevent thermal/power crashes
+          taskset -c 0,1,2,3 python cli/main.py test-all -v
+
+  # =========================================================================
+  # 2. SYMBIYOSYS FORMAL VERIFICATION (56 SUITES)
+  # =========================================================================
+  formal-proofs:
+    name: SymbiYosys Formal Proofs
+    needs: [simulation-tests]
+    runs-on: [self-hosted, arm64, radxa]
+    env:
+      COURSIER_JVM: system
+      JAVA_HOME: /usr/lib/jvm/default-java
+      JAVA_OPTS: "-Xmx8G"
+      MAKEFLAGS: "-j 1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv Package Manager
+        run: |
+          if ! command -v uv &> /dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+
+      - name: Setup Python & SpinalML Tools
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          uv venv -p 3.11 || uv venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          python cli/main.py setup
+
+      - name: Run Formal Verification Proofs (56 Suites)
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          source .venv/bin/activate
+          taskset -c 0,1,2,3 python cli/main.py test-all-formal -v
+
+  # =========================================================================
+  # 3. PYTHON HARDWARE CO-SIMULATIONS (PYTEST)
+  # =========================================================================
+  python-tests:
+    name: Python Hardware Co-Simulations
+    needs: [formal-proofs]
+    runs-on: [self-hosted, arm64, radxa]
+    env:
+      COURSIER_JVM: system
+      JAVA_HOME: /usr/lib/jvm/default-java
+      JAVA_OPTS: "-Xmx8G"
+      MAKEFLAGS: "-j 1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv Package Manager
+        run: |
+          if ! command -v uv &> /dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+
+      - name: Setup Python & SpinalML Tools
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          uv venv -p 3.11 || uv venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          python cli/main.py setup
+
+      - name: Run Pytest Co-Simulations
+        run: |
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export VERILATOR_ROOT="$HOME/.spinalml_tools/oss-cad-suite/share/verilator"
+          source .venv/bin/activate
+          taskset -c 0,1,2,3 python cli/main.py test-all-python -v

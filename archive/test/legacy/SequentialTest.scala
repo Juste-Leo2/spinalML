@@ -53,7 +53,7 @@ object SequentialTest {
       io.axiMaster.b.ready := False
     }
 
-    SimConfig.withVerilator.withFstWave.workspacePath("sim_build").compile {
+    SimConfig.withVerilator.withWave.workspacePath("sim_build").compile {
       val dut = SequentialTestWrapper()
       dut.setDefinitionName("SequentialTestComp")
       dut

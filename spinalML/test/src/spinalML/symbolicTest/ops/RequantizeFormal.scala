@@ -6,7 +6,7 @@ import spinal.lib._
 import spinalML.dtypes.{I8, I32}
 import spinalML.ops.RequantizeOp
 
-class requantizeFormal extends Component {
+class RequantizeFormal extends Component {
   val shift = 4
   val dut = FormalDut(RequantizeOp(
     dataTypeIn = I32(),
@@ -45,7 +45,7 @@ class requantizeFormal extends Component {
   }
 }
 
-object requantizeFormal {
+object RequantizeFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
@@ -54,6 +54,6 @@ object requantizeFormal {
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
-      .doVerify(new requantizeFormal, "requantize_formal")
+      .doVerify(new RequantizeFormal, "requantize_formal")
   }
 }
