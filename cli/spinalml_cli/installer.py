@@ -125,19 +125,24 @@ def install_oss_cad_suite(url: str, debug: bool, console=None, force: bool = Fal
     _save_manifest(manifest)
 
 def install_mill(url: str, debug: bool, console=None, force: bool = False):
-    mill_bin = get_bin_path("mill")
+    is_win = os.name == "nt"
+    mill_bin = TOOLS_DIR / ("mill.bat" if is_win else "mill")
     manifest = _load_manifest()
 
     if mill_bin.exists() and not force:
-        if manifest.get("mill") == url or "mill" not in manifest:
-            manifest["mill"] = url
-            _save_manifest(manifest)
+        if manifest.get("mill") == url:
             msg = "Mill is up to date (skipping download)."
             if debug:
                 print(msg)
             elif console:
                 console.print(f"[green]{msg}[/green]")
             return
+
+    msg = "Updating Mill to new version..." if mill_bin.exists() else "Installing Mill..."
+    if debug:
+        print(msg)
+    elif console:
+        console.print(f"[yellow]{msg}[/yellow]")
 
     download_file(url, mill_bin, debug=debug, console=console)
     

@@ -49,7 +49,7 @@ jobs:
 
       - name: Setup Python & SpinalML Tools
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           uv venv -p 3.11 || uv venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
@@ -58,7 +58,7 @@ jobs:
 
       - name: Run Dynamic Hardware Simulations (75 Suites)
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
           # Restricted to LITTLE cores (0,1,2,3) on Radxa Rock to prevent thermal/power crashes
           taskset -c 0,1,2,3 python cli/main.py test-all -v
@@ -86,7 +86,7 @@ jobs:
 
       - name: Setup Python & SpinalML Tools
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           uv venv -p 3.11 || uv venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
@@ -94,7 +94,7 @@ jobs:
 
       - name: Run Formal Verification Proofs (56 Suites)
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
           taskset -c 0,1,2,3 python cli/main.py test-all-formal -v
 
