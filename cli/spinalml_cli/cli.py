@@ -406,5 +406,23 @@ def test_all(
     if code != 0:
         raise typer.Exit(code=code)
 
+@app.command(name="test-all-formal")
+def test_all_formal(
+    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter formal tests by name pattern (regex or substring)"),
+    fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
+    log_dir: Optional[Path] = typer.Option(None, "--log-dir", help="Directory to store failure logs (default: out/formal_reports)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List discovered formal suites without running them"),
+    timeout: int = typer.Option(900, "-t", "--timeout", help="Timeout per formal suite in seconds (default: 900)"),
+):
+    """
+    Run all SymbiYosys formal verification suites sequentially (1-by-1).
+    Discovers all *Formal.scala specs under symbolicTest/ and executes them via SMT-BMC.
+    """
+    from .formal_runner import run_all_formal_tests
+    code = run_all_formal_tests(filter_pattern=filter, fail_fast=fail_fast, log_dir=log_dir, dry_run=dry_run, timeout=timeout)
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
 
 

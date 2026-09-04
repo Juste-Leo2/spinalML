@@ -36,7 +36,7 @@ class MathLutsFormal extends Component {
   }
 }
 
-object math_lutsFormal {
+object MathLutsFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys

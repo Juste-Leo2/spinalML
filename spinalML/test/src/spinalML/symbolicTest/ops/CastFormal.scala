@@ -7,7 +7,7 @@ import spinalML.dtypes.{I8, FloatML}
 import spinalML.ops.CastOp
 import spinalML.utils.Float
 
-class castFormal extends Component {
+class CastFormal extends Component {
   val dut = FormalDut(CastOp(
     dataTypeIn = I8(),
     dataTypeOut = FloatML(4, 3),
@@ -33,7 +33,7 @@ class castFormal extends Component {
   }
 }
 
-object castFormal {
+object CastFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
       .withSymbiYosys
@@ -42,6 +42,6 @@ object castFormal {
       .withDebug
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
-      .doVerify(new castFormal, "cast_formal")
+      .doVerify(new CastFormal, "cast_formal")
   }
 }
