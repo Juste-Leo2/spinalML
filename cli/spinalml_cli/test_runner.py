@@ -12,7 +12,7 @@ from rich.panel import Panel
 
 from .config import CLI_DIR, TOOLS_DIR, get_bin_path
 
-console = Console()
+console = Console(force_terminal=True)
 
 def get_project_root() -> Path:
     return CLI_DIR.parent.resolve()
@@ -126,7 +126,8 @@ def run_all_tests(
     
     for idx, test_fqcn in enumerate(tests, 1):
         progress_str = f"[{idx:2d}/{total_tests:2d}]"
-        console.print(f"{progress_str} Running [bold blue]{test_fqcn}[/] ... ", end="")
+        console.print(f"{progress_str} Running [bold blue]{test_fqcn}[/]...")
+        sys.stdout.flush()
         
         test_start = time.time()
         cmd = [str(mill_bin), "spinalML.test.testOnly", test_fqcn]
@@ -142,7 +143,8 @@ def run_all_tests(
             duration = time.time() - test_start
             
             if res.returncode == 0:
-                console.print(f"[bold green]PASS[/] ({duration:5.2f}s)")
+                console.print(f"       -> [bold green]PASS[/] ({duration:5.2f}s)")
+                sys.stdout.flush()
                 passed_tests.append((test_fqcn, duration))
             else:
                 log_file = log_dir / f"{test_fqcn}.log"
@@ -155,7 +157,8 @@ def run_all_tests(
                     f.write("\n=== STDERR ===\n")
                     f.write(res.stderr)
                     
-                console.print(f"[bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                console.print(f"       -> [bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                sys.stdout.flush()
                 if verbose:
                     out_trace = res.stderr.strip() or res.stdout.strip() or "No output captured."
                     console.print(Panel(
@@ -163,21 +166,27 @@ def run_all_tests(
                         title=f"[bold red]Failure Output: {test_fqcn}[/]",
                         border_style="red"
                     ))
+                    sys.stdout.flush()
                 failed_tests.append((test_fqcn, duration, log_file))
                 
                 if fail_fast:
                     console.print("\n[bold red]Stopping early due to --fail-fast.[/]")
+                    sys.stdout.flush()
                     break
         except KeyboardInterrupt:
             console.print("\n[bold yellow]Aborted by user.[/]")
+            sys.stdout.flush()
             return 130
         except Exception as e:
             duration = time.time() - test_start
-            console.print(f"[bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            console.print(f"       -> [bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            sys.stdout.flush()
             if verbose:
                 console.print(Panel(str(e), title=f"[bold red]Exception: {test_fqcn}[/]", border_style="red"))
+                sys.stdout.flush()
             failed_tests.append((test_fqcn, duration, log_dir / f"{test_fqcn}_exception.log"))
             if fail_fast:
+                sys.stdout.flush()
                 break
 
     total_duration = time.time() - total_start_time

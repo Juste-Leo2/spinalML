@@ -13,7 +13,7 @@ from rich.panel import Panel
 from .config import CLI_DIR, TOOLS_DIR, get_bin_path
 from .test_runner import setup_tool_env, get_project_root
 
-console = Console()
+console = Console(force_terminal=True)
 
 def discover_formal_specs(formal_src_dir: Path, filter_pattern: Optional[str] = None) -> List[str]:
     """Finds all concrete formal verification objects in symbolicTest/."""
@@ -107,7 +107,8 @@ def run_all_formal_tests(
     
     for idx, spec_fqcn in enumerate(specs, 1):
         progress_str = f"[{idx:2d}/{total_specs:2d}]"
-        console.print(f"{progress_str} Verifying [bold magenta]{spec_fqcn}[/] ... ", end="")
+        console.print(f"{progress_str} Verifying [bold magenta]{spec_fqcn}[/]...")
+        sys.stdout.flush()
         
         spec_start = time.time()
         cmd = [str(mill_bin), "spinalML.test.runMain", spec_fqcn]
@@ -127,7 +128,8 @@ def run_all_formal_tests(
             is_success = (res.returncode == 0) and ("Assert failed" not in res.stdout) and ("FAIL" not in res.stdout or "SUCCESS" in res.stdout)
             
             if is_success:
-                console.print(f"[bold green]PASS[/] ({duration:5.2f}s)")
+                console.print(f"       -> [bold green]PASS[/] ({duration:5.2f}s)")
+                sys.stdout.flush()
                 passed_specs.append((spec_fqcn, duration))
             else:
                 log_file = log_dir / f"{spec_fqcn}.log"
@@ -140,7 +142,8 @@ def run_all_formal_tests(
                     f.write("\n=== STDERR ===\n")
                     f.write(res.stderr)
                     
-                console.print(f"[bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                console.print(f"       -> [bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                sys.stdout.flush()
                 if verbose:
                     out_trace = res.stderr.strip() or res.stdout.strip() or "No output captured."
                     console.print(Panel(
@@ -148,32 +151,41 @@ def run_all_formal_tests(
                         title=f"[bold red]Formal Failure Output: {spec_fqcn}[/]",
                         border_style="red"
                     ))
+                    sys.stdout.flush()
                 failed_specs.append((spec_fqcn, duration, log_file))
                 
                 if fail_fast:
                     console.print("\n[bold red]Stopping early due to --fail-fast.[/]")
+                    sys.stdout.flush()
                     break
         except subprocess.TimeoutExpired:
             duration = time.time() - spec_start
             log_file = log_dir / f"{spec_fqcn}_timeout.log"
             with open(log_file, "w", encoding="utf-8") as f:
                 f.write(f"=== FORMAL VERIFICATION TIMED OUT ({timeout}s): {spec_fqcn} ===\n")
-            console.print(f"[bold red]TIMEOUT[/] (>{timeout}s)")
+            console.print(f"       -> [bold red]TIMEOUT[/] (>{timeout}s)")
+            sys.stdout.flush()
             if verbose:
                 console.print(Panel(f"Timed out after {timeout} seconds", title=f"[bold red]Timeout: {spec_fqcn}[/]", border_style="red"))
+                sys.stdout.flush()
             failed_specs.append((spec_fqcn, duration, log_file))
             if fail_fast:
+                sys.stdout.flush()
                 break
         except KeyboardInterrupt:
             console.print("\n[bold yellow]Aborted by user.[/]")
+            sys.stdout.flush()
             return 130
         except Exception as e:
             duration = time.time() - spec_start
-            console.print(f"[bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            console.print(f"       -> [bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            sys.stdout.flush()
             if verbose:
                 console.print(Panel(str(e), title=f"[bold red]Exception: {spec_fqcn}[/]", border_style="red"))
+                sys.stdout.flush()
             failed_specs.append((spec_fqcn, duration, log_dir / f"{spec_fqcn}_exception.log"))
             if fail_fast:
+                sys.stdout.flush()
                 break
 
     total_duration = time.time() - total_start_time

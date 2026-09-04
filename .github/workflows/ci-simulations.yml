@@ -5,6 +5,10 @@ on:
     branches: [ "main" ] 
   workflow_dispatch: 
 
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+
 jobs:
   # =========================================================================
   # 1. SCALATEST DYNAMIC SIMULATIONS (75 SUITES)
