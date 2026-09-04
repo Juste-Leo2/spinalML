@@ -10,10 +10,38 @@ The core objective of spinalML is to provide a complete and tested set of tools 
 *   **Basic Operations:** Essential mathematical and matrix operations required for any machine learning algorithm.
 *   **Advanced Operations:** Complex layers such as convolutions, activation functions, and pooling mechanisms.
 
+## Quick Start (with `uv`)
+
+We recommend using [**uv**](https://docs.astral.sh/uv/) for ultra-fast, modern Python environment setup:
+
+```bash
+# 1. Install uv
+# Linux / macOS:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows (PowerShell):
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 2. Setup Python environment
+uv venv -p 3.11
+# Linux/macOS: source .venv/bin/activate | Windows: .\.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
+
+# 3. Setup hardware toolchain (Mill, Verilator, SymbiYosys, Yosys)
+python cli/main.py setup
+
+# 4. Verify & test hardware circuits
+python cli/main.py test spinalML/src/spinalML/examples/Mnistw4a8.scala
+python cli/main.py test-all
+python cli/main.py test-all-formal
+```
+
+For detailed usage and advanced options, see the [CLI Reference](docs/cli.md).
+
 ## Project Documentation
 
 To understand the direction and the capabilities of this project, please refer to the following documents:
 
+*   [CLI Reference](docs/cli.md): Complete guide to the SpinalML command-line interface, compilation, simulation, and formal verification on Linux & Windows.
 *   [Getting Started](docs/getting_started.md): A tutorial to understand core concepts, tensors, streams, and how to build your first ML hardware layers.
 *   [High-Level Tutorial](docs/HighLevelTutorial.md): The complete guide to the PyTorch-like API: layer catalog, wXaY quantization, memory layout and SoC simulation.
 *   [Operations Support](docs/opsSupport.md): A comprehensive matrix of all machine learning operations and their hardware validation status.

@@ -82,7 +82,8 @@ def run_all_tests(
     filter_pattern: Optional[str] = None,
     fail_fast: bool = False,
     log_dir: Optional[Path] = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    verbose: bool = False
 ) -> int:
     project_root = get_project_root()
     test_src = project_root / "spinalML" / "test" / "src"
@@ -155,6 +156,13 @@ def run_all_tests(
                     f.write(res.stderr)
                     
                 console.print(f"[bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                if verbose:
+                    out_trace = res.stderr.strip() or res.stdout.strip() or "No output captured."
+                    console.print(Panel(
+                        out_trace,
+                        title=f"[bold red]Failure Output: {test_fqcn}[/]",
+                        border_style="red"
+                    ))
                 failed_tests.append((test_fqcn, duration, log_file))
                 
                 if fail_fast:
@@ -166,6 +174,8 @@ def run_all_tests(
         except Exception as e:
             duration = time.time() - test_start
             console.print(f"[bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            if verbose:
+                console.print(Panel(str(e), title=f"[bold red]Exception: {test_fqcn}[/]", border_style="red"))
             failed_tests.append((test_fqcn, duration, log_dir / f"{test_fqcn}_exception.log"))
             if fail_fast:
                 break

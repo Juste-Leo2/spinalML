@@ -63,7 +63,8 @@ def run_all_formal_tests(
     fail_fast: bool = False,
     log_dir: Optional[Path] = None,
     dry_run: bool = False,
-    timeout: int = 900
+    timeout: int = 900,
+    verbose: bool = False
 ) -> int:
     project_root = get_project_root()
     formal_src = project_root / "spinalML" / "test" / "src" / "spinalML" / "symbolicTest"
@@ -140,6 +141,13 @@ def run_all_formal_tests(
                     f.write(res.stderr)
                     
                 console.print(f"[bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                if verbose:
+                    out_trace = res.stderr.strip() or res.stdout.strip() or "No output captured."
+                    console.print(Panel(
+                        out_trace,
+                        title=f"[bold red]Formal Failure Output: {spec_fqcn}[/]",
+                        border_style="red"
+                    ))
                 failed_specs.append((spec_fqcn, duration, log_file))
                 
                 if fail_fast:
@@ -151,6 +159,8 @@ def run_all_formal_tests(
             with open(log_file, "w", encoding="utf-8") as f:
                 f.write(f"=== FORMAL VERIFICATION TIMED OUT ({timeout}s): {spec_fqcn} ===\n")
             console.print(f"[bold red]TIMEOUT[/] (>{timeout}s)")
+            if verbose:
+                console.print(Panel(f"Timed out after {timeout} seconds", title=f"[bold red]Timeout: {spec_fqcn}[/]", border_style="red"))
             failed_specs.append((spec_fqcn, duration, log_file))
             if fail_fast:
                 break
@@ -160,6 +170,8 @@ def run_all_formal_tests(
         except Exception as e:
             duration = time.time() - spec_start
             console.print(f"[bold red]ERROR[/] ({duration:5.2f}s): {e}")
+            if verbose:
+                console.print(Panel(str(e), title=f"[bold red]Exception: {spec_fqcn}[/]", border_style="red"))
             failed_specs.append((spec_fqcn, duration, log_dir / f"{spec_fqcn}_exception.log"))
             if fail_fast:
                 break

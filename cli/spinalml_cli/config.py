@@ -53,11 +53,18 @@ def get_w64devkit_url(config: dict) -> str:
 
 def get_bin_path(tool_name: str) -> Path:
     """Returns the absolute path to a tool's executable."""
+    import shutil
     system = platform.system().lower()
     is_win = system == "windows"
     
     if tool_name == "mill":
-        return TOOLS_DIR / ("mill.bat" if is_win else "mill")
+        tool_p = TOOLS_DIR / ("mill.bat" if is_win else "mill")
+        if tool_p.exists():
+            return tool_p
+        which = shutil.which("mill.bat" if is_win else "mill") or shutil.which("mill")
+        if which:
+            return Path(which)
+        return tool_p
     else:
         bin_dir = TOOLS_DIR / "oss-cad-suite" / "bin"
         if is_win:
@@ -69,6 +76,15 @@ def get_bin_path(tool_name: str) -> Path:
             bin_exe = bin_dir / f"{tool_name}_bin.exe"
             if bin_exe.exists():
                 return bin_exe
+            which = shutil.which(f"{tool_name}.exe") or shutil.which(f"{tool_name}_bin.exe") or shutil.which(tool_name)
+            if which:
+                return Path(which)
             return bin_dir / tool_name
         else:
-            return bin_dir / tool_name
+            p = bin_dir / tool_name
+            if p.exists():
+                return p
+            which = shutil.which(tool_name)
+            if which:
+                return Path(which)
+            return p
