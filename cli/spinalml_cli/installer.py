@@ -26,11 +26,42 @@ def _save_manifest(manifest: dict):
     except Exception:
         pass
 
-def setup_tools(config: dict, debug: bool = False, force: bool = False):
+def clean_coursier_cache(console=None, debug: bool = False):
+    """Removes cached Coursier / Ivy artifacts to avoid SHA-1 checksum corruption."""
+    import shutil
+    home = Path.home()
+    dirs = [
+        home / ".cache" / "coursier",
+        home / ".coursier",
+        home / ".ivy2" / "cache"
+    ]
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        dirs.append(Path(local_app_data) / "Coursier" / "Cache")
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        dirs.append(Path(app_data) / "Coursier")
+
+    cleaned = False
+    for d in dirs:
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            cleaned = True
+    if cleaned:
+        msg = "Cleared Coursier & Ivy cache to prevent checksum corruption."
+        if debug:
+            print(msg)
+        elif console:
+            console.print(f"[dim cyan]{msg}[/dim cyan]")
+
+def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False):
     from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_os_arch
     
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     
+    if force or clean_cache:
+        clean_coursier_cache(debug=debug)
+
     is_win = "windows" in get_os_arch()
     
     if debug:

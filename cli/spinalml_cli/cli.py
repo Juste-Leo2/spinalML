@@ -15,13 +15,27 @@ app = typer.Typer(
 @app.command()
 def setup(
     debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs"),
-    force: bool = typer.Option(False, "-f", "--force", help="Force reinstallation of tools even if already up to date")
+    force: bool = typer.Option(False, "-f", "--force", help="Force reinstallation of tools even if already up to date"),
+    clean_cache: bool = typer.Option(False, "--clean-cache", help="Clean Coursier & Ivy caches before setup")
 ):
     """
     Download and extract all necessary tools (Mill, OSS CAD Suite) to ~/.spinalml_tools
     """
     config = load_config()
-    setup_tools(config, debug=debug, force=force)
+    setup_tools(config, debug=debug, force=force, clean_cache=clean_cache)
+
+@app.command(name="clean-cache")
+def clean_cache(
+    debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs")
+):
+    """
+    Remove Coursier and Ivy caches to prevent checksum corruption.
+    """
+    from .installer import clean_coursier_cache
+    from rich.console import Console
+    console = Console()
+    clean_coursier_cache(console=console, debug=debug)
+    console.print("[bold green]Coursier & Ivy caches cleaned successfully![/bold green]")
 
 def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int:
     """Helper to run an installed tool and pass along arguments."""

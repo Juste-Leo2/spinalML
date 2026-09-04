@@ -393,3 +393,4 @@ python cli/main.py openfpgaloader --detect
 | **Run All Formal Proofs** | `python cli/main.py test-all-formal` | `python cli/main.py test-all-formal` |
 | **Run Filtered Formal** | `python cli/main.py test-all-formal -k "Accelerator"` | `python cli/main.py test-all-formal -k "Accelerator"` |
 | **Direct Mill Command** | `python cli/main.py mill spinalML.compile` | `python cli/main.py mill spinalML.compile` |
+| **Clean Coursier Cache** | `python cli/main.py clean-cache` | `python cli/main.py clean-cache` |

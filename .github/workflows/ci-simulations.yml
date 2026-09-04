@@ -24,6 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear Corrupted Coursier & Ivy Caches
+        run: |
+          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
       - name: Check and Install System Dependencies
         run: |
           DEPS_TO_INSTALL=""
@@ -78,6 +82,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear Corrupted Coursier & Ivy Caches
+        run: |
+          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
       - name: Setup uv Package Manager
         run: |
           if ! command -v uv &> /dev/null; then
@@ -113,6 +121,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear Corrupted Coursier & Ivy Caches
+        run: |
+          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
       - name: Setup uv Package Manager
         run: |
           if ! command -v uv &> /dev/null; then
@@ -121,7 +133,7 @@ jobs:
 
       - name: Setup Python & SpinalML Tools
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           uv venv -p 3.11 || uv venv
           source .venv/bin/activate
           uv pip install -r requirements.txt

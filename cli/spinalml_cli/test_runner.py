@@ -158,6 +158,9 @@ def run_all_tests(
                     f.write(res.stderr)
                     
                 console.print(f"       -> [bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(project_root)}[/]")
+                combined_output = (res.stderr or "") + (res.stdout or "")
+                if "checksum format error" in combined_output or "scalaCompilerBridge" in combined_output:
+                    console.print("       [bold yellow]↳ Detected Coursier cache checksum corruption.[/bold yellow] Run [bold cyan]python cli/main.py clean-cache[/bold cyan] to clear.")
                 sys.stdout.flush()
                 if verbose:
                     out_trace = res.stderr.strip() or res.stdout.strip() or "No output captured."
