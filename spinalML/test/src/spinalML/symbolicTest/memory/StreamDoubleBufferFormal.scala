@@ -6,7 +6,7 @@ import spinal.lib._
 import spinalML.memory.StreamDoubleBuffer
 
 class StreamDoubleBufferFormal extends Component {
-  val dut = new StreamDoubleBuffer(UInt(8 bits), depth = 4, lanes = 1)
+  val dut = FormalDut(new StreamDoubleBuffer(UInt(8 bits), depth = 4, lanes = 1))
   
   // Inject random inputs
   anyseq(dut.io.streamIn.valid)
@@ -15,6 +15,8 @@ class StreamDoubleBufferFormal extends Component {
   anyseq(dut.io.nextTile)
   // One-shot contract: no command boundary inside the formal window.
   dut.io.reArm := False
+
+  assumeInitial(clockDomain.isResetActive)
   
   // Pull internal signals across hierarchy to avoid violations
   val pingFull = dut.pingFull.pull()
@@ -69,8 +71,8 @@ object StreamDoubleBufferFormal {
  * legacy behaviour.
  */
 class StreamDoubleBufferHoldFormal extends Component {
-  val dut = new StreamDoubleBuffer(UInt(8 bits), depth = 4, lanes = 1,
-    enableFreezePort = true)
+  val dut = FormalDut(new StreamDoubleBuffer(UInt(8 bits), depth = 4, lanes = 1,
+    enableFreezePort = true))
 
   anyseq(dut.io.streamIn.valid)
   anyseq(dut.io.streamIn.payload)

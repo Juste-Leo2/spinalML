@@ -43,7 +43,7 @@ import spinalML.memory.{DMAReader2D, FetchRequest2D}
  */
 class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extends Component {
   val axiConfig = Axi4Config(addressWidth = 16, dataWidth = 32, idWidth = 0)
-  val dut = new DMAReader2D(UInt(8 bits), shape = Seq(4, 4), outLanes = lanes, axiConfig)
+  val dut = FormalDut(new DMAReader2D(UInt(8 bits), shape = Seq(4, 4), outLanes = lanes, axiConfig))
 
   // Geometry constants mirrored from the DUT parameters
   val W     = 4                      // shape(1), elements per row

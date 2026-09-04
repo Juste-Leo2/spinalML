@@ -233,8 +233,7 @@ object AutoRunner extends App {{
 
 @app.command()
 def test(
-    file: Path = typer.Argument(..., help="Path to the Scala model or test file to run"),
-    legacy: bool = typer.Option(False, "--legacy", "-l", help="Use legacy handwritten test from test/ directory if available instead of the universal bit-exact test")
+    file: Path = typer.Argument(..., help="Path to the Scala model or test file to run")
 ):
     """
     Run hardware simulation tests (bit-exact, streaming, tiling, memory verification).
@@ -268,22 +267,7 @@ def test(
     if comp_match:
         comp_name = comp_match.group(1)
         
-        # Only use handwritten legacy test suite if explicitly requested via --legacy
-        if legacy:
-            test_candidate = CLI_DIR.parent / "spinalML" / "test" / "src" / "spinalML" / "examples" / f"{comp_name}Test.scala"
-            if test_candidate.exists():
-                typer.echo(f"Found existing legacy verification suite: {test_candidate.name}")
-                full_test = f"spinalML.examples.{comp_name}Test"
-                typer.echo(f"Running Mill testOnly {full_test}...")
-                ret_code = run_tool("mill", ["spinalML.test.testOnly", full_test], exit_on_error=False)
-                if ret_code != 0:
-                    raise typer.Exit(code=ret_code)
-                typer.echo(f"Model {comp_name} verification successful!")
-                return
-            else:
-                typer.echo(f"Warning: No legacy test suite found for {comp_name}, falling back to universal test.")
-
-        # By default, run the Universal Bit-Exact Verification Engine using UniversalTestHarness
+        # Run the Universal Bit-Exact Verification Engine using UniversalTestHarness
         test_temp_dir = CLI_DIR.parent / "spinalML" / "test" / "src" / "cli_test_temp"
         if test_temp_dir.exists():
             shutil.rmtree(test_temp_dir)

@@ -33,7 +33,7 @@ class FP4Formal extends Component {
   // assertions prove netlist fidelity only (they cannot catch algorithmic bugs,
   // e.g. the exponent-wrap fixed in Float.mul/add). Mathematical correctness is
   // guarded by spinalML.dtypes.FloatSweepTest (exhaustive independent sweeps).
-  val dut = new FP4MathComp()
+  val dut = FormalDut(FP4MathComp())
 
   anyseq(dut.io.a)
   anyseq(dut.io.b)
