@@ -68,11 +68,66 @@ jobs:
           taskset -c 0,1,2,3 python cli/main.py test-all -v
 
   # =========================================================================
-  # 2. SYMBIYOSYS FORMAL VERIFICATION (56 SUITES)
+  # 2. UNIVERSAL BIT-EXACT SOC SIMULATIONS
+  # =========================================================================
+  universal-tests:
+    name: Universal Bit-Exact SoC Simulations
+    needs: [simulation-tests]
+    runs-on: [self-hosted, arm64, radxa]
+    env:
+      COURSIER_JVM: system
+      JAVA_HOME: /usr/lib/jvm/default-java
+      JAVA_OPTS: "-Xmx8G"
+      MAKEFLAGS: "-j 1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clear Corrupted Coursier & Ivy Caches
+        run: |
+          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
+      - name: Check and Install System Dependencies
+        run: |
+          DEPS_TO_INSTALL=""
+          for PKG in default-jdk curl python3-dev build-essential; do
+            if ! dpkg -s $PKG &> /dev/null; then
+              DEPS_TO_INSTALL="$DEPS_TO_INSTALL $PKG"
+            fi
+          done
+          if [ -n "$DEPS_TO_INSTALL" ]; then
+            echo "Installing missing system packages:$DEPS_TO_INSTALL..."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends $DEPS_TO_INSTALL
+          else
+            echo "All core system packages are already installed."
+          fi
+
+      - name: Setup uv Package Manager
+        run: |
+          if ! command -v uv &> /dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+
+      - name: Setup Python & SpinalML Tools
+        run: |
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          uv venv -p 3.11 || uv venv
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          python cli/main.py setup
+
+      - name: Run Universal Bit-Exact SoC Tests
+        run: |
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          source .venv/bin/activate
+          taskset -c 0,1,2,3 python cli/main.py test tests/universal
+
+  # =========================================================================
+  # 3. SYMBIYOSYS FORMAL VERIFICATION (56 SUITES)
   # =========================================================================
   formal-proofs:
     name: SymbiYosys Formal Proofs
-    needs: [simulation-tests]
+    needs: [universal-tests]
     runs-on: [self-hosted, arm64, radxa]
     env:
       COURSIER_JVM: system
@@ -107,7 +162,7 @@ jobs:
           taskset -c 0,1,2,3 python cli/main.py test-all-formal -v
 
   # =========================================================================
-  # 3. PYTHON HARDWARE CO-SIMULATIONS (PYTEST)
+  # 4. PYTHON HARDWARE CO-SIMULATIONS (PYTEST)
   # =========================================================================
   python-tests:
     name: Python Hardware Co-Simulations

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
-package spinalML.examples
+package tests.universal
 
 import spinal.core._
 import spinal.lib._
@@ -11,7 +11,7 @@ import spinalML.dtypes._
 /**
  * Universal1DDemo
  * Demonstrates and validates 1D operations in the Universal Test Engine:
- * Conv1D -> AvgPool1D -> ReLU -> Flatten -> Linear.
+ * Conv1D -> AvgPool1D -> ReLU -> Flatten -> Linear -> Requantize.
  */
 case class Universal1DDemo(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)

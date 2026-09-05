@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
-package spinalML.examples
+package tests.universal
 
 import spinal.core._
 import spinal.lib._
