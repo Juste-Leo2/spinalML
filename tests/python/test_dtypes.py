@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
+
 import pytest
 from golden_models.dtypes import FP4_E2M1, BF16
 

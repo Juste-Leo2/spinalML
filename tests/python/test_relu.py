@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
+
 import cocotb
 from cocotb.triggers import Timer
 from cocotb_test.simulator import run

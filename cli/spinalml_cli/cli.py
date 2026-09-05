@@ -201,7 +201,11 @@ import spinal.core._
 {import_stmt}
 
 object AutoRunner extends App {{
-  SpinalConfig(targetDirectory = "{target_dir}").generateVerilog(new {comp_name}())
+  SpinalConfig(
+    targetDirectory = "{target_dir}",
+    headerWithDate = true,
+    rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
+  ).generateVerilog(new {comp_name}())
 }}
 """
         (workspace_src / "AutoRunner.scala").write_text(auto_runner_code, encoding="utf-8")

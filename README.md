@@ -62,6 +62,29 @@ I heavily use AI tools for programming, and using AI to contribute to this proje
 However, there is one strict rule: **Pull Requests must be initiated by a human.** 
 The PR description must be written by you (a human), and you must demonstrate a minimum understanding of the objective and the technical elements that made the implementation successful.
 
+## Citation
+
+If you use spinalML in your research, university courses, or hardware projects, please consider citing it:
+
+```bibtex
+@software{adamo2026spinalml,
+  author       = {Adamo, Léonard},
+  title        = {{spinalML: Hardware Machine Learning Accelerators with SpinalHDL}},
+  year         = {2026},
+  publisher    = {GitHub},
+  journal      = {GitHub repository},
+  howpublished = {\url{https://github.com/Juste-Leo2/spinalML}},
+  note         = {Student project, Université de Montpellier, France}
+}
+```
+
+## Author
+
+* **Léonard Adamo** ([@Juste-Leo2](https://github.com/Juste-Leo2))
+  * Student at Université de Montpellier, France
+  * Creator of spinalML
+
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.  
+Copyright (c) 2026 Léonard Adamo (Juste-Leo2).

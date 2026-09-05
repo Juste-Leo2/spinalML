@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in your research or project, please cite it as below."
+title: "spinalML: Hardware Machine Learning Accelerators with SpinalHDL"
+authors:
+  - family-names: "Adamo"
+    given-names: "Léonard"
+    affiliation: "Université de Montpellier, France"
+    alias: "Juste-Leo2"
+    website: "https://github.com/Juste-Leo2"
+repository-code: "https://github.com/Juste-Leo2/spinalML"
+license: "MIT"
+year: 2026
+keywords:
+  - spinalhdl
+  - machine-learning
+  - neural-networks
+  - hardware-accelerator
+  - fpga
+  - verilog

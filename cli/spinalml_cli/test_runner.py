@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
+
 import os
 import re
 import sys

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
+
 import math
 import numpy as np
 from golden_models.dtypes import FloatML

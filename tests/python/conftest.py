@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
+
 import os
 import sys
 import random
@@ -53,4 +55,4 @@ def pytest_sessionstart(session):
 
         if "VERILATOR_ROOT" not in os.environ and os.path.isdir(verilator_root):
             os.environ["VERILATOR_ROOT"] = verilator_root
-
+
