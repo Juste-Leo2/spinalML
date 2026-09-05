@@ -290,7 +290,17 @@ def test(
             shutil.rmtree(test_temp_dir)
         test_temp_dir.mkdir(parents=True, exist_ok=True)
 
-        import_stmt = f"import {pkg}.{comp_name}" if pkg else ""
+        # If the file is located outside the spinalML source tree (e.g. at repo root),
+        # copy it into test_temp_dir so Mill automatically compiles it alongside the test scaffold.
+        try:
+            file.resolve().relative_to((CLI_DIR.parent / "spinalML" / "src").resolve())
+        except ValueError:
+            try:
+                file.resolve().relative_to((CLI_DIR.parent / "spinalML" / "test" / "src").resolve())
+            except ValueError:
+                shutil.copy(file, test_temp_dir / file.name)
+
+        import_stmt = f"import {pkg}.{comp_name}" if pkg else f"import _root_.{comp_name}"
         scaffold_code = f"""package cli_test_temp
 
 import org.scalatest.funsuite.AnyFunSuite
