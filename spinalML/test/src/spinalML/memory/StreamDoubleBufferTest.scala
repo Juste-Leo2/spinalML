@@ -293,7 +293,58 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       assert(wDelta5 == 0L, s"Pass 5: expected 0 weight AR transactions in resumed residency, got $wDelta5")
       println(f"[StreamDoubleBufferTest] Pass 5 resident: weight ARs = $wDelta5 (zero DDR traffic resumed)")
 
-      println("[StreamDoubleBufferTest] All residency and reload contract checks PASSED cleanly!")
+      // ---- Eager Prefetch Mode (CSR 0x10 = 3: RESIDENT + PREFETCH_EN) ----
+      // Pass 6: Switch to RESIDENT + PREFETCH mode and issue RELOAD
+      writeCsr(0x10, 3)
+      val wBeforeIdle6 = weightARs
+      writeCsr(0x14, 1) // Issue RELOAD while accelerator is idle (pre-START)
+      dut.clockDomain.waitSampling(200) // Settle: allow eager fetch to land into idle bank
+      val wDeltaIdle6 = weightARs - wBeforeIdle6
+      assert(wDeltaIdle6 > 0, s"Pass 6: eager fetch should occur during idle window BEFORE start, got $wDeltaIdle6 ARs")
+      println(f"[StreamDoubleBufferTest] Pass 6 prefetch: eager idle weight ARs = $wDeltaIdle6 (pre-loaded before START)")
+
+      // Active inference: weights are already prefetched, so weight ARs during active compute must be STRICTLY ZERO!
+      val wBeforeActive6 = weightARs
+      runInference(6)
+      val wDeltaActive6 = weightARs - wBeforeActive6
+      assert(wDeltaActive6 == 0L, s"Pass 6: expected 0 weight AR transactions during active inference under prefetch, got $wDeltaActive6")
+      println(f"[StreamDoubleBufferTest] Pass 6 inference: active weight ARs = $wDeltaActive6 (zero DDR traffic during compute)")
+
+      // Pass 7: Eager prefetch from an alternate address (weightBaseB) to confirm genuine refetch
+      val weightBaseB = 0x40000L
+      writeWords(memSim.memory, weightBaseB, packed.words)
+      writeCsr(0x0C, weightBaseB) // Update weights base address
+      val wBeforeIdle7 = weightARs
+      writeCsr(0x14, 1) // Reload from new address while idle
+      dut.clockDomain.waitSampling(200)
+      val wDeltaIdle7 = weightARs - wBeforeIdle7
+      assert(wDeltaIdle7 > 0, s"Pass 7: eager fetch from new base address should occur during idle, got $wDeltaIdle7 ARs")
+      println(f"[StreamDoubleBufferTest] Pass 7 prefetch: eager idle weight ARs from alternate base = $wDeltaIdle7")
+
+      val wBeforeActive7 = weightARs
+      runInference(7)
+      val wDeltaActive7 = weightARs - wBeforeActive7
+      assert(wDeltaActive7 == 0L, s"Pass 7: expected 0 weight AR transactions during active inference, got $wDeltaActive7")
+      println(f"[StreamDoubleBufferTest] Pass 7 inference: active weight ARs = $wDeltaActive7 (zero DDR traffic during compute)")
+
+      // Pass 8: Return to standard resident mode (CSR 0x10 = 1) with serialized reload
+      writeCsr(0x10, 1)
+      writeCsr(0x0C, weightBase)
+      writeCsr(0x14, 1)
+      val wBefore8 = weightARs
+      runInference(8)
+      val wDelta8 = weightARs - wBefore8
+      assert(wDelta8 > 0, s"Pass 8 after return to resident mode with reload: expected >0 ARs, got $wDelta8")
+      println(f"[StreamDoubleBufferTest] Pass 8 resident reload: weight ARs = $wDelta8")
+
+      // Pass 9: Steady resident state resumes — zero weight ARs verified
+      val wBefore9 = weightARs
+      runInference(9)
+      val wDelta9 = weightARs - wBefore9
+      assert(wDelta9 == 0L, s"Pass 9: expected 0 weight AR transactions in resumed residency, got $wDelta9")
+      println(f"[StreamDoubleBufferTest] Pass 9 steady resident: weight ARs = $wDelta9 (zero DDR traffic resumed)")
+
+      println("[StreamDoubleBufferTest] All residency, reload and eager prefetch contract checks PASSED cleanly!")
     }
   }
 
