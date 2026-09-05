@@ -130,7 +130,7 @@ def run_all_tests(
         sys.stdout.flush()
         
         test_start = time.time()
-        cmd = [str(mill_bin), "spinalML.test.testOnly", test_fqcn]
+        cmd = [str(mill_bin), "--no-server", "--disable-ticker", "spinalML.test.testOnly", test_fqcn]
         
         try:
             res = subprocess.run(

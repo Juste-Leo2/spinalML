@@ -41,7 +41,7 @@ def run_mill(test_class, dtype_filter, toplevel):
         except OSError:
             pass
 
-    cmd = mill_cmd + ["spinalML.test.testOnly", f"{test_class}", "--", "-z", dtype_filter]
+    cmd = mill_cmd + ["--no-server", "--disable-ticker", "spinalML.test.testOnly", f"{test_class}", "--", "-z", dtype_filter]
     
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
