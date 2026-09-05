@@ -111,7 +111,7 @@ def run_all_formal_tests(
         sys.stdout.flush()
         
         spec_start = time.time()
-        cmd = [str(mill_bin), "spinalML.test.runMain", spec_fqcn]
+        cmd = [str(mill_bin), "--no-server", "--disable-ticker", "spinalML.test.runMain", spec_fqcn]
         
         try:
             res = subprocess.run(
