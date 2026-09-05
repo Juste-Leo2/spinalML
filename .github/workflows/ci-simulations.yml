@@ -3,7 +3,24 @@ name: CI - Hardware & Software Verification
 on:
   push:
     branches: [ "main" ] 
-  workflow_dispatch: 
+  workflow_dispatch:
+    inputs:
+      test_simulations:
+        description: "1. ScalaTest Simulations (75 Suites)"
+        type: boolean
+        default: true
+      test_universal:
+        description: "2. Universal Bit-Exact SoC Tests"
+        type: boolean
+        default: true
+      test_formal:
+        description: "3. SymbiYosys Formal Proofs (56 Suites)"
+        type: boolean
+        default: true
+      test_python:
+        description: "4. Python Co-Simulations (Pytest)"
+        type: boolean
+        default: true
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -15,6 +32,7 @@ jobs:
   # =========================================================================
   simulation-tests:
     name: ScalaTest Dynamic Simulations
+    if: ${{ github.event_name == 'push' || inputs.test_simulations == true || inputs.test_simulations == 'true' }}
     runs-on: [self-hosted, arm64, radxa]
     env:
       COURSIER_JVM: system
@@ -73,6 +91,11 @@ jobs:
   universal-tests:
     name: Universal Bit-Exact SoC Simulations
     needs: [simulation-tests]
+    if: |
+      always() &&
+      (github.event_name == 'push' || inputs.test_universal == true || inputs.test_universal == 'true') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: [self-hosted, arm64, radxa]
     env:
       COURSIER_JVM: system
@@ -127,7 +150,12 @@ jobs:
   # =========================================================================
   formal-proofs:
     name: SymbiYosys Formal Proofs
-    needs: [universal-tests]
+    needs: [simulation-tests, universal-tests]
+    if: |
+      always() &&
+      (github.event_name == 'push' || inputs.test_formal == true || inputs.test_formal == 'true') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: [self-hosted, arm64, radxa]
     env:
       COURSIER_JVM: system
@@ -166,7 +194,12 @@ jobs:
   # =========================================================================
   python-tests:
     name: Python Hardware Co-Simulations
-    needs: [formal-proofs]
+    needs: [simulation-tests, universal-tests, formal-proofs]
+    if: |
+      always() &&
+      (github.event_name == 'push' || inputs.test_python == true || inputs.test_python == 'true') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: [self-hosted, arm64, radxa]
     env:
       COURSIER_JVM: system
