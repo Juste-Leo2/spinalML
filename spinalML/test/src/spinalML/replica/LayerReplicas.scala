@@ -291,4 +291,176 @@ object LayerReplicas {
       }
     }
   }
+
+  // --- 1D Average Pooling ---
+  def avgPool1D(input: Array[Array[F]], poolSize: Int, stride: Int, expBits: Int, mantBits: Int): Array[Array[F]] = {
+    val l = input.length; val c = input(0).length
+    val lOut = (l - poolSize) / stride + 1
+    val out = Array.ofDim[F](lOut, c)
+    val shift = Math.round(Math.log(poolSize) / Math.log(2)).toInt
+
+    for (pos <- 0 until lOut; ch <- 0 until c) {
+      val nodes = for (k <- 0 until poolSize) yield input(pos * stride + k)(ch)
+      val acc = tree(nodes, expBits, mantBits)
+      val shiftedExp = acc.e - shift
+      out(pos)(ch) = if (shiftedExp <= 0 || acc.e == 0) PZERO else F(acc.s, shiftedExp, acc.m)
+    }
+    out
+  }
+
+  def avgPool2DInt(input: Array[Array[Array[Long]]], poolSize: Int, stride: Int): Array[Array[Array[Long]]] = {
+    val c = input.length; val h = input(0).length; val w = input(0)(0).length
+    val hOut = (h - poolSize) / stride + 1
+    val wOut = (w - poolSize) / stride + 1
+    val out = Array.ofDim[Long](c, hOut, wOut)
+    val shift = Math.round(Math.log(poolSize * poolSize) / Math.log(2)).toInt
+
+    for (i <- 0 until c; y <- 0 until hOut; x <- 0 until wOut) {
+      var acc = 0L
+      for (r <- 0 until poolSize; k <- 0 until poolSize) {
+        acc += input(i)(y * stride + r)(x * stride + k)
+      }
+      out(i)(y)(x) = acc >> shift
+    }
+    out
+  }
+
+  def avgPool1DInt(input: Array[Array[Long]], poolSize: Int, stride: Int): Array[Array[Long]] = {
+    val l = input.length; val c = input(0).length
+    val lOut = (l - poolSize) / stride + 1
+    val out = Array.ofDim[Long](lOut, c)
+    val shift = Math.round(Math.log(poolSize) / Math.log(2)).toInt
+
+    for (pos <- 0 until lOut; ch <- 0 until c) {
+      var acc = 0L
+      for (k <- 0 until poolSize) {
+        acc += input(pos * stride + k)(ch)
+      }
+      out(pos)(ch) = acc >> shift
+    }
+    out
+  }
+
+  // --- Non-linear Activations (Sigmoid / Tanh) ---
+  def sigmoid(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
+    val bitWidth = expBits + mantBits + 1
+    if (bitWidth <= 8) {
+      val valFn = spinalML.utils.MathLUTs.floatValFn(expBits, mantBits)
+      val encFn = spinalML.utils.MathLUTs.floatEncodeFn(expBits, mantBits)
+      input.map { f =>
+        val negF = F(!f.s, f.e, f.m)
+        val negBits = (if (negF.s) 1 << (expBits + mantBits) else 0) | (negF.e << mantBits) | negF.m
+        val negReal = valFn(negBits)
+        val expReal = Math.exp(negReal)
+        val expEnc = encFn(expReal).toInt
+        val expF = F((expEnc >> (expBits + mantBits) & 1) == 1, (expEnc >> mantBits) & ((1 << expBits) - 1), expEnc & ((1 << mantBits) - 1))
+        val oneF = fromDouble(1.0, expBits, mantBits)
+        val addF = fadd(expF, oneF, expBits, mantBits)
+        val addBits = (if (addF.s) 1 << (expBits + mantBits) else 0) | (addF.e << mantBits) | addF.m
+        val addReal = valFn(addBits)
+        val recReal = if (addReal == 0.0) 0.0 else 1.0 / addReal
+        val recEnc = encFn(recReal).toInt
+        F((recEnc >> (expBits + mantBits) & 1) == 1, (recEnc >> mantBits) & ((1 << expBits) - 1), recEnc & ((1 << mantBits) - 1))
+      }
+    } else {
+      input.map { f =>
+        val d = decode(f, expBits, mantBits)
+        val s = 1.0 / (1.0 + math.exp(-d))
+        fromDouble(s, expBits, mantBits)
+      }
+    }
+  }
+
+  def sigmoidInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
+    val valFn = spinalML.utils.MathLUTs.intValFn(bitWidth)
+    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth)
+    val minVal = -(1L << (bitWidth - 1))
+    val maxVal = (1L << (bitWidth - 1)) - 1
+    input.map { v =>
+      val neg = math.max(minVal, -v)
+      val expReal = Math.exp(neg.toDouble)
+      val expBits = encFn(expReal).toLong
+      val expSigned = if (expBits >= (1L << (bitWidth - 1))) expBits - (1L << bitWidth) else expBits
+      val addVal = math.min(maxVal, expSigned + 1)
+      val recReal = if (addVal == 0) 0.0 else 1.0 / addVal.toDouble
+      val recBits = encFn(recReal).toLong
+      if (recBits >= (1L << (bitWidth - 1))) recBits - (1L << bitWidth) else recBits
+    }
+  }
+
+  def tanh(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
+    val two = fromDouble(2.0, expBits, mantBits)
+    val minusOne = fromDouble(-1.0, expBits, mantBits)
+    val x2 = input.map(f => fmul(f, two, expBits, mantBits))
+    val sig = sigmoid(x2, expBits, mantBits)
+    sig.map(s => fadd(fmul(s, two, expBits, mantBits), minusOne, expBits, mantBits))
+  }
+
+  def tanhInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
+    val minVal = -(1L << (bitWidth - 1))
+    val maxVal = (1L << (bitWidth - 1)) - 1
+    val mask = if (bitWidth >= 64) -1L else (1L << bitWidth) - 1
+    input.map { v =>
+      val x2 = (v * 2) & mask
+      val x2Signed = if (bitWidth < 64 && (x2 & (1L << (bitWidth - 1))) != 0) x2 - (1L << bitWidth) else x2
+      val sig = sigmoidInt(Seq(x2Signed), bitWidth).head
+      val twice = math.max(minVal, math.min(maxVal, 2 * sig))
+      math.max(minVal, math.min(maxVal, twice - 1))
+    }
+  }
+
+  // --- Layer Normalization 1D ---
+  def layerNorm1D(
+    input: Seq[F],
+    channels: Int,
+    gamma: Seq[F],
+    beta: Seq[F],
+    expBits: Int,
+    mantBits: Int
+  ): Seq[F] = {
+    require(input.length % channels == 0, "LayerNorm1D input length must be multiple of channels")
+    val logN = Math.round(Math.log(channels) / Math.log(2)).toInt
+    val seqLen = input.length / channels
+    val out = ArrayBuffer[F]()
+
+    def divN(f: F): F = {
+      val expSInt = f.e - logN
+      if (f.e == 0 || expSInt <= 0) PZERO
+      else F(f.s, expSInt, f.m)
+    }
+
+    for (t <- 0 until seqLen) {
+      val row = input.slice(t * channels, (t + 1) * channels)
+      val sumX = tree(row, expBits, mantBits)
+      val mean = divN(sumX)
+
+      val diffs = row.map(x => fadd(x, F(!mean.s, mean.e, mean.m), expBits, mantBits))
+      val sqDiffs = diffs.map(d => fmul(d, d, expBits, mantBits))
+      val sumSq = tree(sqDiffs, expBits, mantBits)
+      val variance = divN(sumSq)
+
+      val varDouble = decode(variance, expBits, mantBits)
+      val rsqrtVal = if (varDouble <= 0) PZERO else fromDouble(1.0 / math.sqrt(varDouble), expBits, mantBits)
+
+      for (ch <- 0 until channels) {
+        val g = if (ch < gamma.length) gamma(ch) else fromDouble(1.0, expBits, mantBits)
+        val b = if (ch < beta.length) beta(ch) else PZERO
+        val norm = fmul(diffs(ch), rsqrtVal, expBits, mantBits)
+        val scaled = fmul(norm, g, expBits, mantBits)
+        out += fadd(scaled, b, expBits, mantBits)
+      }
+    }
+    out.toSeq
+  }
+
+  // --- Requantize ---
+  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int): Seq[Long] = {
+    val maxVal = (1L << (outBits - 1)) - 1
+    val minVal = -(1L << (outBits - 1))
+    input.map { v =>
+      val shifted = v >> shift
+      math.max(minVal, math.min(maxVal, shifted))
+    }
+  }
 }
+

@@ -33,4 +33,31 @@ object ActivationHandlers {
     }
     (curShape, nextTensor)
   }
+
+  def evalSigmoid(
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int]
+  ): (Seq[Int], ReplicaTensor) = {
+    val nextTensor: ReplicaTensor = curTensor match {
+      case ft: FloatTensor =>
+        FloatTensor(curShape, LayerReplicas.sigmoid(ft.asFloats, ft.expBits, ft.mantBits), ft.expBits, ft.mantBits)
+      case it: IntTensor =>
+        IntTensor(curShape, LayerReplicas.sigmoidInt(it.asInts, it.bitWidth), it.bitWidth)
+    }
+    (curShape, nextTensor)
+  }
+
+  def evalTanh(
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int]
+  ): (Seq[Int], ReplicaTensor) = {
+    val nextTensor: ReplicaTensor = curTensor match {
+      case ft: FloatTensor =>
+        FloatTensor(curShape, LayerReplicas.tanh(ft.asFloats, ft.expBits, ft.mantBits), ft.expBits, ft.mantBits)
+      case it: IntTensor =>
+        IntTensor(curShape, LayerReplicas.tanhInt(it.asInts, it.bitWidth), it.bitWidth)
+    }
+    (curShape, nextTensor)
+  }
 }
+

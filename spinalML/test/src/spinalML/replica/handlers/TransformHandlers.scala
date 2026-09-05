@@ -2,7 +2,7 @@
 
 package spinalML.replica.handlers
 
-import spinalML.nn.Cast
+import spinalML.nn.{Cast, Flatten, Repack, Requantize}
 import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object TransformHandlers {
@@ -49,5 +49,29 @@ object TransformHandlers {
       case ft: FloatTensor => FloatTensor(nextShape, ft.asFloats, ft.expBits, ft.mantBits)
     }
     (nextShape, nextTensor)
+  }
+
+  def evalRequantize(
+    rq: Requantize,
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int]
+  ): (Seq[Int], ReplicaTensor) = {
+    val outBits = rq.targetType().getBitsWidth
+    val nextTensor: ReplicaTensor = curTensor match {
+      case it: IntTensor =>
+        val req = LayerReplicas.requantizeInt(it.asInts, rq.shift, outBits)
+        IntTensor(curShape, req, outBits)
+      case _ =>
+        throw new UnsupportedOperationException("Requantize is supported in integer domain only")
+    }
+    (curShape, nextTensor)
+  }
+
+  def evalRepack(
+    rp: Repack,
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int]
+  ): (Seq[Int], ReplicaTensor) = {
+    (curShape, curTensor)
   }
 }

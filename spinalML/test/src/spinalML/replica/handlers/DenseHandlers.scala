@@ -2,7 +2,7 @@
 
 package spinalML.replica.handlers
 
-import spinalML.nn.{BatchNorm1D, Linear}
+import spinalML.nn.{BatchNorm1D, LayerNorm1D, Linear}
 import spinalML.replica.HWArithmetic._
 import spinalML.replica.WeightMemoryLayout.LayerWeightInfo
 import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
@@ -65,6 +65,20 @@ object DenseHandlers {
     val gamma = wInfo.weightValues.take(feat)
     val beta = wInfo.biasValues.take(feat)
     val out = LayerReplicas.batchNorm1D(ft.asFloats, gamma, beta, ft.expBits, ft.mantBits)
+    (curShape, FloatTensor(curShape, out, ft.expBits, ft.mantBits))
+  }
+
+  def evalLayerNorm1D(
+    ln: LayerNorm1D,
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int],
+    wInfo: LayerWeightInfo
+  ): (Seq[Int], ReplicaTensor) = {
+    val feat = ln.features
+    val ft = curTensor.asInstanceOf[FloatTensor]
+    val gamma = wInfo.weightValues.take(feat)
+    val beta = wInfo.biasValues.take(feat)
+    val out = LayerReplicas.layerNorm1D(ft.asFloats, feat, gamma, beta, ft.expBits, ft.mantBits)
     (curShape, FloatTensor(curShape, out, ft.expBits, ft.mantBits))
   }
 }

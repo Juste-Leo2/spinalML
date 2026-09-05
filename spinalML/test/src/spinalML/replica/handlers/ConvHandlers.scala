@@ -88,8 +88,39 @@ object ConvHandlers {
         val flat = ArrayBuffer[F]()
         for (pos <- convOut.indices; ch <- 0 until outC) flat += convOut(pos)(ch)
         FloatTensor(nextShape, flat.toSeq, ft.expBits, ft.mantBits)
-      case _: IntTensor =>
-        throw new UnsupportedOperationException("Conv1D in int domain not supported")
+      case it: IntTensor =>
+        val arr2D = Array.ofDim[Long](l, inC)
+        var idx = 0
+        val raw = it.asInts
+        for (pos <- 0 until l; ch <- 0 until inC) {
+          arr2D(pos)(ch) = if (idx < raw.length) raw(idx) else 0L
+          idx += 1
+        }
+        val outBits = if (wInfo.biasDtype != null) wInfo.biasDtype().getBitsWidth else it.bitWidth
+        def wrap(v: Long): Long = {
+          if (outBits >= 64) v
+          else {
+            val mask = (1L << outBits) - 1
+            val unsigned = v & mask
+            if ((unsigned & (1L << (outBits - 1))) != 0) unsigned - (1L << outBits) else unsigned
+          }
+        }
+        val convW = (0 until outC).map(o => wInfo.weightInts.slice(o * kElems, (o + 1) * kElems))
+        val convB = (0 until outC).map(o => if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L)
+        val lOut = l - kSize + 1
+        val flat = ArrayBuffer[Long]()
+        for (pos <- 0 until lOut; cOut <- 0 until outC) {
+          var acc = convB(cOut)
+          var wIdx = 0
+          for (k <- 0 until kSize; cIn <- 0 until inC) {
+            val inVal = arr2D(pos + k)(cIn)
+            val wVal = convW(cOut)(wIdx)
+            wIdx += 1
+            acc += inVal * wVal
+          }
+          flat += wrap(acc)
+        }
+        IntTensor(nextShape, flat.toSeq, outBits)
     }
     (nextShape, nextTensor)
   }
