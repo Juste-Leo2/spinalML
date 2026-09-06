@@ -327,4 +327,108 @@ object Float {
     
     c
   }
+
+  /**
+   * Negate a FloatML value (sign flip). Zero preserved as positive.
+   */
+  def neg(a: FloatML): FloatML = {
+    val c = FloatML(a.expBits, a.mantBits)
+    c.sign := a.sign && (a.exponent =/= 0)
+    c.exponent := a.exponent
+    c.mantissa := a.mantissa
+    c
+  }
+
+  /**
+   * Exact runtime up-widening of a FloatML into a wider format
+   * (mantBits can only grow; exponent bias is re-based). NaN/Inf payloads
+   * are preserved: exponent 0 stays zero, exponent all-ones stays all-ones.
+   */
+  def widen(a: FloatML, outExpBits: Int, outMantBits: Int): FloatML = {
+    require(outMantBits >= a.mantBits, "widen requires outMantBits >= in.mantBits")
+    require(outExpBits >= a.expBits, "widen requires outExpBits >= in.expBits")
+    val c = FloatML(outExpBits, outMantBits)
+    val biasDelta = ((1 << (outExpBits - 1)) - 1) - a.bias
+
+    c.sign := a.sign
+    // The fraction (1.m) stays normalized in [1, 2): widen it by
+    // left-justifying, NOT by LSB-resize (which would place m at the least
+    // significant bits and collapse 1.125 => 1.0 + 2^-23).
+    c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
+
+    val expSInt = a.exponent.intoSInt.resize(outExpBits + 2 bits) + biasDelta
+    when(a.exponent === 0) {
+      c.exponent := 0
+    } elsewhen(expSInt >= ((1 << outExpBits) - 1)) {
+      c.exponent := ((1 << outExpBits) - 1)
+      c.mantissa := 0
+    } otherwise {
+      c.exponent := expSInt.asUInt.resized
+    }
+    c
+  }
+
+  /**
+   * Runtime round-to-nearest-even of a FloatML into a narrower format
+   * (expBits not necessarily smaller, mantBits can shrink). Mirrors the
+   * golden model's dtype.from_float rounding: mantissa overflow carries
+   * into the exponent, underflow yields zero, overflow saturates to
+   * inf-encoding (exponent all-ones, mantissa zero).
+   */
+  def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int): FloatML = {
+    val c = FloatML(outExpBits, outMantBits)
+    val biasDelta = ((1 << (outExpBits - 1)) - 1) - a.bias
+
+    val aZero = a.exponent === 0 && a.mantissa === 0
+
+    when(aZero) {
+      c.sign := False
+      c.exponent := 0
+      c.mantissa := 0
+    } otherwise {
+      c.sign := a.sign
+      if (a.mantBits > outMantBits) {
+        val drop = a.mantBits - outMantBits
+        val mantExt = (B"1" ## a.mantissa).asUInt           // hidden 1 + mantBits
+        val kept = mantExt(a.mantBits downto drop)          // outMantBits + 1 bits
+        val guard = mantExt(drop - 1)
+        val sticky = mantExt(drop - 2 downto 0) =/= 0
+
+        val roundUp = guard && (sticky || kept.lsb)
+        val mantRnd = kept +^ roundUp.asUInt
+        val mantOv = mantRnd.msb
+
+        val expSInt = a.exponent.intoSInt.resize(a.expBits + 4 bits) +
+          biasDelta +
+          mantOv.asUInt.intoSInt.resized
+
+        when(expSInt >= ((1 << outExpBits) - 1)) {
+          c.exponent := ((1 << outExpBits) - 1)
+          c.mantissa := 0
+        } elsewhen(expSInt <= 0) {
+          c.exponent := 0
+          c.mantissa := 0
+          c.sign := False
+        } otherwise {
+          c.exponent := expSInt.asUInt.resized
+          c.mantissa := Mux(mantOv, U(0, outMantBits bits), mantRnd(outMantBits - 1 downto 0))
+        }
+      } else  {
+        // Exact widening path: fraction stays normalized, left-justified.
+        c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
+        val expSInt = a.exponent.intoSInt.resize(a.expBits + 4 bits) + biasDelta
+        when(expSInt >= ((1 << outExpBits) - 1)) {
+          c.exponent := ((1 << outExpBits) - 1)
+          c.mantissa := 0
+        } elsewhen(expSInt <= 0) {
+          c.exponent := 0
+          c.mantissa := 0
+          c.sign := False
+        } otherwise {
+          c.exponent := expSInt.asUInt.resized
+        }
+      }
+    }
+    c
+  }
 }

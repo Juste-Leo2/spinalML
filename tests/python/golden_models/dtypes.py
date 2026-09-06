@@ -79,6 +79,7 @@ class FloatML:
 FP4_E2M1 = FloatML(2, 1)
 FP8_E4M3 = FloatML(4, 3)
 BF16 = FloatML(8, 7)
+FP32 = FloatML(8, 23)
 
 class SIntML:
     def __init__(self, bit_width: int):

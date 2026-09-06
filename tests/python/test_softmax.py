@@ -6,7 +6,7 @@ import pytest
 import os
 import numpy as np
 
-from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
+from golden_models.dtypes import I8, FP8_E4M3, I16, BF16, FP32
 from golden_models.ops import exp, pwl_exp_int, pwl_exp_float
 from golden_models.ops import pwl_reciprocal_int, pwl_reciprocal_float
 from golden_models.ops import floatml_add, floatml_mul, build_adder_tree_hw
@@ -60,17 +60,58 @@ def softmax_hw(val_arr, dtype):
         exp_vals.append(e_val)
         
     # 4. Adder Tree (pairwise, odd tail passthrough — matches Softmax1D's
-    # buildPipelinedTree, including non-power-of-2 channels). Float path only:
-    # the golden tree takes raw ints for the int path while exp outputs here
-    # are floats; the int sums stay sequential (exact for the test vectors).
+    # buildPipelinedTree, including non-power-of-2 channels). Since Phase 2,
+    # the HW accumulates in a wide format: FP32 tree for wide floats (single
+    # rounding to the dtype at the reciprocal input), exact int sums for
+    # ints, and an exact integer block-float sum for narrow floats (FP8),
+    # all saturating/normalizing once at the reciprocal input.
     if is_float:
-        sum_val = build_adder_tree_hw(exp_vals, is_float, dtype)
+        if dtype.mant_bits <= 4:
+            # Narrow float: exact int block-float (fixed ref: exp field 1 = LSB)
+            ints = []
+            mant_b, exp_b = dtype.mant_bits, dtype.exp_bits
+            for e in exp_vals:
+                eB = dtype.from_float(e)
+                ef = (eB >> mant_b) & ((1 << exp_b) - 1)
+                mf = eB & ((1 << mant_b) - 1)
+                if ef == 0:
+                    ints.append(0)
+                else:
+                    ints.append(((1 << mant_b) | mf) << (ef - 1))
+            total = sum(ints)
+            if total == 0:
+                sum_bits = 0
+            else:
+                p = total.bit_length() - 1
+                if p - mant_b + 1 > (1 << exp_b) - 1:
+                    sum_bits = ((1 << exp_b) - 1) << mant_b  # Inf
+                else:
+                    raw = total & ((1 << p) - 1)
+                    if p > mant_b:
+                        mantv = (raw >> (p - mant_b))
+                        gbit = (total >> (p - mant_b - 1)) & 1
+                        stit = (total & ((1 << (p - mant_b - 1)) - 1)) != 0
+                    else:
+                        mantv = raw << (mant_b - p)
+                        gbit, stit = 0, False
+                    manti = mantv + (1 if (gbit and (mantv & 1 or stit)) else 0)
+                    if manti >= (1 << mant_b):
+                        manti = 0
+                        p += 1
+                    exp_f = p - mant_b + 1
+                    if exp_f > (1 << exp_b) - 1:
+                        sum_bits = ((1 << exp_b) - 1) << mant_b  # Inf
+                    else:
+                        sum_bits = (exp_f << mant_b) | manti
+            sum_val = dtype.to_float(sum_bits)
+        else:
+            sum_acc = build_adder_tree_hw(exp_vals, True, FP32)
+            sum_val = dtype.to_float(dtype.from_float(sum_acc))
     else:
-        sum_val = exp_vals[0]
-        for i in range(1, len(exp_vals)):
-            sum_val = dtype.to_float(dtype.from_float(sum_val + exp_vals[i]))
-            
-    # 5. Reciprocal HW approximation
+        sum_val = float(sum(exp_vals))
+        
+    # 5. Reciprocal HW approximation (ROM mantissa + exponent algebra;
+    # Newton refinement is not yet enabled in the HW: phase 2 refinement TBD)
     if is_float:
         if bit_width <= 8:
             r_bits = pwl_reciprocal_float(sum_val, dtype, index_bits=8)
@@ -85,6 +126,10 @@ def softmax_hw(val_arr, dtype):
         else:
             r_bits = pwl_reciprocal_int(sum_val, bit_width, index_bits=8)
             r_val = dtype.to_float(r_bits)
+
+    if os.environ.get("DEBUG_MATH") == "1":
+        print(f"DBGEXP {val_arr} exp = {[dtype.to_float(dtype.from_float(e)) for e in exp_vals]}")
+        print(f"DBGSUM {val_arr} sum_dtype = {sum_val} recip = {r_val} (bits {r_bits})")
             
     # 6. Final Mul
     final_vals = []
@@ -153,8 +198,8 @@ async def cocotb_softmax_bf16(dut):
 
 @cocotb.test()
 async def cocotb_softmax_i8_c10(dut):
-    # Vectors kept with sum(exp) < 128: the int tree add wraps at 8 bits while
-    # the golden saturates via from_float, so dominant/uniform rows only.
+    # 10 channels: the HW sum now accumulates exactly in a wide int then
+    # saturates once (no per-node wrap) — the golden mirrors this.
     def expected_fn(val_arr):
         return softmax_hw(val_arr, I8)
     await run_softmax_test(dut, "Softmax", "I8", I8, [

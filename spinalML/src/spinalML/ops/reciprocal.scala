@@ -37,7 +37,6 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
     val expBits = fType.expBits
     val mantBits = fType.mantBits
     val bias = fType.bias
-    
     // LUT for mantissa: maps 1.M to 2 / 1.M
     // The mantissa has `mantBits`. M ranges from 0 to (1<<mantBits)-1.
     val mantLuts = for (i <- 0 until lanes) yield {
@@ -58,7 +57,7 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
       val x = io.a.stream.payload(i).asInstanceOf[FloatML]
       val isZero = x.exponent === 0
       val mantIsZero = x.mantissa === 0
-      
+
       val readMant = mantLuts(i).readSync(x.mantissa, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)
@@ -87,7 +86,7 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
         outX.exponent := regNewExp
         outX.mantissa := readMant.asUInt
       }
-      
+
       outPayload(i).assignFrom(outX.asInstanceOf[T])
     }
     
