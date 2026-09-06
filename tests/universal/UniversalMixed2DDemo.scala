@@ -27,8 +27,9 @@ case class UniversalMixed2DDemo(
     AvgPool2D(poolSize = 2, stride = 2),
     Cast(targetType = FP8_E4M3()),
     Flatten(),
-    Linear(inFeatures = 8, outFeatures = 2,
-      customWeightType = Some(FP8_E4M3()))
+    Linear(inFeatures = 8, outFeatures = 10,
+      customWeightType = Some(FP8_E4M3())),
+    Softmax()
   ),
   axiConfig = axiConfig
 )

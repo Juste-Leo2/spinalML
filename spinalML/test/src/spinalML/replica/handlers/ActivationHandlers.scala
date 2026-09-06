@@ -59,5 +59,25 @@ object ActivationHandlers {
     }
     (curShape, nextTensor)
   }
+
+  def evalSoftmax(
+    curTensor: ReplicaTensor,
+    curShape: Seq[Int]
+  ): (Seq[Int], ReplicaTensor) = {
+    val nextTensor: ReplicaTensor = curTensor match {
+      case ft: FloatTensor =>
+        val (seqLen, channels) = curShape match {
+          case Seq(s, c)   => (s, c)
+          case Seq(c)      => (1, c)
+          case other       => throw new UnsupportedOperationException(s"evalSoftmax: unsupported shape $other")
+        }
+        require(ft.asFloats.length == seqLen * channels, s"evalSoftmax: tensor size mismatch ${ft.asFloats.length} vs ${seqLen * channels}")
+        val out = ft.asFloats.grouped(channels).flatMap(row => LayerReplicas.softmax(row.toSeq, ft.expBits, ft.mantBits)).toSeq
+        FloatTensor(curShape, out, ft.expBits, ft.mantBits)
+      case it: IntTensor =>
+        throw new UnsupportedOperationException("evalSoftmax: int-domain softmax not yet supported in the universal replica")
+    }
+    (curShape, nextTensor)
+  }
 }
 

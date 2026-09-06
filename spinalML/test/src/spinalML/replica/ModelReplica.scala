@@ -60,7 +60,7 @@ object ModelReplica {
     case rp: Repack      => TransformHandlers.evalRepack(rp, curTensor, curShape)
     case ad: Add         => DagHandlers.evalAdd(ad, curShape, nodeOutputs)
     case cc: Concat      => DagHandlers.evalConcat(cc, curShape, nodeOutputs)
-    case _: Softmax      => (curShape, curTensor) // Pass-through for logits comparison
+    case _: Softmax      => ActivationHandlers.evalSoftmax(curTensor, curShape)
     case other           =>
       println(s"[Warning] Layer $other skipped in replica trace.")
       (curShape, curTensor)

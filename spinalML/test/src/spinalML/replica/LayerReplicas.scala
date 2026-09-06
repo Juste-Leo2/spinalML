@@ -409,6 +409,73 @@ object LayerReplicas {
     }
   }
 
+  // --- Softmax (mirror of Softmax1D) ---
+  /** Software mirror of Softmax1D for narrow floats (bitWidth <= 8, e.g. FP8):
+    * max (dtype) -> sub (dtype) -> exp LUT -> exact int block-float sum (fixed
+    * reference exponent) -> normalize RNE -> reciprocal LUT -> final mul. */
+  def softmax(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
+    val bitWidth = expBits + mantBits + 1
+    require(bitWidth <= 8, "Universal replica softmax currently supports only <= 8-bit floats")
+    val valFn = spinalML.utils.MathLUTs.floatValFn(expBits, mantBits)
+    val encFn = spinalML.utils.MathLUTs.floatEncodeFn(expBits, mantBits)
+
+    def bitsOf(f: F): Int = (if (f.s) 1 << (expBits + mantBits) else 0) | (f.e << mantBits) | f.m
+    def fFromBits(b: Int): F = F((b >> (expBits + mantBits) & 1) == 1, (b >> mantBits) & ((1 << expBits) - 1), b & ((1 << mantBits) - 1))
+    def latEncode(real: Double): F = fFromBits(encFn(real).toInt)
+    def latDecode(f: F): Double = valFn(bitsOf(f))
+    def neg(f: F): F = F(!f.s, f.e, f.m)
+
+    // 1. Max (dtype) in hardware order = simple fold (max is commutative)
+    val maxF = input.reduce((a, b) => fmax(a, b, expBits, mantBits))
+    val negMax = neg(maxF)
+
+    // 2. Sub + 3. Exp LUT (encode of Math.exp on the LUT-decoded input)
+    val shifted = input.map(v => fadd(v, negMax, expBits, mantBits))
+    val exps = shifted.map(f => latEncode(Math.exp(latDecode(f))))
+
+    // 4. Exact integer block-float sum (fixed reference: exp field 1 = LSB)
+    val ints = exps.map { f =>
+      if (f.e == 0) 0L
+      else ((1L << mantBits) | f.m) << (f.e - 1)
+    }
+    val total = ints.sum
+    val maxE = (1 << expBits) - 1
+
+    def normalizeBlock(total: Long): F = {
+      if (total == 0) return PZERO
+      val p = 63 - java.lang.Long.numberOfLeadingZeros(total)
+      if (p - mantBits + 1 > maxE) return F(false, maxE, 0)
+      val raw = total & ((1L << p) - 1)
+      val (mantv0, gbit, stbit) =
+        if (p > mantBits) {
+          val m0 = (raw >> (p - mantBits)).toInt
+          val g0 = ((total >> (p - mantBits - 1)) & 1L) == 1
+          val s0 = (total & ((1L << (p - mantBits - 1)) - 1)) != 0
+          (m0, g0, s0)
+        } else {
+          ((raw << (mantBits - p)).toInt, false, false)
+        }
+      var manti = mantv0 + (if (gbit && ((mantv0 & 1) == 1 || stbit)) 1 else 0)
+      var pv = p
+      if (manti >= (1 << mantBits)) {
+        manti = 0
+        pv += 1
+      }
+      val expF = pv - mantBits + 1
+      if (expF > maxE) F(false, maxE, 0)
+      else F(false, expF, manti)
+    }
+    val sumF = normalizeBlock(total)
+
+    // 5. Reciprocal LUT (with ReciprocalOp divide-by-zero guard)
+    val sumReal = latDecode(sumF)
+    val recReal = 1.0 / (sumReal + (if (sumReal >= 0) 1e-9 else -1e-9))
+    val recipF = latEncode(recReal)
+
+    // 6. Final multiply per channel
+    exps.map(e => fmul(e, recipF, expBits, mantBits))
+  }
+
   // --- Layer Normalization 1D ---
   def layerNorm1D(
     input: Seq[F],
