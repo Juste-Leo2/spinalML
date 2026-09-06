@@ -64,7 +64,7 @@ object DenseHandlers {
     val ft = curTensor.asInstanceOf[FloatTensor]
     val gamma = wInfo.weightValues.take(feat)
     val beta = wInfo.biasValues.take(feat)
-    val out = LayerReplicas.batchNorm1D(ft.asFloats, gamma, beta, ft.expBits, ft.mantBits)
+    val out = LayerReplicas.batchNorm1D(ft.asFloats, gamma, beta, ft.expBits, ft.mantBits, feat)
     (curShape, FloatTensor(curShape, out, ft.expBits, ft.mantBits))
   }
 

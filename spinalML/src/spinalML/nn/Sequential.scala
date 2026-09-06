@@ -614,10 +614,16 @@ case class Sequential(
         spinalML.ops.add(ta, tb)
 
       case cc: Concat =>
-        val ta = inputFor(cc.a, i)
-        val tbRaw = inputFor(cc.b, i)
-        val tb = if (tbRaw.lanes != ta.lanes) repack(tbRaw, ta.lanes) else tbRaw
-        spinalML.ops.concatenate(ta, tb, 0)
+        val ta0 = inputFor(cc.a, i)
+        val tb0 = inputFor(cc.b, i)
+        // ConcatenateAxis0Op treats shape.head as the per-axis cell count, each
+        // beat carrying `lanes` elements. Repack both inputs to one full row
+        // per beat so the cell count == the streamed beat count (bit-exact
+        // against the universal replica concat).
+        val rowLanes = ta0.shape.drop(1).product
+        val ta = if (ta0.lanes != rowLanes) repack(ta0, rowLanes) else ta0
+        val tb = if (tb0.lanes != rowLanes) repack(tb0, rowLanes) else tb0
+        repack(spinalML.ops.concatenate(ta, tb, 0), 1)
 
       case a: ClassicalAttention =>
         val seqLen = nodeShapes(i)(0)

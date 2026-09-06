@@ -13,13 +13,16 @@ case class ConcatenateAxis0Op[T <: Data](dataType: HardType[T], shapeA: Seq[Int]
   val L_A = shapeA.head
   val L_B = shapeB.head
   val L_out = L_A + L_B
-  
+
+  // The FSM counts per-axis cells (each beat carries `lanes` elements). The
+  // Sequential Concat node repacks its inputs so each beat == one concatenated
+  // cell -> shape.head == the real streamed beat count.
   val io = new Bundle {
     val a = slave(Tensor(dataType, shapeA, lanes))
     val b = slave(Tensor(dataType, shapeB, lanes))
     val c = master(Tensor(dataType, Seq(L_out) ++ shapeA.tail, lanes))
   }
-  
+
   val countA = Counter(L_A)
   val countB = Counter(L_B)
   

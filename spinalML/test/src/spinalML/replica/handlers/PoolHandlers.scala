@@ -93,17 +93,33 @@ object PoolHandlers {
     val l = curShape(0); val c = if (curShape.length >= 2) curShape(1) else 1
     val lOut = (l - p.poolSize) / p.stride + 1
     val nextShape = Seq(lOut, c)
-    val ft = curTensor.asInstanceOf[FloatTensor]
-    val arr2D = Array.ofDim[F](l, c)
-    var idx = 0
-    for (pos <- 0 until l; ch <- 0 until c) {
-      arr2D(pos)(ch) = if (idx < ft.asFloats.length) ft.asFloats(idx) else PZERO
-      idx += 1
+
+    val nextTensor: ReplicaTensor = curTensor match {
+      case it: IntTensor =>
+        val raw = it.asInts
+        val pooled = Array.ofDim[Long](lOut, c)
+        for (pos <- 0 until lOut; ch <- 0 until c) {
+          var maxVal = raw(pos * p.stride * c + ch)
+          for (k <- 0 until p.poolSize) {
+            maxVal = math.max(maxVal, raw((pos * p.stride + k) * c + ch))
+          }
+          pooled(pos)(ch) = maxVal
+        }
+        IntTensor(nextShape, pooled.flatten.toSeq, it.bitWidth)
+
+      case ft: FloatTensor =>
+        val arr2D = Array.ofDim[F](l, c)
+        var idx = 0
+        for (pos <- 0 until l; ch <- 0 until c) {
+          arr2D(pos)(ch) = if (idx < ft.asFloats.length) ft.asFloats(idx) else PZERO
+          idx += 1
+        }
+        val pooled = LayerReplicas.maxPool1D(arr2D, p.poolSize, p.stride, ft.expBits, ft.mantBits)
+        val flat = ArrayBuffer[F]()
+        for (pos <- pooled.indices; ch <- 0 until c) flat += pooled(pos)(ch)
+        FloatTensor(nextShape, flat.toSeq, ft.expBits, ft.mantBits)
     }
-    val pooled = LayerReplicas.maxPool1D(arr2D, p.poolSize, p.stride, ft.expBits, ft.mantBits)
-    val flat = ArrayBuffer[F]()
-    for (pos <- pooled.indices; ch <- 0 until c) flat += pooled(pos)(ch)
-    (nextShape, FloatTensor(nextShape, flat.toSeq, ft.expBits, ft.mantBits))
+    (nextShape, nextTensor)
   }
 
   def evalAvgPool1D(

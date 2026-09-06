@@ -187,9 +187,13 @@ object LayerReplicas {
   }
 
   // --- Normalizations ---
-  def batchNorm1D(input: Seq[F], gamma: Seq[F], beta: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
+  def batchNorm1D(input: Seq[F], gamma: Seq[F], beta: Seq[F], expBits: Int, mantBits: Int, features: Int = -1): Seq[F] = {
+    val feat = if (features > 0) features else gamma.length
+    require(feat > 0 && gamma.length % feat == 0 && beta.length % feat == 0,
+      s"batchNorm1D: invalid gamma/beta lengths (${gamma.length}, ${beta.length}) for features=$feat")
     input.indices.map { i =>
-      fadd(fmul(input(i), gamma(i), expBits, mantBits), beta(i), expBits, mantBits)
+      val c = i % feat
+      fadd(fmul(input(i), gamma(c), expBits, mantBits), beta(c), expBits, mantBits)
     }
   }
 
