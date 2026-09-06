@@ -116,10 +116,11 @@ def test_pytest_tap_buffer():
 
     from utils.test_layers_utils import safe_run_sim as run
     run(
-        simulator="icarus",
+        simulator="verilator",
         verilog_sources=[v_file],
         toplevel="TapBufferTestComp",
         module="test_tap_buffer",
         timescale="1ns/1ps",
-        testcase="run_tap_buffer_sim"
+        testcase="run_tap_buffer_sim",
+        extra_args=["-Wno-fatal"]
     )

@@ -273,10 +273,10 @@ async def run_ternary_test(dut, op_name, dtype_name, dtype, test_values, is_floa
     log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)
     dut._log.info(log_msg)
     log_math_line(log_msg)
-async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, edge_cases=None, details=""):
+async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floatml, expected_bits_fn, true_math_fn, n_lanes=4, edge_cases=None, details=""):
     """
-    Generic Cocotb test method for Softmax1D (lanes=4).
-    test_values is a list of 4-element tuples/lists: [(x0, x1, x2, x3), ...]
+    Generic Cocotb test method for Softmax1D (lanes=n_lanes).
+    test_values is a list of n_lanes-element tuples/lists: [(x0, x1, ...), ...]
     """
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -320,7 +320,7 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
         
         out_bits_arr = []
         out_val_arr = []
-        for i in range(4):
+        for i in range(n_lanes):
             if is_floatml:
                 out_sign = int(getattr(dut, f"io_y_stream_payload_{i}_sign").value)
                 out_exp = int(getattr(dut, f"io_y_stream_payload_{i}_exponent").value)
@@ -333,14 +333,14 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
             
         # True Math Error Logging
         true_expected_arr = true_math_fn(val_arr)
-        for i in range(4):
+        for i in range(n_lanes):
             results.append((out_val_arr[i], true_expected_arr[i]))
         
         # HW Exact Assertion
         expected_bits_arr = expected_bits_fn(val_arr)
         
         bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
-        for i in range(4):
+        for i in range(n_lanes):
             out_bits = out_bits_arr[i]
             expected_bits = expected_bits_arr[i]
             expected_hw_val = dtype.to_float(expected_bits)
@@ -350,7 +350,7 @@ async def run_softmax_test(dut, op_name, dtype_name, dtype, test_values, is_floa
                 assert out_bits == expected_bits, f"HW Mismatch for {val_arr} at index {i}: got {out_val_arr[i]} (bits {out_bits}) instead of {expected_hw_val} (bits {expected_bits})"
     
     if not details:
-        details = f"n={len(test_values) * 4}"
+        details = f"n={len(test_values) * n_lanes}"
         if edge_cases:
             details += f", edge={len(edge_cases)}"
     log_msg = format_metrics_line(op_name, dtype_name, compute_metrics([r[0] for r in results], [r[1] for r in results], is_floatml, dtype), is_floatml, details=details)

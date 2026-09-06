@@ -115,11 +115,12 @@ def test_dma_reader2d():
     
     from utils.test_layers_utils import safe_run_sim as run
     run(
-        simulator="icarus",
+        simulator="verilator",
         verilog_sources=[v_file],
         toplevel="DMAReader2DTestComp",
         module="test_dma_reader2d",
         timescale="1ns/1ps",
         testcase="run_dma_reader2d_sim",
-        sim_build="sim_build/py_dma_reader2d"
+        sim_build="sim_build/py_dma_reader2d",
+        extra_args=["-Wno-fatal"]
     )

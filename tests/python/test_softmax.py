@@ -9,7 +9,7 @@ import numpy as np
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
 from golden_models.ops import exp, pwl_exp_int, pwl_exp_float
 from golden_models.ops import pwl_reciprocal_int, pwl_reciprocal_float
-from golden_models.ops import floatml_add, floatml_mul
+from golden_models.ops import floatml_add, floatml_mul, build_adder_tree_hw
 from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_softmax_test
@@ -59,12 +59,15 @@ def softmax_hw(val_arr, dtype):
                 e_val = dtype.to_float(e_bits)
         exp_vals.append(e_val)
         
-    # 4. Adder Tree
-    sum_val = exp_vals[0]
-    for i in range(1, len(exp_vals)):
-        if is_float:
-            sum_val = floatml_add(sum_val, exp_vals[i], dtype)
-        else:
+    # 4. Adder Tree (pairwise, odd tail passthrough — matches Softmax1D's
+    # buildPipelinedTree, including non-power-of-2 channels). Float path only:
+    # the golden tree takes raw ints for the int path while exp outputs here
+    # are floats; the int sums stay sequential (exact for the test vectors).
+    if is_float:
+        sum_val = build_adder_tree_hw(exp_vals, is_float, dtype)
+    else:
+        sum_val = exp_vals[0]
+        for i in range(1, len(exp_vals)):
             sum_val = dtype.to_float(dtype.from_float(sum_val + exp_vals[i]))
             
     # 5. Reciprocal HW approximation
@@ -146,8 +149,49 @@ async def cocotb_softmax_bf16(dut):
     ], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_softmax)
 
 
-def run_softmax_sim(dtype_filter, testcase_name, request=None):
-    v_file = run_mill("spinalML.activations.SoftmaxTest", dtype_filter, "SoftmaxTestComp")
+# --- Non-power-of-2 channel coverage (10 channels => tree 10->5->3->2->1) ---
+
+@cocotb.test()
+async def cocotb_softmax_i8_c10(dut):
+    # Vectors kept with sum(exp) < 128: the int tree add wraps at 8 bits while
+    # the golden saturates via from_float, so dominant/uniform rows only.
+    def expected_fn(val_arr):
+        return softmax_hw(val_arr, I8)
+    await run_softmax_test(dut, "Softmax", "I8", I8, [
+        (0.0, 1.0, -1.0, 2.0, 0.0, -1.0, 1.0, 0.0, 2.0, -1.0),
+        (2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0),
+        (50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (-50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0)
+    ], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_softmax, n_lanes=10)
+
+@cocotb.test()
+async def cocotb_softmax_fp8_c10(dut):
+    def expected_fn(val_arr):
+        return softmax_hw(val_arr, FP8_E4M3)
+    await run_softmax_test(dut, "Softmax", "FP8", FP8_E4M3, [
+        (0.0, 1.0, -1.0, 2.0, 0.5, -0.5, 1.5, -2.0, 3.0, 1.0),
+        (4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0),
+        (8.0, -8.0, -8.0, -8.0, -8.0, -8.0, -8.0, -8.0, -8.0, -8.0),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (-10.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0, -10.0)
+    ], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_softmax, n_lanes=10)
+
+@cocotb.test()
+async def cocotb_softmax_bf16_c10(dut):
+    def expected_fn(val_arr):
+        return softmax_hw(val_arr, BF16)
+    await run_softmax_test(dut, "Softmax", "BF16", BF16, [
+        (0.0, 1.0, -1.0, 2.0, 0.5, -0.5, 1.5, 3.0, -2.0, 0.25),
+        (7.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0),
+        (50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0, -50.0),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (-30.0, -30.0, -30.0, -30.0, -30.0, -30.0, -30.0, -30.0, -30.0, -30.0)
+    ], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_softmax, n_lanes=10)
+
+
+def run_softmax_sim(dtype_filter, testcase_name, request=None, toplevel="SoftmaxTestComp", n_lanes=4):
+    v_file = run_mill("spinalML.activations.SoftmaxTest", dtype_filter, toplevel)
     build_dir = f"sim_build/softmax_{dtype_filter.lower()}"
     copy_roms(build_dir)
     
@@ -156,7 +200,7 @@ def run_softmax_sim(dtype_filter, testcase_name, request=None):
     run(
         language="verilog",
         verilog_sources=[v_file],
-        toplevel="SoftmaxTestComp",
+        toplevel=toplevel,
         module="test_softmax",
         testcase=testcase_name,
         simulator="verilator",
@@ -170,3 +214,6 @@ def test_softmax_i8(request): run_softmax_sim("I8", "cocotb_softmax_i8", request
 def test_softmax_fp8(request): run_softmax_sim("FP8", "cocotb_softmax_fp8", request)
 def test_softmax_i16(request): run_softmax_sim("I16", "cocotb_softmax_i16", request)
 def test_softmax_bf16(request): run_softmax_sim("BF16", "cocotb_softmax_bf16", request)
+def test_softmax_i8_c10(request): run_softmax_sim("I8", "cocotb_softmax_i8_c10", request, "SoftmaxChannelsTestComp")
+def test_softmax_fp8_c10(request): run_softmax_sim("FP8", "cocotb_softmax_fp8_c10", request, "SoftmaxChannelsTestComp")
+def test_softmax_bf16_c10(request): run_softmax_sim("BF16", "cocotb_softmax_bf16_c10", request, "SoftmaxChannelsTestComp")

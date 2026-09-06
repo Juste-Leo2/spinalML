@@ -20,7 +20,7 @@ uv pip install -r requirements.txt
 ```
 
 > [!NOTE]
-> SpinalHDL requires the `mill` build tool to compile Scala into Verilog. Ensure that the `./mill` script at the repository root is executable. Icarus Verilog (`sudo apt install iverilog`) and Verilator (`sudo apt install verilator`) must also be installed on your system for co-simulation.
+> SpinalHDL requires the `mill` build tool to compile Scala into Verilog. Ensure that the `./mill` script at the repository root is executable. Verilator (shipped with the `cli setup` OSS CAD Suite, or `sudo apt install verilator`) is required for all Cocotb co-simulations. Icarus Verilog (`sudo apt install iverilog`) is optional: some legacy/control-flow tests were ported from Icarus to Verilator because the suite's Icarus 14.0 build is ABI-incompatible with cocotb 1.9's VPI (undefined symbol `GpiCommonCbHdl::run_callback` on dlopen); Icarus remains usable for local development on distro-build versions (e.g. Debian 12: 12.0).
 
 ## Testing Architecture
 

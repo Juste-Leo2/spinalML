@@ -20,6 +20,19 @@ case class SoftmaxTestComp[T <: Data](dataType: HardType[T]) extends Component {
   io.y <> softmax.io.y
 }
 
+// Non-power-of-2 channel softmax: exercises the adder/max trees' odd carve-out
+// (currentLen 3 -> 2 -> 1, last element passed through, no even padding).
+case class SoftmaxOddTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val channels = 3
+  val io = new Bundle {
+    val x = slave(Tensor(dataType, Seq(1, channels), lanes = channels))
+    val y = master(Tensor(dataType, Seq(1, channels), lanes = channels))
+  }
+  val softmax = Softmax1D(dataType, channels, 1)
+  softmax.io.x <> io.x
+  io.y <> softmax.io.y
+}
+
 class SoftmaxFormal_I8 extends Component {
   val dut = FormalDut(SoftmaxTestComp(SInt(8 bits)))
 
@@ -156,6 +169,40 @@ class SoftmaxFormal_I10 extends Component {
   }
 }
 
+class SoftmaxFormal_I10_C3 extends Component {
+  val dut = FormalDut(SoftmaxOddTestComp(SInt(10 bits)))
+
+  anyseq(dut.io.x.stream.valid)
+  anyseq(dut.io.x.stream.payload)
+  anyseq(dut.io.y.stream.ready)
+
+  assumeInitial(clockDomain.isResetActive)
+  assume(dut.io.y.stream.ready)
+  assume(dut.io.x.stream.valid)
+  
+  val pastValidX = past(dut.io.x.stream.valid)
+  val pastReadyX = past(dut.io.x.stream.ready)
+  val pastPayloadX = past(dut.io.x.stream.payload)
+  when(pastValidX && !pastReadyX) {
+    assume(dut.io.x.stream.valid)
+    assume(dut.io.x.stream.payload === pastPayloadX)
+  }
+
+  val track = RegInit(False)
+  val hasChecked = RegInit(False)
+
+  val fireIn = dut.io.x.stream.valid && dut.io.x.stream.ready
+  when(fireIn && !track && !hasChecked) {
+    track := True
+  }
+
+  val fireOut = dut.io.y.stream.valid && dut.io.y.stream.ready
+  when(fireOut && track && !hasChecked) {
+    assert(dut.io.y.stream.valid, "Flow control drop")
+    hasChecked := True
+  }
+}
+
 object SoftmaxFormal {
   def main(args: Array[String]): Unit = {
     FormalConfig
@@ -193,5 +240,14 @@ object SoftmaxFormal {
       .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
       .workspacePath("formal")
       .doVerify(new SoftmaxFormal_I10, "softmax_i10")
+
+    FormalConfig
+      .withSymbiYosys
+      .withBMC(15)
+      .withTimeout(600)
+      .withDebug
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
+      .workspacePath("formal")
+      .doVerify(new SoftmaxFormal_I10_C3, "softmax_i10_c3")
   }
 }

@@ -15,9 +15,9 @@ import spinalML.dtypes._
  * 96% accuracy on the test set. Everything runs in BF16, features-last
  * convention, so the PyTorch input [1, 28, 28] becomes [28, 28, 1].
  *
- * The trained LogSoftmax head is omitted: Softmax1D requires power-of-2
- * channels (adder tree) and argmax(logits) = argmax(softmax(logits)), so the
- * raw 10 logits give the same prediction.
+ * The trained LogSoftmax head is omitted: argmax(logits) = argmax(softmax(logits)),
+ * so the raw 10 logits give the same prediction. (Softmax1D now supports any
+ * channels count since the power-of-2 requirement was lifted.)
  */
 case class Mnist(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 4),

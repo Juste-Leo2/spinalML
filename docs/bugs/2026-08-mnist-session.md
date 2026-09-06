@@ -39,6 +39,9 @@ Two data adaptations were needed (framework conventions, not bugs):
 3. The trained head is LogSoftmax over 10 classes; it is omitted because
    `Softmax1D` requires power-of-2 channels (adder tree) and
    `argmax(logits) = argmax(softmax(logits))`.
+   *Update (Sep 2026)*: the power-of-2 requirement has been lifted — the
+   max/adder trees already carried odd lengths (odd tail passthrough). A 10-class
+   softmax head (or `LogSoftmax` when the trained head matters) is now expressible.
 
 ---
 

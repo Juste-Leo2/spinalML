@@ -80,10 +80,11 @@ def test_stream_double_buffer():
     
     from utils.test_layers_utils import safe_run_sim as run
     run(
-        simulator="icarus",
+        simulator="verilator",
         verilog_sources=[v_file],
         toplevel="StreamDoubleBufferTestComp",
         module="test_stream_double_buffer",
         timescale="1ns/1ps",
-        testcase="run_double_buffer_sim"
+        testcase="run_double_buffer_sim",
+        extra_args=["-Wno-fatal"]
     )

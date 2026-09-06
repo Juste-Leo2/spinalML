@@ -9,7 +9,7 @@ import spinalML.dtypes.FloatML
 import spinalML.ops.{ExpOp, ReciprocalOp}
 
 case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
-  require(isPow2(channels), "Channels must be a power of 2 for AdderTree")
+  require(channels > 0, "channels must be >= 1")
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
     val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
