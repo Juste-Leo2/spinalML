@@ -66,7 +66,8 @@ def run_all_formal_tests(
     log_dir: Optional[Path] = None,
     dry_run: bool = False,
     timeout: int = 900,
-    verbose: bool = False
+    verbose: bool = False,
+    ci_sleep: float = 0.0
 ) -> int:
     project_root = get_project_root()
     formal_src = project_root / "spinalML" / "test" / "src" / "spinalML" / "symbolicTest"
@@ -192,6 +193,9 @@ def run_all_formal_tests(
             if fail_fast:
                 sys.stdout.flush()
                 break
+
+        if ci_sleep > 0 and idx < total_specs:
+            time.sleep(ci_sleep)
 
     total_duration = time.time() - total_start_time
     

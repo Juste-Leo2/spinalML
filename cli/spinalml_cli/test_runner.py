@@ -85,7 +85,8 @@ def run_all_tests(
     fail_fast: bool = False,
     log_dir: Optional[Path] = None,
     dry_run: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
+    ci_sleep: float = 0.0
 ) -> int:
     project_root = get_project_root()
     test_src = project_root / "spinalML" / "test" / "src"
@@ -193,6 +194,9 @@ def run_all_tests(
             if fail_fast:
                 sys.stdout.flush()
                 break
+
+        if ci_sleep > 0 and idx < total_tests:
+            time.sleep(ci_sleep)
 
     total_duration = time.time() - total_start_time
     

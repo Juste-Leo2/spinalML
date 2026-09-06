@@ -3,8 +3,23 @@
 import os
 import sys
 import random
+import time
+
+import pytest
 
 from utils.math_metrics import clear_math_log
+
+
+@pytest.fixture(autouse=True)
+def _ci_pacer():
+    """Pause before each test when SM_CI_SLEEP is set (--ci paced runs).
+
+    `cli/main.py test-all-python --ci 3` inserts a sleep between every
+    cocotb/Verilator test sequence to protect slow-SD/self-hosted runners.
+    """
+    sleep_s = float(os.environ.get("SM_CI_SLEEP", "0") or 0)
+    if sleep_s > 0:
+        time.sleep(sleep_s)
 
 
 def pytest_addoption(parser):

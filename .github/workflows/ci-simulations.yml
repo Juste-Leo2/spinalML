@@ -83,7 +83,7 @@ jobs:
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
           # Restricted to LITTLE cores (0,1,2,3) on Radxa Rock to prevent thermal/power crashes
-          taskset -c 0,1,2,3 python cli/main.py test-all -v
+          taskset -c 0,1,2,3 python cli/main.py test-all -v --ci 3
 
   # =========================================================================
   # 2. UNIVERSAL BIT-EXACT SOC SIMULATIONS
@@ -143,7 +143,7 @@ jobs:
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
-          taskset -c 0,1,2,3 python cli/main.py test tests/universal
+          taskset -c 0,1,2,3 python cli/main.py test tests/universal --ci 3
 
   # =========================================================================
   # 3. SYMBIYOSYS FORMAL VERIFICATION (56 SUITES)
@@ -187,7 +187,7 @@ jobs:
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
-          taskset -c 0,1,2,3 python cli/main.py test-all-formal -v
+          taskset -c 0,1,2,3 python cli/main.py test-all-formal -v --ci 3
 
   # =========================================================================
   # 4. PYTHON HARDWARE CO-SIMULATIONS (PYTEST)
@@ -233,4 +233,4 @@ jobs:
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           export VERILATOR_ROOT="$HOME/.spinalml_tools/oss-cad-suite/share/verilator"
           source .venv/bin/activate
-          taskset -c 0,1,2,3 python cli/main.py test-all-python -v
+          taskset -c 0,1,2,3 python cli/main.py test-all-python -v --ci 3
