@@ -105,7 +105,16 @@ object UniversalTestHarness {
 
       // Verify bit-exactness if oracle logits are provided
       expectedLogits.foreach { expected =>
-        val dev = collectedOutput.zip(expected).map { case (h, s) => math.abs(h.toDouble - s) }.max
+        val pairs = collectedOutput.toSeq.zip(expected)
+        val devs = pairs.map { case (h, s) => math.abs(h.toDouble - s) }
+        devs.zipWithIndex.foreach { case (d, i) =>
+          if (d != 0.0) {
+            val hwVal = pairs(i)._1
+            val swVal = pairs(i)._2
+            println(f"[DEV] out[$i] hw=$hwVal%9.5f sw=$swVal%9.5f dev=$d%9.6f")
+          }
+        }
+        val dev = devs.max
         assert(dev == 0.0, s"Bit-exact assertion failed: max deviation |hw - sw| = $dev")
         println(s"Bit-exact verification PASSED (deviation = 0.000).")
       }

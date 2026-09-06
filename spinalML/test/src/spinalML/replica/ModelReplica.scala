@@ -4,6 +4,7 @@ package spinalML.replica
 
 import scala.collection.mutable.ArrayBuffer
 import spinalML.nn._
+import spinalML.attention.ClassicalAttention
 import HWArithmetic._
 import handlers._
 
@@ -60,6 +61,7 @@ object ModelReplica {
     case rp: Repack      => TransformHandlers.evalRepack(rp, curTensor, curShape)
     case ad: Add         => DagHandlers.evalAdd(ad, curShape, nodeOutputs)
     case cc: Concat      => DagHandlers.evalConcat(cc, curShape, nodeOutputs)
+    case a: ClassicalAttention => AttentionHandlers.evalClassicalAttention(a, curTensor, curShape, wInfo)
     case _: Softmax      => ActivationHandlers.evalSoftmax(curTensor, curShape)
     case other           =>
       println(s"[Warning] Layer $other skipped in replica trace.")

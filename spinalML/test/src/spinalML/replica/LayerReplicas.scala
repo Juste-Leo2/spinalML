@@ -413,7 +413,22 @@ object LayerReplicas {
   /** Software mirror of Softmax1D for narrow floats (bitWidth <= 8, e.g. FP8):
     * max (dtype) -> sub (dtype) -> exp LUT -> exact int block-float sum (fixed
     * reference exponent) -> normalize RNE -> reciprocal LUT -> final mul. */
-  def softmax(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
+  def softmax(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] =
+    softmaxMaskedValues(input, expBits, mantBits, null)
+
+  /**
+   * Softmax over one row with an optional mask (mask(i) == false zeroes the
+   * contribution of channel i, i.e. the partial-sum accumulator skips it).
+   * Prefill passes mask == null; the KV-cache/causal (decoding) path reuses
+   * this core with a triangular mask while the exact integer partial-sum
+   * stays valid when key/value rows are appended incrementally.
+   */
+  def softmaxMaskedValues(input: Seq[F], expBits: Int, mantBits: Int, mask: Seq[Boolean]): Seq[F] = {
+    val values = (0 until input.length).map(i => if (mask != null && !mask(i)) PZERO else input(i))
+    softmaxCore(values, expBits, mantBits)
+  }
+
+  private def softmaxCore(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
     val bitWidth = expBits + mantBits + 1
     require(bitWidth <= 8, "Universal replica softmax currently supports only <= 8-bit floats")
     val valFn = spinalML.utils.MathLUTs.floatValFn(expBits, mantBits)
