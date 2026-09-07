@@ -138,50 +138,50 @@ def open_fpga_loader(ctx: typer.Context):
 @app.command()
 def compile(
     file: Path = typer.Argument(..., help="Path to the Scala file to compile"),
-    out: Path = typer.Option(None, "-o", "--out", help="Output directory for generated Verilog files")
+    out: Path = typer.Option(Path("rtl"), "-o", "--out", help="Output directory for generated Verilog files [default: rtl]"),
+    chain: bool = typer.Option(True, "--chain/--no-chain", help="Generate supplementary UART chain Verilog files (UartRx, UartTx, UartBridge, AxiReadMem)"),
 ):
     """
-    Compile a Scala file into Verilog by running it within the workspace module.
+    Compile a Scala file into Verilog by running it within the workspace module,
+    and generate the supplementary hardware chain files (UartRx, UartTx, UartBridge,
+    AxiReadMem) into the output directory.
     """
     import shutil
     import os
     import glob
-    
+    import re
+
     if not file.exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
         raise typer.Exit(code=1)
-        
-    import re
-    import shutil
-    import glob
-    
+
+    out.mkdir(parents=True, exist_ok=True)
+    target_dir = str(out.resolve()).replace('\\', '/')
+
     content = file.read_text(encoding="utf-8")
-    
     pkg_match = re.search(r'^\s*package\s+([\w\.]+)', content, re.MULTILINE)
     pkg = pkg_match.group(1) if pkg_match else ""
-    
     app_match = re.search(r'^\s*object\s+(\w+)\s+extends\s+App', content, re.MULTILINE)
-    
+
     workspace_src = CLI_DIR.parent / "spinalML" / "src" / "cli_temp"
-    
     if workspace_src.exists():
         shutil.rmtree(workspace_src)
     workspace_src.mkdir(parents=True, exist_ok=True)
-    
+
     # Check if file is already in spinalML/src
     spinalml_src = CLI_DIR.parent / "spinalML" / "src"
     try:
         is_internal = file.resolve().is_relative_to(spinalml_src.resolve())
     except AttributeError:
         is_internal = str(file.resolve()).startswith(str(spinalml_src.resolve()))
-        
+
     if not is_internal:
         shutil.copy(file, workspace_src / file.name)
         typer.echo(f"Copied external file {file.name} to temporary workspace.")
 
     full_main = ""
     auto_generated = False
-    
+
     if app_match:
         main_class = app_match.group(1)
         full_main = f"{pkg}.{main_class}" if pkg else main_class
@@ -193,10 +193,9 @@ def compile(
             typer.echo("Please add an App entry point to generate Verilog.", err=True)
             shutil.rmtree(workspace_src)
             raise typer.Exit(code=1)
-            
+
         comp_name = comp_match.group(1)
         import_stmt = f"import {pkg}.{comp_name}" if pkg else ""
-        target_dir = str(out.resolve()).replace('\\', '/') if out else "."
         auto_runner_code = f"""
 package spinalml_auto
 import spinal.core._
@@ -214,16 +213,16 @@ object AutoRunner extends App {{
         full_main = "spinalml_auto.AutoRunner"
         auto_generated = True
         typer.echo(f"Auto-generating runner for component {comp_name}...")
-    
+
     project_root = CLI_DIR.parent
-    existing_v_files = set(glob.glob(str(project_root / "*.v")))
-    
+    start_time = time.time() - 2
+
     typer.echo(f"Running Mill spinalML.runMain {full_main}...")
     ret_code = run_tool("mill", ["spinalML.runMain", full_main], exit_on_error=False)
-        
+
     if workspace_src.exists():
         shutil.rmtree(workspace_src)
-        
+
     if ret_code != 0:
         if auto_generated:
             typer.echo("\n" + "="*60, err=True)
@@ -232,26 +231,37 @@ object AutoRunner extends App {{
             typer.echo("please add an `object YourGenerator extends App` block in your file.", err=True)
             typer.echo("="*60 + "\n", err=True)
         raise typer.Exit(code=ret_code)
-        
-    # 4. Move generated .v files if --out is specified (for non-auto-generated or fallback)
-    if out:
-        out.mkdir(parents=True, exist_ok=True)
-        # Check if the component verilog exists in project_root and move it
-        comp_v = project_root / f"{comp_name}.v" if not app_match else None
-        if comp_v and comp_v.exists():
-            shutil.move(str(comp_v), str(out / comp_v.name))
-            typer.echo(f"Moved generated {comp_v.name} to {out}")
-        else:
-            current_v_files = set(glob.glob(str(project_root / "*.v")))
-            new_v_files = current_v_files - existing_v_files
-            for v_file in new_v_files:
-                dest_v = out / Path(v_file).name
-                shutil.move(v_file, dest_v)
-                typer.echo(f"Moved generated {Path(v_file).name} to {out}")
-            if not new_v_files and not (out / f"{comp_name}.v" if not app_match else False).exists():
-                typer.echo(f"Generated Verilog files are in {out}")
-    else:
-        typer.echo("Compilation complete. (Verilog files are in the project root)")
+
+    def move_new_root_artifacts():
+        for f_path in (glob.glob(str(project_root / "*.v")) + glob.glob(str(project_root / "*.bin"))):
+            p = Path(f_path)
+            if p.name in ["top.v", "uart_rx.v", "uart_tx.v"]:
+                continue
+            try:
+                if os.path.getmtime(f_path) >= start_time:
+                    dest = out / p.name
+                    if dest.resolve() != p.resolve():
+                        shutil.move(f_path, dest)
+                        typer.echo(f"Saved {p.name} -> {out}")
+            except OSError:
+                pass
+
+    # Move any new .v or .bin files generated at root to destination
+    move_new_root_artifacts()
+
+    # Generate supplementary UART chain files if requested
+    if chain:
+        typer.echo(f"\nGenerating supplementary UART chain Verilog in {out}...")
+        run_tool("mill", ["spinalML.runMain", "spinalML.io.UartChainGen", target_dir], exit_on_error=False)
+        move_new_root_artifacts()
+
+    generated_v = sorted(out.glob("*.v"))
+    generated_bin = sorted(out.glob("*.bin"))
+    typer.echo(f"\nCompilation complete. Hardware files available in '{out}':")
+    for v in generated_v:
+        typer.echo(f"  [Verilog] {v.name}")
+    for b in generated_bin:
+        typer.echo(f"  [Memory]  {b.name}")
 
 
 def _run_single_test_file(target_file: Path) -> int:
@@ -540,6 +550,9 @@ def test_all_python(
     # --ci pacing is applied INSIDE pytest (SM_CI_SLEEP env var): one pause
     # before each cocotb test, at the exact granularity of the heavy sequences.
     run_env = dict(env)
+    cli_str = str(CLI_DIR)
+    existing_pythonpath = run_env.get("PYTHONPATH", "")
+    run_env["PYTHONPATH"] = f"{cli_str}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else cli_str
     if ci_sleep > 0:
         run_env["SM_CI_SLEEP"] = str(ci_sleep)
 

@@ -31,7 +31,9 @@ case class UniversalAttentionDemo(
   axiConfig = axiConfig
 )
 
+import spinalML.io.UartSoC
+
 object UniversalAttentionDemoVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
-  SpinalVerilog(UniversalAttentionDemo(axiConfig))
+  SpinalVerilog(new UartSoC(() => UniversalAttentionDemo(axiConfig), axiConfig = axiConfig, outCount = 32))
 }

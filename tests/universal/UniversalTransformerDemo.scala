@@ -40,7 +40,9 @@ case class UniversalTransformerDemo(
   axiConfig = axiConfig
 )
 
+import spinalML.io.UartSoC
+
 object UniversalTransformerDemoVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
-  SpinalVerilog(UniversalTransformerDemo(axiConfig))
+  SpinalVerilog(new UartSoC(() => UniversalTransformerDemo(axiConfig), axiConfig = axiConfig, outCount = 32))
 }

@@ -35,7 +35,9 @@ case class UniversalPoolNormDemo(
   axiConfig = axiConfig
 )
 
+import spinalML.io.UartSoC
+
 object UniversalPoolNormDemoVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
-  SpinalVerilog(UniversalPoolNormDemo(axiConfig))
+  SpinalVerilog(new UartSoC(() => UniversalPoolNormDemo(axiConfig), axiConfig = axiConfig, outCount = 4))
 }

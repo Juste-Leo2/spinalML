@@ -50,7 +50,15 @@ class Accelerator[T <: Data](
     
     // Output Stream for the final result
     val outStream = master(cloneOf(model.io.outStream))
+
+    // Accelerator status (UART bridge status byte): busy = inference in
+    // flight, done = frame-complete pulse.
+    val busy = out(Bool())
+    val done = out(Bool())
   }
+
+  io.busy := model.io.busy
+  io.done := model.io.done
   
   // 2. Map the AXI4 Master
   // We connect the Read channels. Write channels are grounded since we only infer (read-only DDR).

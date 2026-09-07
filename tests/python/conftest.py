@@ -9,6 +9,11 @@ import pytest
 
 from utils.math_metrics import clear_math_log
 
+# Ensure cli/ is on sys.path for spinalml_cli imports
+cli_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "cli"))
+if os.path.isdir(cli_dir) and cli_dir not in sys.path:
+    sys.path.insert(0, cli_dir)
+
 
 @pytest.fixture(autouse=True)
 def _ci_pacer():
