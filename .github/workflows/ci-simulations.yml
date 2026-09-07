@@ -5,6 +5,10 @@ on:
     branches: [ "main" ] 
   workflow_dispatch:
     inputs:
+      force_env_setup:
+        description: "Force a full environment rebuild (venv --clear + reinstall)"
+        type: boolean
+        default: false
       test_simulations:
         description: "1. ScalaTest Simulations (75 Suites)"
         type: boolean
@@ -25,13 +29,132 @@ on:
 env:
   PYTHONUNBUFFERED: "1"
   FORCE_COLOR: "1"
+  PYENV_ROOT: "/home/radxa/.pyenv"
+  PYTHON_TARGET: "3.12.1"
 
 jobs:
+  # =========================================================================
+  # 0. ENVIRONMENT PREPARATION (SELF-HOSTED RADXA GATE)
+  # =========================================================================
+  prepare-env:
+    name: Prepare Environment (Python 3.12 gate)
+    runs-on: [self-hosted, arm64, radxa]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clear Corrupted Coursier & Ivy Caches
+        run: |
+          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
+
+      - name: Detect Python 3.12 (global via pyenv)
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+          if ! command -v pyenv &> /dev/null; then
+            echo "pyenv is missing — installing it..."
+            curl -LsSf https://pyenv.run | bash
+            export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+          fi
+          echo "Current python3: $(python3 --version 2>&1) (target: ${{ env.PYTHON_TARGET }})"
+          if [ "$(python3 --version 2>&1 | cut -d. -f1,2)" = "3.12" ]; then
+            echo "PY312_OK=1" >> "$GITHUB_ENV"
+            echo "Global Python is already 3.12.x."
+          else
+            echo "Global Python is NOT 3.12 — bootstrapping pyenv build (taskset-limited to LITTLE cores)..."
+            # IMPORTANT: building CPython must run on the LITTLE cores only
+            # (0,1,2,3) — a full big-core compile overheats/power-crashes the
+            # Radxa and can corrupt the SD card.
+            taskset -c 0,1,2,3 bash -c '
+              source ~/.bashrc 2>/dev/null || true
+              export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+              eval "$(pyenv init -)"
+              pyenv install -s ${{ env.PYTHON_TARGET }}
+              pyenv global ${{ env.PYTHON_TARGET }}
+              pyenv rehash
+            '
+            echo "PY312_OK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check and Install System Dependencies
+        run: |
+          DEPS_TO_INSTALL=""
+          for PKG in default-jdk curl python3-dev build-essential \
+                     libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+                     libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+                     libffi-dev liblzma-dev; do
+            if ! dpkg -s "$PKG" &> /dev/null; then
+              DEPS_TO_INSTALL="$DEPS_TO_INSTALL $PKG"
+              echo "missing: $PKG"
+            fi
+          done
+          if [ -n "$DEPS_TO_INSTALL" ]; then
+            echo "Installing missing system packages:$DEPS_TO_INSTALL..."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends $DEPS_TO_INSTALL
+          else
+            echo "All system packages are already installed."
+          fi
+          # Capability smoke checks (Verilator/compiler toolchain)
+          gcc --version   | head -1
+          make --version  | head -1
+          perl --version  | head -2
+
+      - name: Setup uv Package Manager
+        run: |
+          if ! command -v uv &> /dev/null; then
+            echo "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          else
+            echo "uv already installed: $(uv --version)"
+          fi
+
+      - name: Bootstrap .venv (Python 3.12.1 from the GLOBAL interpreter)
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          PYENV_PY="$PYENV_ROOT/versions/${{ env.PYTHON_TARGET }}/bin/python"
+          if [ ! -x "$PYENV_PY" ]; then
+            echo "Global interpreter $PYENV_PY not found. Aborting."
+            exit 1
+          fi
+          VENV_OK=0
+          if [ -x .venv/bin/python ]; then
+            VV=$(".venv/bin/python" --version 2>&1 | cut -d. -f1,2)
+            [ "$VV" = "3.12" ] && VENV_OK=1
+          fi
+          if [ "$VENV_OK" = "1" ] && [ "${{ inputs.force_env_setup }}" != "true" ]; then
+            echo ".venv already on 3.12 — reusing it."
+          else
+            echo "Rebuilding .venv (--clear) from $PYENV_PY ..."
+            uv venv --python "$PYENV_PY" --clear
+          fi
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+
+      - name: GATE — Verify active Python is 3.12.x (VPI teardown safety)
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+          echo "Global python3 :  $(python3 --version 2>&1)"
+          echo "Active .venv py:  $(uv run python --version 2>&1)"
+          MAJMIN_UV=$(uv run python --version 2>&1 | cut -d. -f1,2)
+          MAJMIN_GL=$(python3 --version 2>&1 | cut -d. -f1,2)
+          if [ "$MAJMIN_UV" != "3.12" ] || [ "$MAJMIN_GL" != "3.12" ]; then
+            echo "Python <3.12 detected (VPI teardown crash: 'double free or corruption')."
+            echo "Check pyenv global (${{ env.PYTHON_TARGET }}) and rebuild the .venv."
+            exit 1
+          fi
+          echo "Environment gate PASSED — the test chain can start."
+
+      - name: Setup Mill & Oss CAD Suite
+        run: |
+          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          source .venv/bin/activate
+          python cli/main.py setup
+
   # =========================================================================
   # 1. SCALATEST DYNAMIC SIMULATIONS (75 SUITES)
   # =========================================================================
   simulation-tests:
     name: ScalaTest Dynamic Simulations
+    needs: [prepare-env]
     if: ${{ github.event_name == 'push' || inputs.test_simulations == true || inputs.test_simulations == 'true' }}
     runs-on: [self-hosted, arm64, radxa]
     env:
@@ -41,42 +164,6 @@ jobs:
       MAKEFLAGS: "-j 1"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Clear Corrupted Coursier & Ivy Caches
-        run: |
-          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
-
-      - name: Check and Install System Dependencies
-        run: |
-          DEPS_TO_INSTALL=""
-          for PKG in default-jdk curl python3-dev build-essential; do
-            if ! dpkg -s $PKG &> /dev/null; then
-              DEPS_TO_INSTALL="$DEPS_TO_INSTALL $PKG"
-            fi
-          done
-          if [ -n "$DEPS_TO_INSTALL" ]; then
-            echo "Installing missing system packages:$DEPS_TO_INSTALL..."
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends $DEPS_TO_INSTALL
-          else
-            echo "All core system packages are already installed."
-          fi
-
-      - name: Setup uv Package Manager
-        run: |
-          if ! command -v uv &> /dev/null; then
-            echo "Installing uv..."
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-          fi
-
-      - name: Setup Python & SpinalML Tools
-        run: |
-          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          uv venv -p 3.11 || uv venv
-          source .venv/bin/activate
-          uv pip install -r requirements.txt
-          # Setup and verify Mill and OSS CAD Suite (instant if already cached)
-          python cli/main.py setup
 
       - name: Run Dynamic Hardware Simulations (75 Suites)
         run: |
@@ -90,7 +177,7 @@ jobs:
   # =========================================================================
   universal-tests:
     name: Universal Bit-Exact SoC Simulations
-    needs: [simulation-tests]
+    needs: [prepare-env, simulation-tests]
     if: |
       always() &&
       (github.event_name == 'push' || inputs.test_universal == true || inputs.test_universal == 'true') &&
@@ -105,40 +192,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clear Corrupted Coursier & Ivy Caches
-        run: |
-          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
-
-      - name: Check and Install System Dependencies
-        run: |
-          DEPS_TO_INSTALL=""
-          for PKG in default-jdk curl python3-dev build-essential; do
-            if ! dpkg -s $PKG &> /dev/null; then
-              DEPS_TO_INSTALL="$DEPS_TO_INSTALL $PKG"
-            fi
-          done
-          if [ -n "$DEPS_TO_INSTALL" ]; then
-            echo "Installing missing system packages:$DEPS_TO_INSTALL..."
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends $DEPS_TO_INSTALL
-          else
-            echo "All core system packages are already installed."
-          fi
-
-      - name: Setup uv Package Manager
-        run: |
-          if ! command -v uv &> /dev/null; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-          fi
-
-      - name: Setup Python & SpinalML Tools
-        run: |
-          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          uv venv -p 3.11 || uv venv
-          source .venv/bin/activate
-          uv pip install -r requirements.txt
-          python cli/main.py setup
-
       - name: Run Universal Bit-Exact SoC Tests
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
@@ -150,7 +203,7 @@ jobs:
   # =========================================================================
   formal-proofs:
     name: SymbiYosys Formal Proofs
-    needs: [simulation-tests, universal-tests]
+    needs: [prepare-env, simulation-tests, universal-tests]
     if: |
       always() &&
       (github.event_name == 'push' || inputs.test_formal == true || inputs.test_formal == 'true') &&
@@ -165,24 +218,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clear Corrupted Coursier & Ivy Caches
-        run: |
-          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
-
-      - name: Setup uv Package Manager
-        run: |
-          if ! command -v uv &> /dev/null; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-          fi
-
-      - name: Setup Python & SpinalML Tools
-        run: |
-          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          uv venv -p 3.11 || uv venv
-          source .venv/bin/activate
-          uv pip install -r requirements.txt
-          python cli/main.py setup
-
       - name: Run Formal Verification Proofs (56 Suites)
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
@@ -194,7 +229,7 @@ jobs:
   # =========================================================================
   python-tests:
     name: Python Hardware Co-Simulations
-    needs: [simulation-tests, universal-tests, formal-proofs]
+    needs: [prepare-env, simulation-tests, universal-tests, formal-proofs]
     if: |
       always() &&
       (github.event_name == 'push' || inputs.test_python == true || inputs.test_python == 'true') &&
@@ -209,24 +244,6 @@ jobs:
       MAKEFLAGS: "-j 1"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Clear Corrupted Coursier & Ivy Caches
-        run: |
-          rm -rf ~/.cache/coursier ~/.ivy2/cache ~/.coursier
-
-      - name: Setup uv Package Manager
-        run: |
-          if ! command -v uv &> /dev/null; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-          fi
-
-      - name: Setup Python & SpinalML Tools
-        run: |
-          export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          uv venv -p 3.11 || uv venv
-          source .venv/bin/activate
-          uv pip install -r requirements.txt
-          python cli/main.py setup
 
       - name: Run Pytest Co-Simulations
         run: |
