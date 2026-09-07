@@ -164,6 +164,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Bootstrap .venv & Dependencies
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          PYENV_PY="$PYENV_ROOT/versions/${{ env.PYTHON_TARGET }}/bin/python"
+          if [ ! -x "$PYENV_PY" ]; then
+            echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
+            exit 1
+          fi
+          uv venv --python "$PYENV_PY" --clear
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
+          if [ "$MAJMIN" != "3.12" ]; then
+            echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
+            exit 1
+          fi
+          echo "[OK] .venv ready on ${{ env.PYTHON_TARGET }}."
+
       - name: Run Dynamic Hardware Simulations (75 Suites)
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
@@ -191,6 +209,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Bootstrap .venv & Dependencies
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          PYENV_PY="$PYENV_ROOT/versions/${{ env.PYTHON_TARGET }}/bin/python"
+          if [ ! -x "$PYENV_PY" ]; then
+            echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
+            exit 1
+          fi
+          uv venv --python "$PYENV_PY" --clear
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
+          if [ "$MAJMIN" != "3.12" ]; then
+            echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
+            exit 1
+          fi
+          echo "[OK] .venv ready on ${{ env.PYTHON_TARGET }}."
+
       - name: Run Universal Bit-Exact SoC Tests
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
@@ -216,6 +252,24 @@ jobs:
       MAKEFLAGS: "-j 1"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Bootstrap .venv & Dependencies
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          PYENV_PY="$PYENV_ROOT/versions/${{ env.PYTHON_TARGET }}/bin/python"
+          if [ ! -x "$PYENV_PY" ]; then
+            echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
+            exit 1
+          fi
+          uv venv --python "$PYENV_PY" --clear
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
+          if [ "$MAJMIN" != "3.12" ]; then
+            echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
+            exit 1
+          fi
+          echo "[OK] .venv ready on ${{ env.PYTHON_TARGET }}."
 
       - name: Run Formal Verification Proofs (56 Suites)
         run: |
@@ -243,6 +297,24 @@ jobs:
       MAKEFLAGS: "-j 1"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Bootstrap .venv & Dependencies
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          PYENV_PY="$PYENV_ROOT/versions/${{ env.PYTHON_TARGET }}/bin/python"
+          if [ ! -x "$PYENV_PY" ]; then
+            echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
+            exit 1
+          fi
+          uv venv --python "$PYENV_PY" --clear
+          source .venv/bin/activate
+          uv pip install -r requirements.txt
+          MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
+          if [ "$MAJMIN" != "3.12" ]; then
+            echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
+            exit 1
+          fi
+          echo "[OK] .venv ready on ${{ env.PYTHON_TARGET }}."
 
       - name: Run Pytest Co-Simulations
         run: |
