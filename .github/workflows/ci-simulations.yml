@@ -55,8 +55,7 @@ jobs:
             export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
           fi
           echo "Current python3: $(python3 --version 2>&1) (target: ${{ env.PYTHON_TARGET }})"
-          if [ "$(python3 --version 2>&1 | cut -d. -f1,2)" = "3.12" ]; then
-            echo "PY312_OK=1" >> "$GITHUB_ENV"
+          if [ "$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)" = "3.12" ]; then
             echo "Global Python is already 3.12.x."
           else
             echo "Global Python is NOT 3.12 — bootstrapping pyenv build (taskset-limited to LITTLE cores)..."
@@ -117,7 +116,7 @@ jobs:
           fi
           VENV_OK=0
           if [ -x .venv/bin/python ]; then
-            VV=$(".venv/bin/python" --version 2>&1 | cut -d. -f1,2)
+            VV=$(".venv/bin/python" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
             [ "$VV" = "3.12" ] && VENV_OK=1
           fi
           if [ "$VENV_OK" = "1" ] && [ "${{ inputs.force_env_setup }}" != "true" ]; then
@@ -134,8 +133,8 @@ jobs:
           export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
           echo "Global python3 :  $(python3 --version 2>&1)"
           echo "Active .venv py:  $(uv run python --version 2>&1)"
-          MAJMIN_UV=$(uv run python --version 2>&1 | cut -d. -f1,2)
-          MAJMIN_GL=$(python3 --version 2>&1 | cut -d. -f1,2)
+          MAJMIN_UV=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
+          MAJMIN_GL=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
           if [ "$MAJMIN_UV" != "3.12" ] || [ "$MAJMIN_GL" != "3.12" ]; then
             echo "Python <3.12 detected (VPI teardown crash: 'double free or corruption')."
             echo "Check pyenv global (${{ env.PYTHON_TARGET }}) and rebuild the .venv."
