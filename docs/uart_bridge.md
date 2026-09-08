@@ -119,3 +119,61 @@ The Python host driver is implemented in [uart_host.py](file:///wsl.localhost/Ub
 The bridge FSM and memory burst controller are certified by formal proofs in `spinalML/test/src/spinalML/symbolicTest/io/`:
 - **`UartBridgeFormal.scala`**: Proves AXI-Lite master handshake rules, L2 protocol parsing, stream backpressure data conservation (zero dropped bytes), and FSM deadlock freedom using SymbiYosys and CVC4.
 - **`AxiReadMemFormal.scala`**: Proves AXI4 burst length compliance (`ARLEN + 1`), `RLAST` assertion timing, read channel stability under master stalls, and memory clamping bounds.
+
+## 8. Hardware Synthesis & Compilation Pipeline (`spinalml compile`)
+
+The spinalML CLI provides turnkey synthesis and Verilog emission for both the neural accelerator and the complete UART communication chain:
+
+```bash
+# 1. Compile accelerator and supplementary UART chain for default board (Tang Primer 20K)
+python cli/main.py compile spinalML/src/spinalML/examples/Mnistw4a8.scala -o rtl/
+
+# 2. Compile complete turnkey UartSoC top-level wrapping the accelerator
+python cli/main.py compile spinalML/src/spinalML/examples/Mnistw4a8.scala --soc -o rtl/
+
+# 3. Target another board profile or override clock frequency and baudrate
+python cli/main.py compile spinalML/src/spinalML/examples/Mnistw4a8.scala --board tang-primer-20k --soc --clk 50MHz --baud 921600
+```
+
+### 8.1 Parameter Resolution & Auto-Introspection
+When `spinalml compile` is called:
+1. **Board Profile Resolution**: Resolves default clock frequency, baudrate, and BRAM words from `boards/<board>.json`.
+2. **Model Introspection**: The CLI inspects the Scala model specification to automatically deduce:
+   - Output logit count (`outCount`): inferred from the final classification layer (e.g. `Linear(..., outFeatures = 10)` -> `outCount = 10`).
+   - AXI bus width (`wordWidth`): inferred from `axiConfig.dataWidth` (default: 64 bits).
+3. **Single-Pass Compilation (`AutoRunner`)**:
+   - Compiles the accelerator into synthesizable Verilog.
+   - If `--soc` is passed, instantiates `UartSoC` parameterized with the exact resolved clock, baud rate, and BRAM capacity.
+   - If `--chain` is enabled (default: true), emits `UartRx.v`, `UartTx.v`, `UartBridge.v`, and `AxiReadMem.v` with matching clock dividers.
+   - Writes all generated `.v` files directly into `--out` without polluting the project root.
+
+### 8.2 Standalone UART Chain Generator (`UartChainGen`)
+If integrating spinalML's UART bridge into a custom FPGA project without using the CLI, the synthesizable UART chain can be generated directly via Mill:
+
+```bash
+mill --no-server spinalML.runMain spinalML.io.UartChainGen \
+  --out rtl \
+  --clk 27000000 \
+  --baud 115200 \
+  --out-count 10 \
+  --word-width 64 \
+  --memory-words 4096
+```
+
+## 9. Modular FPGA Board Profiles (`boards/*.json`)
+
+Board-specific hardware constants are decoupled from the Scala source code into external JSON profiles located in `boards/`:
+
+Example profile for the Sipeed Tang Primer 20K (`boards/tang-primer-20k.json`):
+```json
+{
+  "name": "Tang Primer 20K",
+  "fpga": "GW2A-LV18PG256C8/I7",
+  "clk_freq": 27000000,
+  "baud_rate": 115200,
+  "bram_words": 4096,
+  "description": "Sipeed Tang Primer 20K dock with Gowin GW2A FPGA, 27 MHz on-board oscillator."
+}
+```
+
+Adding a new FPGA board target (e.g. Tang Nano 9K, Basys 3) only requires adding a new `.json` file in `boards/` specifying its clock oscillator and available BRAM resources.

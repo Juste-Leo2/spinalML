@@ -139,7 +139,15 @@ python cli/main.py compile spinalML/src/spinalML/examples/SimpleCNN.scala
 ```
 
 Options:
-- `-o`, `--out <PATH>` : Specifies the destination directory for the generated Verilog file(s).
+- `-o`, `--out <PATH>` : Destination directory for generated Verilog files [default: `rtl`].
+- `--soc / --no-soc` : Generate complete turnkey `UartSoC` top-level wrapping the accelerator [default: `--no-soc`].
+- `--chain / --no-chain` : Generate supplementary UART chain Verilog files (`UartRx`, `UartTx`, `UartBridge`, `AxiReadMem`) [default: `--chain`].
+- `--board <NAME>` : Target FPGA board profile from `boards/*.json` [default: `tang-primer-20k`].
+- `--clk <FREQ>` : Hardware clock frequency override (e.g. `'27MHz'`, `'50MHz'`, `'100MHz'`).
+- `--baud <INT>` : UART baud rate override (e.g. `115200`, `921600`).
+- `--out-count <INT>` : Number of output stream bytes/logits (auto-detected from model if omitted).
+- `--word-width <INT>` : AXI data bus width in bits (auto-detected from model if omitted).
+- `--bram-words <INT>` : BRAM capacity in 64-bit words (default: from board or 4096).
 
 ---
 

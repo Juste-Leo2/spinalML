@@ -29,9 +29,3 @@ case class Universal1DDemo(
   axiConfig = axiConfig
 )
 
-import spinalML.io.UartSoC
-
-object Universal1DDemoVerilog extends App {
-  val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
-  SpinalVerilog(new UartSoC(() => Universal1DDemo(axiConfig), axiConfig = axiConfig, outCount = 2))
-}

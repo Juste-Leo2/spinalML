@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import load_config, get_bin_path, CLI_DIR
 from .installer import setup_tools
+from .board import load_board_config, parse_frequency, detect_model_parameters, list_available_boards
 
 app = typer.Typer(
     help="SpinalML CLI - Wrapper for FPGA Tools",
@@ -140,11 +141,18 @@ def compile(
     file: Path = typer.Argument(..., help="Path to the Scala file to compile"),
     out: Path = typer.Option(Path("rtl"), "-o", "--out", help="Output directory for generated Verilog files [default: rtl]"),
     chain: bool = typer.Option(True, "--chain/--no-chain", help="Generate supplementary UART chain Verilog files (UartRx, UartTx, UartBridge, AxiReadMem)"),
+    soc: bool = typer.Option(False, "--soc/--no-soc", help="Generate complete turnkey UartSoC top-level wrapping the accelerator"),
+    board: str = typer.Option("tang-primer-20k", "--board", help="Target FPGA board profile from boards/*.json [default: tang-primer-20k]"),
+    clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
+    baud: Optional[int] = typer.Option(None, "--baud", help="UART baudrate override (default: from board or 115200)"),
+    out_count: Optional[int] = typer.Option(None, "--out-count", help="Number of output stream bytes/logits (auto-detected from model if omitted)"),
+    word_width: Optional[int] = typer.Option(None, "--word-width", help="AXI data bus width in bits (auto-detected from model if omitted)"),
+    bram_words: Optional[int] = typer.Option(None, "--bram-words", help="BRAM capacity in 64-bit words (default: from board or 4096)"),
 ):
     """
     Compile a Scala file into Verilog by running it within the workspace module,
     and generate the supplementary hardware chain files (UartRx, UartTx, UartBridge,
-    AxiReadMem) into the output directory.
+    AxiReadMem) into the output directory with FPGA board-specific settings.
     """
     import shutil
     import os
@@ -157,6 +165,24 @@ def compile(
 
     out.mkdir(parents=True, exist_ok=True)
     target_dir = str(out.resolve()).replace('\\', '/')
+
+    # 1. Resolve board configuration & model introspection
+    try:
+        board_cfg = load_board_config(board)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    model_params = detect_model_parameters(file)
+    final_clk = parse_frequency(clk) if clk else board_cfg["clk_freq"]
+    final_baud = baud if baud is not None else board_cfg["baud_rate"]
+    final_out_count = out_count if out_count is not None else model_params.get("out_count", 10)
+    final_word_width = word_width if word_width is not None else model_params.get("word_width", 64)
+    final_bram_words = bram_words if bram_words is not None else board_cfg.get("bram_words", 4096)
+
+    typer.echo(f"Target Board   : {board_cfg['name']} ({board_cfg.get('fpga', 'FPGA')})")
+    typer.echo(f"Hardware Clock : {final_clk/1e6:.2f} MHz | UART: {final_baud} baud (CLK_PER_BIT = {final_clk // final_baud})")
+    typer.echo(f"Model Protocol : {final_out_count} output bytes | {final_word_width}-bit AXI | {final_bram_words} words BRAM")
 
     content = file.read_text(encoding="utf-8")
     pkg_match = re.search(r'^\s*package\s+([\w\.]+)', content, re.MULTILINE)
@@ -182,12 +208,16 @@ def compile(
     full_main = ""
     auto_generated = False
 
-    if app_match:
+    comp_match = re.search(r'(?:case\s+)?class\s+(\w+).*?(?:extends\s+Component|extends\s+Accelerator)', content, re.MULTILINE | re.DOTALL)
+    is_accelerator = bool(comp_match and (("extends Accelerator" in content) or ("extends Accelerator" in comp_match.group(0))))
+
+    # If --soc is requested and an Accelerator is present, or if no App entrypoint exists, use AutoRunner
+    use_autorunner = (soc and is_accelerator) or not app_match
+
+    if not use_autorunner and app_match:
         main_class = app_match.group(1)
         full_main = f"{pkg}.{main_class}" if pkg else main_class
     else:
-        # Try to find a Component or Accelerator
-        comp_match = re.search(r'(?:case\s+)?class\s+(\w+).*?(?:extends\s+Component|extends\s+Accelerator)', content, re.MULTILINE | re.DOTALL)
         if not comp_match:
             typer.echo(f"Error: {file.name} does not contain 'object <Name> extends App' nor a Component.", err=True)
             typer.echo("Please add an App entry point to generate Verilog.", err=True)
@@ -196,17 +226,49 @@ def compile(
 
         comp_name = comp_match.group(1)
         import_stmt = f"import {pkg}.{comp_name}" if pkg else ""
+
+        soc_snippet = ""
+        if soc and is_accelerator:
+            soc_snippet = f"""
+  println(s"[AutoRunner] Generating complete turnkey UartSoC top-level in '{target_dir}'...")
+  val cfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
+  spinalConfig.generateVerilog(new spinalML.io.UartSoC(
+    acceleratorFactory = () => new {comp_name}(),
+    clkFreq = BigInt({final_clk}),
+    baudRate = BigInt({final_baud}),
+    axiConfig = cfg,
+    memoryWords = {final_bram_words},
+    outCount = {final_out_count}
+  ))
+"""
+        elif soc and not is_accelerator:
+            typer.echo(f"[Notice] --soc requested, but {comp_name} does not extend Accelerator. Skipping UartSoC top-level.")
+
+        chain_snippet = ""
+        if chain:
+            chain_snippet = f"""
+  println(s"[AutoRunner] Generating supplementary UART chain Verilog in '{target_dir}'...")
+  val chainCfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
+  spinalConfig.generateVerilog(new spinalML.io.UartRx(BigInt("{final_clk}"), BigInt("{final_baud}")))
+  spinalConfig.generateVerilog(new spinalML.io.UartTx(BigInt("{final_clk}"), BigInt("{final_baud}")))
+  spinalConfig.generateVerilog(new spinalML.io.UartBridge(outCount = {final_out_count}, wordWidth = chainCfg.dataWidth, csrAddrWidth = 8, version = 0x01))
+  spinalConfig.generateVerilog(new spinalML.io.AxiReadMem(chainCfg, memoryWords = {final_bram_words}, imgBase = 0x10000, weightBase = 0x20000))
+"""
+
         auto_runner_code = f"""
 package spinalml_auto
 import spinal.core._
 {import_stmt}
 
 object AutoRunner extends App {{
-  SpinalConfig(
+  val spinalConfig = SpinalConfig(
     targetDirectory = "{target_dir}",
     headerWithDate = true,
     rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
-  ).generateVerilog(new {comp_name}())
+  )
+  spinalConfig.generateVerilog(new {comp_name}())
+{soc_snippet}
+{chain_snippet}
 }}
 """
         (workspace_src / "AutoRunner.scala").write_text(auto_runner_code, encoding="utf-8")
@@ -218,7 +280,7 @@ object AutoRunner extends App {{
     start_time = time.time() - 2
 
     typer.echo(f"Running Mill spinalML.runMain {full_main}...")
-    ret_code = run_tool("mill", ["spinalML.runMain", full_main], exit_on_error=False)
+    ret_code = run_tool("mill", ["--no-server", "spinalML.runMain", full_main], exit_on_error=False)
 
     if workspace_src.exists():
         shutil.rmtree(workspace_src)
@@ -249,10 +311,20 @@ object AutoRunner extends App {{
     # Move any new .v or .bin files generated at root to destination
     move_new_root_artifacts()
 
-    # Generate supplementary UART chain files if requested
-    if chain:
+    # Generate supplementary UART chain files if requested and not already in AutoRunner
+    if chain and not auto_generated:
         typer.echo(f"\nGenerating supplementary UART chain Verilog in {out}...")
-        run_tool("mill", ["spinalML.runMain", "spinalML.io.UartChainGen", target_dir], exit_on_error=False)
+        chain_args = [
+            "--no-server",
+            "spinalML.runMain", "spinalML.io.UartChainGen",
+            "--out", target_dir,
+            "--clk", str(final_clk),
+            "--baud", str(final_baud),
+            "--out-count", str(final_out_count),
+            "--word-width", str(final_word_width),
+            "--memory-words", str(final_bram_words)
+        ]
+        run_tool("mill", chain_args, exit_on_error=False)
         move_new_root_artifacts()
 
     generated_v = sorted(out.glob("*.v"))
@@ -279,7 +351,7 @@ def _run_single_test_file(target_file: Path) -> int:
         full_test = f"{pkg}.{test_class}" if pkg else test_class
         typer.echo(f"Detected ScalaTest suite: {full_test}")
         typer.echo(f"Running Mill testOnly {full_test}...")
-        ret_code = run_tool("mill", ["spinalML.test.testOnly", full_test], exit_on_error=False)
+        ret_code = run_tool("mill", ["--no-server", "spinalML.test.testOnly", full_test], exit_on_error=False)
         if ret_code == 0:
             typer.echo("All tests passed successfully!")
         return ret_code
@@ -394,7 +466,7 @@ class AutoGeneratedCircuitTest extends AnyFunSuite {{
             typer.echo(f"Scaffolded simulation test for {comp_name}...")
             typer.echo(f"Running Mill testOnly {full_test}...")
 
-            ret_code = run_tool("mill", ["spinalML.test.testOnly", full_test], exit_on_error=False)
+            ret_code = run_tool("mill", ["--no-server", "spinalML.test.testOnly", full_test], exit_on_error=False)
             if ret_code == 0:
                 typer.echo(f"Circuit verification for {comp_name} passed successfully!")
             return ret_code
@@ -409,7 +481,7 @@ class AutoGeneratedCircuitTest extends AnyFunSuite {{
         full_test = f"{pkg}.{test_obj}" if pkg else test_obj
         typer.echo(f"Detected executable test object: {full_test}")
         typer.echo(f"Running Mill test.runMain {full_test}...")
-        ret_code = run_tool("mill", ["spinalML.test.runMain", full_test], exit_on_error=False)
+        ret_code = run_tool("mill", ["--no-server", "spinalML.test.runMain", full_test], exit_on_error=False)
         if ret_code == 0:
             typer.echo(f"Test {test_obj} passed successfully!")
         return ret_code

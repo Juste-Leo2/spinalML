@@ -1,0 +1,10 @@
+{
+  "name": "Tang Primer 20K",
+  "vendor": "Gowin",
+  "family": "GW2A-18",
+  "fpga": "GW2A-LV18PG256C8/I7",
+  "clk_freq": 27000000,
+  "baud_rate": 115200,
+  "bram_words": 4096,
+  "description": "Sipeed Tang Primer 20K (Gowin GW2A-18, 27 MHz base clock)"
+}
