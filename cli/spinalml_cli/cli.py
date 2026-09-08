@@ -501,14 +501,16 @@ def test_all_formal(
 @app.command(name="test-all-python", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def test_all_python(
     ctx: typer.Context,
-    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (pytest -k)"),
+    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (regex or substring)"),
     fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output (-s, -v)"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Print failure logs and error traces directly to the terminal"),
+    log_dir: Optional[Path] = typer.Option(None, "--log-dir", help="Directory to store failure logs (default: out/python_reports)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List discovered Python test files without running them"),
     debug_math: bool = typer.Option(False, "--debug-math", help="Generate true_math_errors.log with detailed precision errors"),
     ci_sleep: float = typer.Option(0.0, "--ci", help="Pause in seconds between test file sequences (0 = disabled; use e.g. --ci 3 on slow-SD/self-hosted runners)"),
 ):
     """
-    Run Python Cocotb/Pytest hardware co-simulations with Verilator.
+    Run Python Cocotb/Pytest hardware co-simulations sequentially (file-by-file) with Verilator.
     Requires Linux (or Windows via WSL) due to Cocotb VPI bridge architecture.
     """
     if sys.platform == "win32":
@@ -525,50 +527,39 @@ def test_all_python(
         )
         raise typer.Exit(code=1)
 
-    from .test_runner import setup_tool_env
-    env = setup_tool_env()
-
-    base_cmd = [sys.executable, "-m", "pytest"]
-    if filter:
-        base_cmd.extend(["-k", filter])
-    if fail_fast:
-        base_cmd.append("-x")
-    if verbose:
-        base_cmd.extend(["-s", "-v"])
-    else:
-        base_cmd.append("-s")
-    if debug_math:
-        base_cmd.append("--debug-math")
-    if ctx.args:
-        base_cmd.extend(ctx.args)
-
-    test_dir = CLI_DIR.parent / "tests" / "python"
-    if not any((CLI_DIR.parent / "tests" / "python").glob("*.py")):
-        typer.echo(f"Error: No Python test files found in {test_dir}.", err=True)
-        raise typer.Exit(code=1)
-
-    # --ci pacing is applied INSIDE pytest (SM_CI_SLEEP env var): one pause
-    # before each cocotb test, at the exact granularity of the heavy sequences.
-    run_env = dict(env)
-    cli_str = str(CLI_DIR)
-    existing_pythonpath = run_env.get("PYTHONPATH", "")
-    run_env["PYTHONPATH"] = f"{cli_str}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else cli_str
-    if ci_sleep > 0:
-        run_env["SM_CI_SLEEP"] = str(ci_sleep)
-
-    typer.echo(f"Running Python hardware co-simulations: {' '.join(base_cmd)}")
-    result = subprocess.run(base_cmd + ["tests/python"], cwd=str(CLI_DIR.parent), env=run_env)
-    if result.returncode != 0:
-        raise typer.Exit(code=result.returncode)
-    typer.echo(f"\nSUCCESS: Python hardware co-simulations completed.")
+    from .python_runner import run_all_python_tests
+    code = run_all_python_tests(
+        filter_pattern=filter,
+        fail_fast=fail_fast,
+        log_dir=log_dir,
+        dry_run=dry_run,
+        verbose=verbose,
+        ci_sleep=ci_sleep,
+        debug_math=debug_math,
+        extra_args=ctx.args if ctx.args else None
+    )
+    if code != 0:
+        raise typer.Exit(code=code)
 
 @app.command(name="test-python", hidden=True, context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def test_python_alias(
     ctx: typer.Context,
-    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (pytest -k)"),
+    filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (regex or substring)"),
     fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show verbose output (-s, -v)"),
+    log_dir: Optional[Path] = typer.Option(None, "--log-dir", help="Directory to store failure logs (default: out/python_reports)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List discovered Python test files without running them"),
     debug_math: bool = typer.Option(False, "--debug-math", help="Generate true_math_errors.log with detailed precision errors"),
+    ci_sleep: float = typer.Option(0.0, "--ci", help="Pause in seconds between test file sequences (0 = disabled)"),
 ):
     """Alias for test-all-python."""
-    test_all_python(ctx=ctx, filter=filter, fail_fast=fail_fast, verbose=verbose, debug_math=debug_math)
+    test_all_python(
+        ctx=ctx,
+        filter=filter,
+        fail_fast=fail_fast,
+        verbose=verbose,
+        log_dir=log_dir,
+        dry_run=dry_run,
+        debug_math=debug_math,
+        ci_sleep=ci_sleep
+    )
