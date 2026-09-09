@@ -47,7 +47,7 @@ git clone https://github.com/<your-username>/spinalML.git
 cd spinalML
 
 # Setup virtualenv and dependencies
-uv venv -p 3.11
+uv venv -p 3.12.1
 # Windows: .\.venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 uv pip install -r requirements.txt
 

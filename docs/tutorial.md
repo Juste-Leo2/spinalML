@@ -10,7 +10,7 @@ SpinalML automates its entire environment provisioning (Mill, Verilator, Yosys, 
 
 ```bash
 # Setup Python environment
-uv venv -p 3.11
+uv venv -p 3.12.1
 # Windows: .\.venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 uv pip install -r requirements.txt
 

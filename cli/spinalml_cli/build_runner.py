@@ -472,6 +472,12 @@ def run_build(
         from .cli import compile as compile_cmd
         rtl_dir = project_root / "rtl"
         rtl_dir.mkdir(parents=True, exist_ok=True)
+        # Clean stale Verilog/bin artifacts from previous builds to prevent duplicate module collisions in Yosys
+        for old_f in list(rtl_dir.glob("*.v")) + list(rtl_dir.glob("*.bin")):
+            try:
+                old_f.unlink()
+            except Exception:
+                pass
         try:
             import typer
             compile_cmd(

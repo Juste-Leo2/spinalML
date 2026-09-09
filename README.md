@@ -44,7 +44,7 @@ git clone https://github.com/Juste-Leo2/spinalML.git
 cd spinalML
 
 # Setup Python virtual environment
-uv venv -p 3.11
+uv venv -p 3.12.1
 # Linux/macOS: source .venv/bin/activate | Windows: .\.venv\Scripts\Activate.ps1
 uv pip install -r requirements.txt
 
@@ -52,7 +52,7 @@ uv pip install -r requirements.txt
 python cli/main.py setup
 ```
 
-Once provisioned, explore application examples in the [`examples/`](examples/) directory, featuring ready-to-use Python training scripts and FPGA hardware models.
+Once provisioned, explore ready-to-use application examples in the [`examples/`](examples/) directory, including the complete [MNIST hardware demo](examples/Mnist/README.md).
 
 ### 3. Compile from Scala to Silicon in One Command
 SpinalML provides a turnkey flow that translates your Scala model, synthesizes RTL, places-and-routes, and generates a bitstream:
@@ -74,6 +74,14 @@ python cli/main.py flash hw_build/top.fs --board tang-primer-20k
 # Run real-time physical inference over UART
 python scripts/test_hardware_1d.py --port COM8
 ```
+
+---
+
+## Real-World Application Examples
+
+To see what you can build and run on physical silicon with SpinalML, check out the [`examples/`](examples/) directory:
+
+- [**MNIST Hardware Accelerator on Tang Primer 20K**](examples/Mnist/README.md): A complete end-to-end demonstration featuring an ultra-compact mixed-precision (W4A8) CNN accelerator running in real time on the Gowin GW2A-18, paired with an interactive Gradio web drawing canvas and live UART telemetry.
 
 ---
 
@@ -145,6 +153,7 @@ Explore detailed guides in the [`docs/`](docs/) directory:
 - [**CLI Reference**](docs/cli.md): Commands for compilation, simulation, synthesis, formal verification, and flashing.
 - [**Project Structure**](docs/project_structure.md): Repository layout, conventions, and architectural roadmap.
 - [**UART Bridge & Protocol**](docs/uart_bridge.md): Specifications for physical UART host communication and CSR bridges.
+- [**Application Examples**](examples/): Silicon-validated hardware projects, including the [Tang Primer 20K MNIST Accelerator](examples/Mnist/README.md).
 
 ---
 
