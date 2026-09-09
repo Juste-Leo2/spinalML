@@ -14,14 +14,22 @@ It manages external EDA dependencies (Mill, Verilator, SymbiYosys, Yosys, nextpn
 2. [Hardware RTL Compilation (`compile`)](#2-hardware-rtl-compilation-compile)
    - [Auto-Generating Verilog from Components](#auto-generating-verilog-from-components)
    - [Compiling Custom App Generators](#compiling-custom-app-generators)
-3. [Circuit Simulation & Verification (`test`)](#3-circuit-simulation--verification-test)
+3. [Turnkey FPGA Synthesis & Packing (`build`)](#3-turnkey-fpga-synthesis--packing-build)
+   - [Full Flow: Scala to Silicon Bitstream](#full-flow-scala-to-silicon-bitstream)
+   - [Intermediate Stop Stages (`--yosys`, `--nextpnr`)](#intermediate-stop-stages---yosys---nextpnr)
+   - [Board Profiles & Physical Pin Constraints](#board-profiles--physical-pin-constraints)
+4. [FPGA Hardware Flashing & Deployment (`flash`)](#4-fpga-hardware-flashing--deployment-flash)
+   - [SRAM Volatile Programming](#sram-volatile-programming)
+   - [SPI Flash Non-Volatile Programming](#spi-flash-non-volatile-programming)
+5. [Circuit Simulation & Verification (`test`)](#5-circuit-simulation--verification-test)
    - [Universal Bit-Exact Hardware Verification (e.g. `Mnistw4a8`)](#universal-bit-exact-hardware-verification-eg-mnistw4a8)
    - [Executing Dedicated ScalaTest Suites](#executing-dedicated-scalatest-suites)
    - [Running Executable Test Objects](#running-executable-test-objects)
-4. [Full Regression Testing (`test-all`)](#4-full-regression-testing-test-all)
-5. [Formal Verification Engine (`test-all-formal`)](#5-formal-verification-engine-test-all-formal)
-6. [Low-Level EDA Tool Passthroughs](#6-low-level-eda-tool-passthroughs)
-7. [Quick Command Reference](#7-quick-command-reference)
+6. [Full Regression Testing (`test-all`)](#6-full-regression-testing-test-all)
+7. [Formal Verification Engine (`test-all-formal`)](#7-formal-verification-engine-test-all-formal)
+8. [Python Hardware Co-Simulations (`test-all-python`)](#8-python-hardware-co-simulations-test-all-python)
+9. [Low-Level EDA Tool Passthroughs](#9-low-level-eda-tool-passthroughs)
+10. [Quick Command Reference](#10-quick-command-reference)
 
 ---
 
@@ -151,7 +159,99 @@ Options:
 
 ---
 
-## 3. Circuit Simulation & Verification (`test`)
+## 3. Turnkey FPGA Synthesis & Packing (`build`)
+
+The `build` command provides a completely automated, end-to-end silicon compilation pipeline:
+```
+Scala Model (.scala) or Verilog (rtl/)
+    │
+    ▼ [Auto-Elaboration into UartSoC if .scala]
+Turnkey RTL Netlist
+    │
+    ▼ [Phase 1: Yosys Synthesis]
+Target Primitive Netlist (LUTs, FFs, BRAM, DSP)
+    │
+    ▼ [Phase 2: nextpnr-himbaechel PnR]
+Physical Placement & Routing + Static Timing Analysis (Fmax)
+    │
+    ▼ [Phase 3: Bitstream Packing (gowin_pack / apycula)]
+FPGA Bitstream (hw_build/<board>/top.fs)
+```
+
+### Full Flow: Scala to Silicon Bitstream
+
+You can pass a `.scala` model directly to `build`. SpinalML will compile the model into Verilog, bundle the turnkey `UartSoC` (AXI4 Master, CSRs, BRAM, UART Bridge), run Yosys synthesis, place & route with nextpnr, and produce the bitstream in `hw_build/<board>/top.fs`:
+
+```bash
+# Full build from a Scala neural network specification
+python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k
+
+# Or build from an existing Verilog directory (defaults to rtl/)
+python cli/main.py build rtl/ --board tang-primer-20k
+```
+
+### Intermediate Stop Stages (`--yosys`, `--nextpnr`)
+
+For quick iteration and sanity checks without waiting for the full pipeline:
+
+1. **Quick Synthesis & Logic Gate Estimation (`--yosys` / `--synth-only`)**:
+   Stops immediately after Yosys, printing the gate count estimation without running place & route.
+   ```bash
+   python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k --yosys
+   ```
+
+2. **Placement, Routing & Timing Analysis (`--nextpnr` / `--pnr-only`)**:
+   Runs Yosys and nextpnr, computing exact physical device utilization and maximum operating frequency ($F_{\max}$), without generating the final `.fs` bitstream file.
+   ```bash
+   python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k --nextpnr
+   ```
+
+### Board Profiles & Physical Pin Constraints
+
+- **Board Profiles (`boards/*.json`)**: Hardware targets (such as `boards/tang-primer-20k.json`) configure the EDA synthesis script, placement arguments, bitstream packer, and physical capacity limits (LUT4, FF, BRAM, DSP).
+- **Physical Pin Constraints (`boards/constraints/*.cst`)**: Pin mappings (clock, reset, UART RX/TX) are automatically adapted to the top module's exact port names (`clk`, `reset_n`/`io_resetN`, `uart_rx`/`io_uartRx`, `uart_tx`/`io_uartTx`). You can also override the constraint file via `--cst <path.cst>`.
+
+Options:
+- `src` : Source `.scala` model file, Verilog directory, or single `.v` file [default: `rtl/`].
+- `-o`, `--out <PATH>` : Output directory for build artifacts [default: `hw_build/<board>/`].
+- `--board <NAME>` : Target FPGA board profile [default: `tang-primer-20k`].
+- `--cst`, `--constraints <PATH>` : Custom physical pin constraints file override (`.cst`).
+- `--top <NAME>` : Top-level module name (auto-detected if omitted: `UartSoC`, `top`).
+- `--synth-only`, `--yosys` : Stop after Yosys synthesis.
+- `--pnr-only`, `--nextpnr` : Stop after nextpnr place & route.
+- `--clk <FREQ>` : Target clock frequency override (e.g. `'27MHz'`, `'50MHz'`).
+
+---
+
+## 4. FPGA Hardware Flashing & Deployment (`flash`)
+
+The `flash` command programs the target FPGA hardware using `openFPGALoader`. It automatically resolves the bitstream from `hw_build/<board>/<bitstream_name>` if omitted.
+
+### SRAM Volatile Programming
+
+Fast loading (~1.5 seconds) directly into FPGA volatile SRAM. Ideal for testing, verification, and active development:
+
+```bash
+python cli/main.py flash --board tang-primer-20k
+```
+
+### SPI Flash Non-Volatile Programming
+
+Permanently burns the bitstream into the board's on-board SPI Flash memory. The circuit remains configured even after power cycling:
+
+```bash
+python cli/main.py flash --board tang-primer-20k --flash
+```
+
+Options:
+- `bitstream` : Path to `.fs` / `.bit` bitstream file (auto-detected in `hw_build/<board>/` if omitted).
+- `--board <NAME>` : Target FPGA board profile [default: `tang-primer-20k`].
+- `--sram / --no-sram` : Load into volatile SRAM [default: `--sram`].
+- `--flash` : Program on-board non-volatile SPI Flash memory.
+
+---
+
+## 5. Circuit Simulation & Verification (`test`)
 
 The `test` command runs hardware simulations using Verilator with cycle-accurate evaluation.
 
@@ -199,7 +299,7 @@ python cli/main.py test spinalML/test/src/spinalML/examples/SimplePipelineTest.s
 
 ---
 
-## 4. Full Regression Testing (`test-all`)
+## 6. Full Regression Testing (`test-all`)
 
 To prevent system memory exhaustion caused by parallel Verilator C++ compilations, `test-all` executes **all 75 discovered dynamic ScalaTest suites sequentially (1-by-1)**.
 
@@ -250,7 +350,7 @@ All 75 tests passed successfully!
 
 ---
 
-## 5. Formal Verification Engine (`test-all-formal`)
+## 7. Formal Verification Engine (`test-all-formal`)
 
 SpinalML features an exhaustive formal verification suite using **SymbiYosys (SBY)** and **SMT-BMC (CVC4 / Z3)**. All 56 formal specifications (`*Formal.scala` under `symbolicTest/`) verify structural flow invariants, AXI4/AXI4-Stream handshakes, absence of deadlocks, and CSR registers.
 
@@ -301,7 +401,7 @@ All 56 formal verification suites passed successfully!
 
 ---
 
-## 6. Python Hardware Co-Simulations (`test-all-python`)
+## 8. Python Hardware Co-Simulations (`test-all-python`)
 
 SpinalML features end-to-end Python/Cocotb hardware co-simulations to test neural network layers and operators directly against Python golden models (Torch/NumPy).
 
@@ -342,7 +442,7 @@ python cli/main.py test-all-python -v
 
 ---
 
-## 7. Low-Level EDA Tool Passthroughs
+## 9. Low-Level EDA Tool Passthroughs
 
 The CLI provides transparent wrappers around all bundled FPGA tools, automatically configuring `PATH`, `VERILATOR_ROOT`, and GCC toolchain paths:
 
@@ -384,7 +484,7 @@ python cli/main.py openfpgaloader --detect
 
 ---
 
-## 7. Quick Command Reference
+## 10. Quick Command Reference
 
 | Action | Linux Command | Windows PowerShell Command |
 | :--- | :--- | :--- |
@@ -394,6 +494,11 @@ python cli/main.py openfpgaloader --detect
 | **Activate venv** | `source .venv/bin/activate` | `.\.venv\Scripts\Activate.ps1` |
 | **Install tools** | `python cli/main.py setup` | `python cli/main.py setup` |
 | **Compile to Verilog** | `python cli/main.py compile spinalML/src/spinalML/examples/Mnist.scala -o verilog/` | `python cli/main.py compile spinalML\src\spinalML\examples\Mnist.scala -o verilog\` |
+| **Build FPGA Bitstream** | `python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k` | `python cli/main.py build tests\universal\Universal1DDemo.scala --board tang-primer-20k` |
+| **Build (Yosys Synth Only)** | `python cli/main.py build tests/universal/Universal1DDemo.scala --yosys` | `python cli/main.py build tests\universal\Universal1DDemo.scala --yosys` |
+| **Build (nextpnr PnR Only)** | `python cli/main.py build tests/universal/Universal1DDemo.scala --nextpnr` | `python cli/main.py build tests\universal\Universal1DDemo.scala --nextpnr` |
+| **Flash FPGA (SRAM)** | `python cli/main.py flash --board tang-primer-20k` | `python cli/main.py flash --board tang-primer-20k` |
+| **Flash FPGA (SPI Flash)** | `python cli/main.py flash --board tang-primer-20k --flash` | `python cli/main.py flash --board tang-primer-20k --flash` |
 | **Universal Circuit Test** | `python cli/main.py test spinalML/src/spinalML/examples/Mnistw4a8.scala` | `python cli/main.py test spinalML\src\spinalML\examples\Mnistw4a8.scala` |
 | **Single ScalaTest** | `python cli/main.py test spinalML/test/src/spinalML/examples/MnistTest.scala` | `python cli/main.py test spinalML\test\src\spinalML\examples\MnistTest.scala` |
 | **Run All Dynamic Tests** | `python cli/main.py test-all` | `python cli/main.py test-all` |

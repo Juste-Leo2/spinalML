@@ -126,6 +126,15 @@ Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assum
   - Stripped all hardcoded 27 MHz / 115200 baud `UartSoC` blocks from `tests/universal/`, restoring clean, purely mathematical `Accelerator` specifications.
   - Output count (`outCount`) and bus width (`dataWidth`) are inferred implicitly from model architecture.
 - [x] **Host Python Driver (`uart_host.py`)**: End-to-end Python library with automatic BRAM chunking, timeout management, status polling, and unit test suite (`test_uart_host.py`).
+- [x] **Turnkey Hardware Synthesis & Bitstream Pipeline (`spinalml build`)**:
+  - Direct `.scala` compilation into turnkey `UartSoC` Verilog netlist (`AxiReadMem`, `UartBridge`, `UartRx`, `UartTx`).
+  - Dynamic live monitoring of Yosys synthesis passes and nextpnr-himbaechel placement, routing, and timing analysis.
+  - Automatic physical pin constraints adapter (`boards/constraints/*.cst`) resolving board pinout to top module port conventions.
+  - Exact post-PnR hardware resource extraction (LUT4, FF, BRAM, DSP) and static timing analysis ($F_{\max}$, clock slack) in a Rich dashboard.
+  - Resilient auto-patcher (`ensure_apycula_patched()`) fixing upstream Apycula `KeyError: 'IRBY_IREG0BL_0'` on Gowin DSP blocks (`docs/bugs/2026-09-gowin-pack-dsp-keyerror.md`).
+- [x] **FPGA Hardware Flashing & Target Deployment (`spinalml flash`)**:
+  - Rapid volatile SRAM programming (~1.5s via `openFPGALoader -m`) and permanent SPI Flash programming (`-f`).
+  - Automatic bitstream discovery in `hw_build/<board>/top.fs`.
 - [ ] **Hardcoded Architecture Decoupling & Custom Chip Scaling (Future Work)**:
   - [ ] **Multi-Lane & Multi-Byte Output Stream Serialization (`spinalML/src/spinalML/io/UartSoC.scala:L82-86`)**: Replace single-lane 8-bit truncation (`acc.io.outStream.stream.payload(0).resize(8)`) with a dynamic serialization gearbox supporting multiple parallel lanes (`outLanes > 1`) and multi-byte dtypes (`INT16`, `INT32`, `FP16`, `FP32`).
   - [ ] **Configurable Memory Partitioning & External RAM Arbitration (`spinalML/src/spinalML/io/AxiReadMem.scala:L50-56`)**: Generalize the fixed dual-region BRAM formula (`imgBase = 0x10000`, `weightBase = 0x20000`) into a configurable multi-region controller or external memory interface (HyperRAM / PSRAM / DDR / ASIC SRAM).
