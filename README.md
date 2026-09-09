@@ -154,6 +154,33 @@ Explore detailed guides in the [`docs/`](docs/) directory:
 - [**Project Structure**](docs/project_structure.md): Repository layout, conventions, and architectural roadmap.
 - [**UART Bridge & Protocol**](docs/uart_bridge.md): Specifications for physical UART host communication and CSR bridges.
 - [**Application Examples**](examples/): Silicon-validated hardware projects, including the [Tang Primer 20K MNIST Accelerator](examples/Mnist/README.md).
+- [**Supported FPGA Boards**](#supported-fpga-boards): Hardware compatibility matrix and supported vendor targets.
+
+---
+
+## Supported FPGA Boards
+
+SpinalML aims to support all major FPGA architectures through open-source EDA toolchains (`yosys`, `nextpnr`, `openFPGALoader`) and vendor synthesis suites.
+
+| Vendor | Board | FPGA Device | Toolchain / Programmer | Target Slug | Status |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| **Gowin** | **Sipeed Tang Primer 20K** | GW2A-LV18PG256C8/I7 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-primer-20k` | ✅ |
+| Gowin | Sipeed Tang Nano 20K | GW2A-LV18QN88 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-nano-20k` | ❌ |
+| Gowin | Sipeed Tang Nano 9K | GW1NR-LV9QN88PC6/I5 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-nano-9k` | ❌ |
+| Gowin | Sipeed Tang Mega 138K | GW5AST-LV138FPG676A | Yosys / Gowin EDA / openFPGALoader | `tang-mega-138k` | ❌ |
+| **AMD / Xilinx** | Digilent Arty A7-35T / 100T | Artix-7 (XC7A35T / XC7A100T) | Yosys + nextpnr-xilinx / Vivado | `arty-a7` | ❌ |
+| AMD / Xilinx | Digilent Basys 3 | Artix-7 (XC7A35T) | Vivado / openFPGALoader | `basys3` | ❌ |
+| AMD / Xilinx | Digilent PYNQ-Z2 / Cora Z7 | Zynq-7000 (XC7Z020 / XC7Z010) | Vivado / PYNQ Linux (AXI PS-PL) | `pynq-z2` | ❌ |
+| AMD / Xilinx | AMD Kria KV260 / KR260 | Zynq UltraScale+ MPSoC | Vivado / Vitis AI | `kria-kv260` | ❌ |
+| **Lattice** | Lattice iCE40 UltraPlus (iCEBreaker) | iCE40UP5K-SG48 | Yosys + nextpnr-ice40 / iceprog | `ice40-up5k` | ❌ |
+| Lattice | Lattice ECP5 (Colorlight 5A-75B / OrangeCrab) | LFE5U-25F / 45F / 85F | Yosys + nextpnr-ecp5 / openFPGALoader | `ecp5` | ❌ |
+| **Intel / Altera** | Terasic DE10-Lite | MAX 10 (10M50DAF484C7G) | Quartus Prime / openFPGALoader | `de10-lite` | ❌ |
+| Intel / Altera | Terasic DE10-Nano | Cyclone V SE (5CSEBA6U23I7) | Quartus Prime / openFPGALoader | `de10-nano` | ❌ |
+
+> [!TIP]
+> **Community Hardware Testing Welcome!**  
+> Currently, physical in-circuit testing is primarily performed on the **Sipeed Tang Primer 20K** as it is the main board physically available to the author.  
+> If you own another FPGA board (Arty A7, Basys 3, Pynq, Tang Nano, ECP5, etc.) and want to test or add support for it, community contributions and pull requests are warmly invited! Adding a new board target is straightforward: simply add a JSON configuration profile in [`boards/`](boards/) and its pin constraint file in `boards/constraints/`.
 
 ---
 
