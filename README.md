@@ -186,9 +186,7 @@ SpinalML aims to support all major FPGA architectures through open-source EDA to
 
 ## Contributing
 
-Contributions are welcome! Please read [**CONTRIBUTING.md**](CONTRIBUTING.md) before submitting a pull request.
-
-**Generative AI Policy**: The use of generative AI tools (LLMs, code assistants, autonomous agents) is fully permitted and encouraged. However, every Pull Request must be initiated and described by a human who understands the changes, and code must be manually verified with attached test results.
+Contributions are welcome! Whether you are adding support for a new FPGA board target, implementing hardware neural network layers, or improving toolchain automation, check out [**CONTRIBUTING.md**](CONTRIBUTING.md) to get started.
 
 ---
 
