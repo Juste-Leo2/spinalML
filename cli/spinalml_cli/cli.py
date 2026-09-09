@@ -661,7 +661,8 @@ def build(
     top: Optional[str] = typer.Option(None, "--top", help="Top-level module name (auto-detected if omitted: UartSoC, top)"),
     synth_only: bool = typer.Option(False, "--synth-only", "--yosys", help="Stop after Yosys synthesis (quick resource check)"),
     pnr_only: bool = typer.Option(False, "--pnr-only", "--nextpnr", help="Stop after nextpnr place-and-route (skip bitstream pack)"),
-    clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')")
+    clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)")
 ):
     """
     Synthesize, place & route and package FPGA bitstream (Yosys -> nextpnr -> gowin_pack).
@@ -676,7 +677,8 @@ def build(
         top_name=top,
         synth_only=synth_only,
         pnr_only=pnr_only,
-        clk_override=clk
+        clk_override=clk,
+        no_dsp=no_dsp
     )
     if code != 0:
         raise typer.Exit(code=code)

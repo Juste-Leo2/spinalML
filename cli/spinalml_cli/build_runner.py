@@ -410,7 +410,8 @@ def run_build(
     top_name: Optional[str] = None,
     synth_only: bool = False,
     pnr_only: bool = False,
-    clk_override: Optional[str] = None
+    clk_override: Optional[str] = None,
+    no_dsp: bool = False
 ) -> int:
     """
     Orchestrates the entire hardware build pipeline:
@@ -539,6 +540,8 @@ def run_build(
     # =========================================================================
     synth_json = hw_build_dir / "synth.json"
     synth_cmd_name = board_cfg.get("build", {}).get("synth_cmd", "synth_gowin")
+    if no_dsp:
+        synth_cmd_name = f"{synth_cmd_name} -nodsp"
 
     # Filter duplicate module definitions across Verilog files (e.g. UartSoC already bundling submodules)
     selected_v_files = filter_unique_verilog_files(v_files, actual_top)

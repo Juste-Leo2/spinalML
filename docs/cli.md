@@ -218,8 +218,8 @@ Options:
 - `--cst`, `--constraints <PATH>` : Custom physical pin constraints file override (`.cst`).
 - `--top <NAME>` : Top-level module name (auto-detected if omitted: `UartSoC`, `top`).
 - `--synth-only`, `--yosys` : Stop after Yosys synthesis.
-- `--pnr-only`, `--nextpnr` : Stop after nextpnr place & route.
 - `--clk <FREQ>` : Target clock frequency override (e.g. `'27MHz'`, `'50MHz'`).
+- `--no-dsp` : Disable hardware DSP block inference during Yosys synthesis (routes all multipliers through standard LUT4/carry logic, preventing Gowin combinational DSP packing bugs).
 
 ---
 
