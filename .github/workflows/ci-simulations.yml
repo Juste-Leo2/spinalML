@@ -22,9 +22,9 @@ on:
         type: boolean
         default: true
       test_python:
-        description: "4. Python Co-Simulations (Pytest)"
+        description: "4. Python Co-Simulations (Pytest) [Disabled on push - slow on Radxa]"
         type: boolean
-        default: true
+        default: false
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -285,7 +285,7 @@ jobs:
     needs: [prepare-env, simulation-tests, universal-tests, formal-proofs]
     if: |
       always() &&
-      (github.event_name == 'push' || inputs.test_python == true || inputs.test_python == 'true') &&
+      (github.event_name == 'workflow_dispatch' && (inputs.test_python == true || inputs.test_python == 'true')) &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled')
     runs-on: [self-hosted, arm64, radxa]

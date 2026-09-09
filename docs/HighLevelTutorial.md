@@ -26,7 +26,9 @@ import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.nn._
 import spinalML.dtypes._
 
-case class MyAccelerator(override val axiConfig: Axi4Config) extends Accelerator(
+case class MyAccelerator(
+  override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+) extends Accelerator(
   dataType    = I8(),          // global activation dtype
   inputShape  = Seq(8, 8, 1),  // logical input tensor [H, W, C]
   modelSpec   = Seq(
@@ -40,10 +42,16 @@ case class MyAccelerator(override val axiConfig: Axi4Config) extends Accelerator
   ),
   axiConfig   = axiConfig
 )
+```
 
-object MyVerilog extends App {
-  SpinalVerilog(MyAccelerator(Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)))
-}
+No boilerplate `App` object or manual Verilog elaboration runner is needed! The SpinalML CLI automatically detects, elaborates, and synthesizes your accelerator:
+
+```bash
+# Generate standalone Verilog:
+python cli/main.py compile MyAccelerator.scala -o verilog/
+
+# Or synthesize and place-and-route directly for FPGA:
+python cli/main.py build MyAccelerator.scala --board tang-primer-20k --no-dsp
 ```
 
 Ready-to-compile templates live in [`spinalML/src/spinalML/examples/`](../spinalML/src/spinalML/examples/):
@@ -67,7 +75,7 @@ Ready-to-compile templates live in [`spinalML/src/spinalML/examples/`](../spinal
 | | `MaxPool2D(poolSize, stride)`, `AvgPool2D(poolSize, stride)` | `[H, W(, C)]`; `AvgPool2D` requires `isPow2(poolSize²)`. The C-lane output is repacked back to `lanes = 1` automatically. BRAM line buffers inside. |
 | Attention | `ClassicalAttention(embedDim, numHeads)` | Scaled dot-product attention + output projection. `numHeads = 1` gives classical attention; any power-of-2 `numHeads` with `embedDim % numHeads == 0` gives multi-head attention. Float activations required. Supports wXaY (see §3). |
 | Utilities | `Flatten()` (produces `[1, totalElements]`), `Repack(newLanes)` | Metadata / gearbox only. |
-| DAG merges | `Add(a, b)`, `Concat(a, b, axis = 0)` | Merge two earlier graph nodes by index (see §7). Identical shapes/dtypes required on both branches (`Cast`/`Repack` to align). |
+| DAG merges | `Add(a, b)`, `Concat(a, b, axis = 0)` | Merge two earlier graph nodes by index (see §8). Identical shapes/dtypes required on both branches (`Cast`/`Repack` to align). |
 | Precision | `Requantize(shift, targetType)` | SInt -> smaller SInt (shift + saturate). |
 | | `Cast(targetType)` | Mid-network dtype change, e.g. SInt -> BF16 before a float head. |
 
@@ -113,7 +121,37 @@ for a full working transformer block.
 
 ---
 
-## 4. Memory layout and control interface
+## 4. Hardware LUT Optimization: Parallelism (`lanes`) & Accumulator Streaming (`temporal`)
+
+By default, the High-Level API automates all hardware micro-architecture details. However, two advanced knobs provide fine-grained control over FPGA logic utilization:
+
+### Bus Parallelism & Gearboxes (`lanes` & `Repack`)
+- **What is `lanes`?** In SpinalML, a `Tensor` can stream multiple elements per clock cycle (`lanes`).
+- **Automated Inference**: `Sequential` automatically deduces the required `lanes` for each layer (e.g., $K \times K$ for convolutions, `inFeatures` for dense layers) and inserts hardware gearboxes (`repack`) transparently.
+- **Manual Area Tuning**: If your model consumes too many routing LUTs, insert `Repack(newLanes)` in your `modelSpec` to narrow the physical bus width between layers:
+  ```scala
+  modelSpec = Seq(
+    Conv1D(inChannels = 8, outChannels = 16, kernelSize = 3),
+    Repack(newLanes = 1),  // Narrow the physical bus to 1 element/cycle to save LUTs
+    Linear(inFeatures = 16, outFeatures = 4)
+  )
+  ```
+
+### Windowed Accumulator Streaming (`temporal`)
+- **The Problem**: In convolutional and linear layers, matrix multiplications accumulate an $M \times N$ output table in registers before emitting results. For large image feature maps (e.g., $M = 576$ sliding windows $\times$ $N = 2$ channels), this large register array and wide index multiplexer can consume thousands of LUTs.
+- **The Solution**: Set `temporal = N` (where $N > 0$) in your `Accelerator`:
+  ```scala
+  case class MyAccelerator(
+    override val axiConfig: Axi4Config = Axi4Config(32, 64, 4),
+    override val temporal: Int = 2   // Drain completed rows on-the-fly
+  ) extends Accelerator(..., temporal = temporal)
+  ```
+- **Hardware Impact**: As soon as a row completes its inner product, it is immediately drained onto the downstream stream. The on-chip accumulator table shrinks from $M \times N$ to $\le \min(\text{temporal}, M) \times N$ slots.
+- **Bit-Exactness**: The mathematical floating-point / integer addition order is identical, preserving 100% bit-exact results while dramatically reducing logic cell utilization.
+
+---
+
+## 5. Memory layout and control interface
 
 The generated `Accelerator` exposes:
 
@@ -146,7 +184,7 @@ Memory contents expected by the generated hardware:
 
 ---
 
-## 5. Worked example: shapes through a 2D CNN
+## 6. Worked example: shapes through a 2D CNN
 
 From [`HighLevel2DTemplate.scala`](../spinalML/src/spinalML/examples/HighLevel2DTemplate.scala):
 
@@ -167,7 +205,7 @@ The builder deduces every intermediate shape and final output shape automaticall
 
 ---
 
-## 6. Simulating your accelerator
+## 7. Simulating your accelerator
 
 The compiled component talks real AXI4/AXI4-Lite, so it can be driven in simulation exactly
 like on an FPGA host: map a memory model on the AXI4 master, program the base addresses and
@@ -194,7 +232,7 @@ SimConfig.withVerilator.compile(MyAccelerator(axiConfig)).doSim { dut =>
   val mem = AxiMemorySim(dut.io.axiMaster, dut.clockDomain, AxiMemorySimConfig(maxOutstandingReads = 8))
   mem.start()
 
-  // Fill DDR: image at 0x1000, weights at 0x2000 (see §4 layout)
+  // Fill DDR: image at 0x1000, weights at 0x2000 (see §5 layout)
   mem.memory.writeBigInt(0x1000, BigInt("3C003C003C003C00", 16), 8)
 
   // Program control registers, then start
@@ -206,16 +244,20 @@ SimConfig.withVerilator.compile(MyAccelerator(axiConfig)).doSim { dut =>
 }
 ```
 
-Run the suites with:
+Run simulation suites via the SpinalML CLI:
 
 ```bash
-./mill spinalML.test.testOnly spinalML.test.SequentialCNNTest
-./mill spinalML.test.testOnly spinalML.test.HighLevelAttentionTest
+# Run a specific high-level hardware simulation:
+python cli/main.py test spinalML/test/src/spinalML/test/SequentialCNNTest.scala
+python cli/main.py test spinalML/test/src/spinalML/test/HighLevelAttentionTest.scala
+
+# Or run all dynamic hardware simulations:
+python cli/main.py test-all
 ```
 
 ---
 
-## 7. Beyond linear chains: DAG topologies
+## 8. Beyond linear chains: DAG topologies
 
 `Sequential` generalizes from a linear chain to a **directed acyclic graph (DAG)**: any
 layer output can feed several consumers, and `Add`/`Concat` merge nodes can combine
@@ -258,7 +300,7 @@ the shared AXI arbiter serializes weight fetches as before.
 
 ---
 
-## 8. Current limitations
+## 9. Current limitations
 
 * **One-shot inference contract**: every buffer holds one full tensor and each `start`
   runs a whole inference — models are implicitly capped at what fits on-chip. Concretely,

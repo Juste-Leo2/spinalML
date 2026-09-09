@@ -1,0 +1,22 @@
+// ==============================================================================
+// SpinalML Physical Constraints - Sipeed Tang Primer 20K
+// FPGA: Gowin GW2A-LV18PG256C8/I7
+// SPDX-License-Identifier: MIT
+// ==============================================================================
+
+// Onboard 27 MHz Clock Oscillator
+IO_LOC "clk" H11;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// Pushbutton S1 (Active Low Reset)
+IO_LOC "reset_n" T10;
+IO_PORT "reset_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// USB-UART Interface (pins routed to onboard FTDI debugger)
+// RX: Board receives from PC (FTDI TX)
+IO_LOC "uart_rx" T13;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// TX: Board transmits to PC (FTDI RX)
+IO_LOC "uart_tx" M11;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP;

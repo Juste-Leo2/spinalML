@@ -158,6 +158,22 @@ def compile(
     import os
     import glob
     import re
+    from typer.models import OptionInfo, ArgumentInfo
+
+    def _unwrap(val, default=None):
+        if isinstance(val, (OptionInfo, ArgumentInfo)):
+            return val.default if val.default is not ... else default
+        return val
+
+    out = _unwrap(out, Path("rtl"))
+    chain = _unwrap(chain, True)
+    soc = _unwrap(soc, False)
+    board = _unwrap(board, "tang-primer-20k")
+    clk = _unwrap(clk, None)
+    baud = _unwrap(baud, None)
+    out_count = _unwrap(out_count, None)
+    word_width = _unwrap(word_width, None)
+    bram_words = _unwrap(bram_words, None)
 
     if not file.exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
@@ -635,3 +651,55 @@ def test_python_alias(
         debug_math=debug_math,
         ci_sleep=ci_sleep
     )
+
+@app.command()
+def build(
+    src: Optional[Path] = typer.Argument(None, help="Source Verilog directory, single .v file, or .scala model [default: rtl/]"),
+    out: Optional[Path] = typer.Option(None, "-o", "--out", help="Output directory for build artifacts [default: hw_build/<board>/]"),
+    board: str = typer.Option("tang-primer-20k", "--board", help="Target FPGA board profile from boards/*.json"),
+    cst: Optional[Path] = typer.Option(None, "--cst", "--constraints", help="Custom physical constraints file override (.cst)"),
+    top: Optional[str] = typer.Option(None, "--top", help="Top-level module name (auto-detected if omitted: UartSoC, top)"),
+    synth_only: bool = typer.Option(False, "--synth-only", "--yosys", help="Stop after Yosys synthesis (quick resource check)"),
+    pnr_only: bool = typer.Option(False, "--pnr-only", "--nextpnr", help="Stop after nextpnr place-and-route (skip bitstream pack)"),
+    clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)")
+):
+    """
+    Synthesize, place & route and package FPGA bitstream (Yosys -> nextpnr -> gowin_pack).
+    Accepts a Verilog directory, single .v file, or a .scala model file (auto-compiles to Verilog first).
+    """
+    from .build_runner import run_build
+    code = run_build(
+        src=src,
+        out_dir=out,
+        board=board,
+        cst_override=cst,
+        top_name=top,
+        synth_only=synth_only,
+        pnr_only=pnr_only,
+        clk_override=clk,
+        no_dsp=no_dsp
+    )
+    if code != 0:
+        raise typer.Exit(code=code)
+
+@app.command()
+def flash(
+    bitstream: Optional[Path] = typer.Argument(None, help="Path to bitstream (.fs, .bit). If omitted, auto-detected in hw_build/<board>/"),
+    board: str = typer.Option("tang-primer-20k", "--board", help="Target FPGA board profile from boards/*.json"),
+    sram: bool = typer.Option(True, "--sram/--no-sram", help="Flash to volatile SRAM (fast load, ~1s) [default: true]"),
+    flash_mem: bool = typer.Option(False, "--flash", help="Flash to non-volatile on-board SPI flash memory")
+):
+    """
+    Program the FPGA hardware using openFPGALoader.
+    Auto-detects the latest bitstream in hw_build/<board>/ or takes an explicit bitstream path.
+    """
+    from .flash_runner import run_flash
+    code = run_flash(
+        bitstream=bitstream,
+        board=board,
+        sram=sram,
+        flash_mem=flash_mem
+    )
+    if code != 0:
+        raise typer.Exit(code=code)

@@ -126,9 +126,26 @@ Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assum
   - Stripped all hardcoded 27 MHz / 115200 baud `UartSoC` blocks from `tests/universal/`, restoring clean, purely mathematical `Accelerator` specifications.
   - Output count (`outCount`) and bus width (`dataWidth`) are inferred implicitly from model architecture.
 - [x] **Host Python Driver (`uart_host.py`)**: End-to-end Python library with automatic BRAM chunking, timeout management, status polling, and unit test suite (`test_uart_host.py`).
+- [x] **Turnkey Hardware Synthesis & Bitstream Pipeline (`spinalml build`)**:
+  - Direct `.scala` compilation into turnkey `UartSoC` Verilog netlist (`AxiReadMem`, `UartBridge`, `UartRx`, `UartTx`).
+  - Dynamic live monitoring of Yosys synthesis passes and nextpnr-himbaechel placement, routing, and timing analysis.
+  - Automatic physical pin constraints adapter (`boards/constraints/*.cst`) resolving board pinout to top module port conventions.
+  - Exact post-PnR hardware resource extraction (LUT4, FF, BRAM, DSP) and static timing analysis ($F_{\max}$, clock slack) in a Rich dashboard.
+  - Resilient auto-patcher (`ensure_apycula_patched()`) fixing upstream Apycula `KeyError: 'IRBY_IREG0BL_0'` on Gowin DSP blocks (`docs/bugs/2026-09-gowin-pack-dsp-keyerror.md`).
+- [x] **FPGA Hardware Flashing & Target Deployment (`spinalml flash`)**:
+  - Rapid volatile SRAM programming (~1.5s via `openFPGALoader -m`) and permanent SPI Flash programming (`-f`).
+  - Automatic bitstream discovery in `hw_build/<board>/top.fs`.
+- [x] **Physical In-Circuit Bit-Exact Hardware Verification (Tang Primer 20K, Gowin GW2A-18)**:
+  - **100% Bit-Exact Match on Physical Silicon**: `Universal1DDemo` deployed on Tang Primer 20K over UART (`COM8` @ 115200 baud) matched the software golden oracle bit-for-bit (`[127, 127]` / `0x7F7F`).
+  - **DSP Bypass Switch (`--no-dsp`)**: Added `--no-dsp` synthesis flag to route multipliers through standard LUT4/carry logic, completely circumventing Gowin silicon/Apycula combinational DSP register bypass and signedness defects, achieving **101.33 MHz Fmax** (+74.33 MHz timing slack over 27 MHz target) with 44.9% LUT4 utilization.
+  - **Power-On Reset (POR)**: Self-contained internal boot counter running on `BOOT` clock domain cleanly initializes FPGA registers without requiring external physical buttons or unconstrained pins.
 - [ ] **Hardcoded Architecture Decoupling & Custom Chip Scaling (Future Work)**:
+  - [ ] **Universal Pipelined Multipliers & Hard DSP Block Integration**:
+    - Add an optional pipelined stage for layer multipliers (`pipelined = true`, or automatic insertion) coupled with SpinalHDL `Stream` latency tracking (`m2sPipe`).
+    - Enables FPGA synthesis tools (Yosys `synth_gowin`, `synth_xilinx`, `synth_ecp5`, etc.) to absorb internal pipeline registers (`AREG`, `BREG`, `PREG`) into dedicated silicon hard DSP blocks (Gowin `MULT18X18`, Xilinx `DSP48E1`, Intel DSP), recovering 3,000–4,000 LUTs on complex CNNs while avoiding combinational bypass/signedness errata, while preserving zero-latency combinational behavior when desired for soft simulation.
   - [ ] **Multi-Lane & Multi-Byte Output Stream Serialization (`spinalML/src/spinalML/io/UartSoC.scala:L82-86`)**: Replace single-lane 8-bit truncation (`acc.io.outStream.stream.payload(0).resize(8)`) with a dynamic serialization gearbox supporting multiple parallel lanes (`outLanes > 1`) and multi-byte dtypes (`INT16`, `INT32`, `FP16`, `FP32`).
   - [ ] **Configurable Memory Partitioning & External RAM Arbitration (`spinalML/src/spinalML/io/AxiReadMem.scala:L50-56`)**: Generalize the fixed dual-region BRAM formula (`imgBase = 0x10000`, `weightBase = 0x20000`) into a configurable multi-region controller or external memory interface (HyperRAM / PSRAM / DDR / ASIC SRAM).
   - [ ] **Auto-Generated CSR Address Map for Host Drivers**: Automatically export CSR register offsets (`0x00`, `0x08`, `0x0C`) from Scala elaboration into a Python/C header to eliminate manual register map synchronization.
   - [ ] **Full-Duplex Real-Time Streaming Mode**: Add hardware interrupt signaling or asynchronous streaming DMA to allow continuous inference without host polling.
+
 

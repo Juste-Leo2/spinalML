@@ -1,0 +1,4 @@
+gradio
+numpy
+pyserial
+pillow

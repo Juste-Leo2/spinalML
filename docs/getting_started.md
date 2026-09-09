@@ -26,7 +26,9 @@ import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.nn._
 import spinalML.dtypes._
 
-case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Accelerator(
+case class HighLevelTemplate(
+  override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+) extends Accelerator(
   dataType = I8(),            // Global quantization format for the network
   inputShape = Seq(28, 1),    // The expected shape of the input tensor (e.g. 1D signal of length 28)
   
@@ -51,21 +53,23 @@ case class HighLevelTemplate(override val axiConfig: Axi4Config) extends Acceler
   
   axiConfig = axiConfig
 )
+```
 
-// Generate the Verilog for the FPGA
-object HighLevelTemplateVerilog extends App {
-  val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
-  SpinalVerilog(HighLevelTemplate(axiConfig))
-}
+No `App` object or manual Verilog elaboration code is needed! The SpinalML CLI automatically elaborates your class and wraps it in the SoC bus:
+```bash
+python cli/main.py compile HighLevelTemplate.scala -o verilog/
+# Or build straight to a bitstream:
+python cli/main.py build HighLevelTemplate.scala --board tang-primer-20k --no-dsp
 ```
 
 > [!TIP]
 > **Advanced Topology Control:** The High-Level API supports dynamic modifications of the hardware datapath directly within the `modelSpec`:
 > - **Dynamic Mixed Precision**: Use `Requantize(shift, targetType)` to adjust quantization and change precision on the fly, or `Cast(targetType)` to cross from integer chains to the float domain (e.g. before a Softmax head).
-> - **Manual Repacking**: Use `Repack(newLanes)` to dynamically change the physical bus width between layers to save FPGA resources.
+> - **Manual Repacking (`lanes`)**: Use `Repack(newLanes)` to dynamically change the physical streaming bus width between layers to save FPGA routing resources.
+> - **LUT Footprint Reduction (`temporal`)**: Set `override val temporal: Int = 2` in your `Accelerator` to stream out completed matrix multiplication rows on-the-fly instead of accumulating full $M \times N$ register tables, saving thousands of LUTs on constrained FPGAs.
 > - **Weight-only Quantization (wXaY)**: declare `customWeightType = Some(I8())` and `weightScales` (per-tensor or per-channel) on `Linear` and `ClassicalAttention` to keep float activations with compact integer weights.
 > - **2D Vision & Transformers**: `MaxPool2D`/`AvgPool2D`, `Sigmoid`, `Tanh` and `ClassicalAttention(embedDim, numHeads)` (classical or multi-head) are all first-class citizens of the API.
-> - **DAG Topologies**: go beyond linear chains with explicit merge nodes — `Add(a, b)` and `Concat(a, b)` reference earlier graph nodes for ResNet-style skip connections (see the [High-Level Tutorial](HighLevelTutorial.md) §7).
+> - **DAG Topologies**: go beyond linear chains with explicit merge nodes — `Add(a, b)` and `Concat(a, b)` reference earlier graph nodes for ResNet-style skip connections (see the [High-Level Tutorial](HighLevelTutorial.md) §8).
 
 ---
 

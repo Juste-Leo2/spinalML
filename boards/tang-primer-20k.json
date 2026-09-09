@@ -6,5 +6,27 @@
   "clk_freq": 27000000,
   "baud_rate": 115200,
   "bram_words": 4096,
-  "description": "Sipeed Tang Primer 20K (Gowin GW2A-18, 27 MHz base clock)"
+  "description": "Sipeed Tang Primer 20K (Gowin GW2A-18, 27 MHz base clock)",
+  "build": {
+    "synth_cmd": "synth_gowin",
+    "pnr_tool": "nextpnr-himbaechel",
+    "pnr_args": [
+      "--device", "GW2A-LV18PG256C8/I7",
+      "--vopt", "family=GW2A-18"
+    ],
+    "default_cst": "boards/constraints/tang-primer-20k.cst",
+    "pack_tool": "gowin_pack",
+    "pack_args": ["-d", "GW2A-18"],
+    "bitstream_name": "top.fs"
+  },
+  "flash": {
+    "programmer": "openFPGALoader",
+    "board_target": "tangprimer20k"
+  },
+  "limits": {
+    "lut": 20736,
+    "ff": 15552,
+    "bram": 46,
+    "dsp": 48
+  }
 }

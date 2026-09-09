@@ -78,6 +78,14 @@ def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to read board config file {target_file}: {e}")
 
     # Standardize and supply defaults
+    project_root = CLI_DIR.parent
+    raw_build = data.get("build", {})
+    raw_flash = data.get("flash", {})
+    raw_limits = data.get("limits", {})
+
+    default_cst_rel = raw_build.get("default_cst")
+    default_cst_path = (project_root / default_cst_rel).resolve() if default_cst_rel else None
+
     config = {
         "name": data.get("name", target_file.stem),
         "vendor": data.get("vendor", "Unknown"),
@@ -87,9 +95,48 @@ def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
         "baud_rate": int(data.get("baud_rate", 115200)),
         "bram_words": int(data.get("bram_words", 4096)),
         "description": data.get("description", ""),
-        "file_path": target_file
+        "file_path": target_file,
+        "build": {
+            "synth_cmd": raw_build.get("synth_cmd", "synth_gowin" if data.get("vendor") == "Gowin" else "synth"),
+            "pnr_tool": raw_build.get("pnr_tool", "nextpnr-himbaechel"),
+            "pnr_args": raw_build.get("pnr_args", []),
+            "default_cst": default_cst_path,
+            "pack_tool": raw_build.get("pack_tool", "gowin_pack"),
+            "pack_args": raw_build.get("pack_args", []),
+            "bitstream_name": raw_build.get("bitstream_name", "top.fs" if data.get("vendor") == "Gowin" else "top.bit")
+        },
+        "flash": {
+            "programmer": raw_flash.get("programmer", "openFPGALoader"),
+            "board_target": raw_flash.get("board_target", target_file.stem.replace("-", ""))
+        },
+        "limits": {
+            "lut": int(raw_limits.get("lut", 0)),
+            "ff": int(raw_limits.get("ff", 0)),
+            "bram": int(raw_limits.get("bram", 0)),
+            "dsp": int(raw_limits.get("dsp", 0))
+        }
     }
     return config
+
+def resolve_constraints_file(board_cfg: Dict[str, Any], override_cst: Optional[Union[str, Path]] = None) -> Optional[Path]:
+    """
+    Resolves physical constraints file:
+    1. override_cst if explicitly specified and exists
+    2. board_cfg["build"]["default_cst"] if exists
+    3. None if no constraints file found
+    """
+    if override_cst:
+        p = Path(override_cst)
+        if not p.is_absolute():
+            p = CLI_DIR.parent / p
+        if p.exists():
+            return p.resolve()
+        raise FileNotFoundError(f"Specified constraints file not found: {override_cst}")
+
+    cst_candidate = board_cfg.get("build", {}).get("default_cst")
+    if cst_candidate and Path(cst_candidate).exists():
+        return Path(cst_candidate).resolve()
+    return None
 
 def detect_model_parameters(scala_file: Path) -> Dict[str, Any]:
     """

@@ -34,7 +34,20 @@ class UartSoC[T <: Data](
     val uartTx = out(Bool())
   }
 
-  val reset = !io.resetN
+  // Power-On Reset: bitstream boot initialization without creating any external reset port
+  val bootClockDomain = ClockDomain(
+    clock = clockDomain.clock,
+    config = ClockDomainConfig(resetKind = BOOT)
+  )
+  val porActive = new ClockingArea(bootClockDomain) {
+    val counter = Reg(UInt(8 bits)) init(0)
+    val active = counter =/= 255
+    when(active) {
+      counter := counter + 1
+    }
+  }.active
+
+  val reset = porActive || !io.resetN
   val cd = ClockDomain(
     clock = clockDomain.clock,
     reset = reset,
