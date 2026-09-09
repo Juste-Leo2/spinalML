@@ -91,6 +91,7 @@ def test_double_buffer_streamer_runner():
         toplevel="DoubleBufferStreamer",
         module="test_double_buffer_streamer",
         testcase="cocotb_test_double_buffer_streamer",
+        sim_build="sim_build/py_double_buffer_streamer",
         timescale="1ns/1ps",
         extra_args=["-Wno-fatal"]
     )

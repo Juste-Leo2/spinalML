@@ -120,6 +120,7 @@ def test_pytest_tap_buffer():
         verilog_sources=[v_file],
         toplevel="TapBufferTestComp",
         module="test_tap_buffer",
+        sim_build="sim_build/py_tap_buffer",
         timescale="1ns/1ps",
         testcase="run_tap_buffer_sim",
         extra_args=["-Wno-fatal"]

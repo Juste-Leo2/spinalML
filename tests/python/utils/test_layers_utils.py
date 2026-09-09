@@ -110,10 +110,13 @@ async def recv_tensor(dut, signal_prefix, shape, dtype, is_floatml, lanes=1):
 import xml.etree.ElementTree as ET
 
 def safe_run_sim(**kwargs):
+    if "sim_build" not in kwargs:
+        toplevel = kwargs.get("toplevel", "default").lower()
+        kwargs["sim_build"] = f"sim_build/{toplevel}"
     try:
         run(**kwargs)
     except SystemExit as e:
-        sim_build = kwargs.get("sim_build", "sim_build")
+        sim_build = kwargs["sim_build"]
         results_xml = os.path.join(sim_build, "results.xml")
         if os.path.exists(results_xml):
             try:

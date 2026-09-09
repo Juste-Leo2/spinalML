@@ -211,6 +211,7 @@ def test_uart_bridge_scenario():
         verilog_sources=[v_file],
         toplevel="UartBridgeTestComp",
         module="test_uart_bridge",
+        sim_build="sim_build/py_uart_bridge",
         testcase="cocotb_uart_bridge",
         timescale="1ns/1ps",
         extra_args=["-Wno-fatal"],

@@ -66,6 +66,15 @@ def run_all_python_tests(
         log_dir = project_root / "out" / "python_reports"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prevent VPATH ../verilator.o pollution: ensure no orphan object files exist at sim_build root
+    sim_build_root = project_root / "sim_build"
+    if sim_build_root.exists():
+        for orphan in sim_build_root.glob("*.o"):
+            try:
+                orphan.unlink()
+            except OSError:
+                pass
+
     test_files = discover_python_tests(test_dir, filter_pattern)
     total_files = len(test_files)
 

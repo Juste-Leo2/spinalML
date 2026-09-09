@@ -84,6 +84,7 @@ def test_stream_double_buffer():
         verilog_sources=[v_file],
         toplevel="StreamDoubleBufferTestComp",
         module="test_stream_double_buffer",
+        sim_build="sim_build/py_stream_double_buffer",
         timescale="1ns/1ps",
         testcase="run_double_buffer_sim",
         extra_args=["-Wno-fatal"]

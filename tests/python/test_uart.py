@@ -127,6 +127,7 @@ def test_uart_rx_tx_golden():
         verilog_sources=[v_file],
         toplevel="UartRxTxLoopbackComp",
         module="test_uart",
+        sim_build="sim_build/py_uart_rx_tx",
         testcase="cocotb_uart_loopback",
         timescale="1ns/1ps",
         extra_args=["-Wno-fatal"],

@@ -28,8 +28,10 @@ object Float {
     val b_is_zero = b.exponent === 0
     
     // Add implicit leading '1' to mantissa (if not zero)
-    val mantA = Mux(a_is_zero, U(0, (mantBits + 1) bits), (B"1" ## a.mantissa).asUInt)
-    val mantB = Mux(b_is_zero, U(0, (mantBits + 1) bits), (B"1" ## b.mantissa).asUInt)
+    val mantA = UInt((mantBits + 1) bits).dontSimplifyIt()
+    mantA := Mux(a_is_zero, U(0, (mantBits + 1) bits), (B"1" ## a.mantissa).asUInt)
+    val mantB = UInt((mantBits + 1) bits).dontSimplifyIt()
+    mantB := Mux(b_is_zero, U(0, (mantBits + 1) bits), (B"1" ## b.mantissa).asUInt)
     
     // Multiply mantissas (This naturally maps to DSP blocks)
     // Result width: (mantBits + 1) * 2
