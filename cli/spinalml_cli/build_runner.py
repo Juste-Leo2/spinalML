@@ -547,8 +547,13 @@ def run_build(
     # =========================================================================
     synth_json = hw_build_dir / "synth.json"
     synth_cmd_name = board_cfg.get("build", {}).get("synth_cmd", "synth_gowin")
-    if no_dsp:
-        synth_cmd_name = f"{synth_cmd_name} -nodsp"
+    # For Gowin targets, Yosys automatic dsp_map.v infers unclocked combinational MULT9X9/MULT18X18
+    # which suffer from the upstream silicon sign/mux bug. SpinalML maps hardware DSPs explicitly via
+    # clocked GowinMULT18X18 (OUT_REG=1) in RTL. Hence synth_gowin must always run with -nodsp so Yosys
+    # leaves loose arithmetic (e.g. FP mantissas) in clean LUTs while preserving explicitly instantiated MULT18X18.
+    if no_dsp or "synth_gowin" in synth_cmd_name:
+        if "-nodsp" not in synth_cmd_name:
+            synth_cmd_name = f"{synth_cmd_name} -nodsp"
 
     # Filter duplicate module definitions across Verilog files (e.g. UartSoC already bundling submodules)
     selected_v_files = filter_unique_verilog_files(v_files, actual_top)

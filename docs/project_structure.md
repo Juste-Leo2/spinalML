@@ -54,7 +54,8 @@ spinalML/
 │   ├── uart_bridge.md          # UART CSR protocol and packet framing
 │   ├── project_structure.md    # Repository layout (this file)
 │   └── bugs/                   # Hardware post-mortems & bug reports
-│       └── 2026-09-gowin-dsp-combinational-signedness.md
+│       ├── 2026-09-gowin-dsp-combinational-signedness.md
+│       └── 2026-09-gowin-yosys-mult9x9-combinational-corruption.md
 │
 ├── examples/                   # End-to-end ML applications
 │   └── README.md               # Application catalog and workflow guide

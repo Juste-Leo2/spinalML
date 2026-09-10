@@ -45,14 +45,14 @@ Synthesized using **Yosys** and placed & routed via **nextpnr-himbaechel** for t
 
 | Resource | Used | Capacity | Utilization | Status |
 | :--- | :---: | :---: | :---: | :---: |
-| **Logic (LUT4)** | **14,630** | 20,736 | **70.6 %** | OK |
-| **Registers (FF)** | **5,977** | 15,552 | **38.4 %** | OK |
+| **Logic (LUT4)** | **10,309** | 20,736 | **49.7 %** | OK (-4,321 LUTs saved) |
+| **Registers (FF)** | **5,577** | 15,552 | **35.9 %** | OK |
 | **Block RAM (BSRAM)** | **27** | 46 | **58.7 %** | OK |
-| **DSP (MULT)** | **0** | 48 | **0.0 %** (`--no-dsp`) | OK |
+| **DSP (MULT)** | **25** | 48 | **52.1 %** (`MULT18X18`) | OK |
 
 ### Timing & Performance Summary
 - **Target Clock**: 27.00 MHz
-- **Estimated Fmax**: **45.93 MHz** (Timing constraints MET, +18.93 MHz slack)
+- **Estimated Fmax**: **47.58 MHz** (Timing constraints MET, +20.58 MHz slack)
 - **Bitstream Size**: ~7.09 MB (`top.fs`)
 - **Inference Latency**:
   - **~180 ms per inference over UART** (including 784-byte image transmission at 115,200 baud, FPGA hardware execution, and 10-class logit retrieval).

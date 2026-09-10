@@ -143,3 +143,6 @@ In September 2026, SpinalML implemented a universal, vendor-agnostic DSP archite
   * **Timing**: $F_{\max}$ improved to **106.11 MHz**.
   * **In-Circuit UART Verification**: **100% Bit-Exact match** (`[127, 127]`).
   * The `--no-dsp` switch is retained as an optional fallback flag.
+
+> [!NOTE]
+> For complex networks containing small loose multiplications (such as 4-bit floating point mantissas in MNIST), see the companion bug report on Yosys's automatic `MULT9X9` inference and the `-nodsp` synthesis hardening: [Yosys Unclocked MULT9X9 Post-Mortem](2026-09-gowin-yosys-mult9x9-combinational-corruption.md).
