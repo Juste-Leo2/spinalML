@@ -26,7 +26,8 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   // > 0: the accumulation is drained row-by-row as soon as each row is
   // complete, so the table shrinks to min(temporal, M) x N slots — the sum
   // order (and therefore bit-exactness) is unchanged; only storage shrinks.
-  temporal: Int = 0
+  temporal: Int = 0,
+  dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default
 ) extends Component {
   val M = shapeA(0)
   val K = shapeA(1)
@@ -130,20 +131,18 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       stage2_a_masked(i) := Mux(RegNextWhen(validLane, stage1_fire), stage2_a(i), stage2_a(i).getZero)
     }
 
-    // N parallel multiplier arrays
-    val multRegs = Seq.fill(N)(Vec(Reg(accType), lanes))
-    for (n <- 0 until N) multRegs(n).foreach(r => r.init(r.getZero))
-    
-    when(stage2_valid) {
-      for (n <- 0 until N) {
-        for (i <- 0 until lanes) {
-          multRegs(n)(i) := ((stage2_a_masked(i), buffersB(n).io.readData(i)) match {
-            case (valA: SInt, valB: SInt) => (valA * valB).resized.asInstanceOf[TAcc]
-            case (valA: UInt, valB: UInt) => (valA * valB).resized.asInstanceOf[TAcc]
-            case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => spinalML.utils.Float.mul(valA, valB).asInstanceOf[TAcc]
-            case _ => throw new Exception("Type unsupported")
-          })
-        }
+    // N parallel multiplier arrays using universal DspMul (latency = 1)
+    val multRegs = Seq.fill(N)(Vec(accType, lanes))
+    for (n <- 0 until N) {
+      for (i <- 0 until lanes) {
+        multRegs(n)(i) := spinalML.dsp.DspMul(
+          a = stage2_a_masked(i),
+          b = buffersB(n).io.readData(i),
+          enable = stage2_valid,
+          accType = accType,
+          latency = 1,
+          dspConfig = dspConfig
+        )
       }
     }
     
@@ -250,18 +249,16 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       stage2_a_masked(i) := Mux(validLane, readA(i), readA(i).getZero)
     }
     
-    val multRegs = Vec(Reg(accType), lanes)
-    multRegs.foreach(r => r.init(r.getZero))
-    
-    when(stage2_valid) {
-      for (i <- 0 until lanes) {
-        multRegs(i) := ((stage2_a_masked(i), bufferB.io.readData(i)) match {
-          case (valA: SInt, valB: SInt) => (valA * valB).resized.asInstanceOf[TAcc]
-          case (valA: UInt, valB: UInt) => (valA * valB).resized.asInstanceOf[TAcc]
-          case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => spinalML.utils.Float.mul(valA, valB).asInstanceOf[TAcc]
-          case _ => throw new Exception("Type unsupported")
-        })
-      }
+    val multRegs = Vec(accType, lanes)
+    for (i <- 0 until lanes) {
+      multRegs(i) := spinalML.dsp.DspMul(
+        a = stage2_a_masked(i),
+        b = bufferB.io.readData(i),
+        enable = stage2_valid,
+        accType = accType,
+        latency = 1,
+        dspConfig = dspConfig
+      )
     }
     
     val stage3_enable = RegNext(stage2_valid, init = False)
@@ -461,7 +458,15 @@ case class MatmulOp[T <: Data, TAcc <: Data](
 }
 
 object matmul {
-  def apply[T <: Data, TAcc <: Data](a: Tensor[T], b: Tensor[T], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None, temporal: Int = 0): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](
+    a: Tensor[T],
+    b: Tensor[T],
+    accType: HardType[TAcc],
+    parallelN: Boolean = false,
+    reArm: Option[Bool] = None,
+    temporal: Int = 0,
+    dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default
+  ): Tensor[TAcc] = {
     val rankA = a.shape.length
     val rankB = b.shape.length
     require(rankA >= 2 && rankB >= 2, "Matmul requires at least 2D tensors")
@@ -483,7 +488,7 @@ object matmul {
 
     val outShape = batchDimsA ++ Seq(M, N)
 
-    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal)
+    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal, dspConfig = dspConfig)
     matmulComp.io.reArm := reArm.getOrElse(False)
     
     // Connect the continuous batched streams directly to the 2D MatmulOp.

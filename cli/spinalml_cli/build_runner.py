@@ -20,7 +20,7 @@ from rich.text import Text
 from .config import CLI_DIR, TOOLS_DIR, get_bin_path
 from .board import load_board_config, resolve_constraints_file, parse_frequency
 
-console = Console()
+console = Console(legacy_windows=False)
 
 def get_eda_env() -> Dict[str, str]:
     """Sets up the environment variables for OSS CAD Suite tools on Windows and Linux."""
@@ -490,7 +490,8 @@ def run_build(
                 baud=None,
                 out_count=None,
                 word_width=None,
-                bram_words=None
+                bram_words=None,
+                no_dsp=no_dsp
             )
         except typer.Exit as te:
             if te.exit_code != 0:

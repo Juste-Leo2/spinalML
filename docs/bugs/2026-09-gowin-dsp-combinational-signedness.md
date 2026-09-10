@@ -129,3 +129,17 @@ Yes, but with design trade-offs:
    * Adding an internal pipeline register to the multiplier increases compute latency by 1 clock cycle.
    * In a pure streaming architecture, introducing this latency requires aligning the valid/ready arbitration and control signals (e.g. via SpinalHDL's `StreamStage` or `m2sPipe`).
    * **Recommendation for SpinalML**: Keep combinational multipliers as the default for small layers, and provide an opt-in parameter (e.g., `pipelinedMultiplier = true` or automatic DSP mapping for large layers) to preserve 100% architectural universality across simulation, soft FPGAs, and ASIC targets.
+
+---
+
+## 6. Resolution: Universal Hardware DSP Architecture (`spinalML.dsp`)
+
+In September 2026, SpinalML implemented a universal, vendor-agnostic DSP architecture in package `spinalML.dsp`:
+* **Generic Behavioral Model**: For Vivado (DSP48), Quartus, and simulation, registered products infer DSPs automatically without vendor-specific code.
+* **Clocked Primitive Mapping on Gowin**: Instantiates `MULT18X18` with output pipeline register (`OUT_REG=1`, `CLK=clk`, `CE=enable`) instead of unclocked combinational macros.
+* **Silcon Verification Results**:
+  * **LUT4 Reduction**: 9,315 down to 6,584 (**-29.3% logic savings**).
+  * **DSP Allocation**: 12 `MULT18X18` blocks actively utilized on Tang Primer 20K.
+  * **Timing**: $F_{\max}$ improved to **106.11 MHz**.
+  * **In-Circuit UART Verification**: **100% Bit-Exact match** (`[127, 127]`).
+  * The `--no-dsp` switch is retained as an optional fallback flag.

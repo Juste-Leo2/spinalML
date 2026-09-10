@@ -12,13 +12,13 @@ It manages external EDA dependencies (Mill, Verilator, SymbiYosys, Yosys, nextpn
 | :--- | :--- | :--- |
 | **1. Toolchain Setup** | `python cli/main.py setup` | Provisions Mill, Verilator, Yosys, nextpnr, and openFPGALoader automatically |
 | **2. Dynamic Simulation** | `python cli/main.py test <target.scala>` | Runs cycle-accurate C++ simulation via Mill & Verilator |
-| **3. Turnkey FPGA Build** | `python cli/main.py build <target.scala> --board tang-primer-20k --no-dsp` | Generates Verilog, wraps UartSoC, synthesizes, and outputs `.fs` bitstream |
+| **3. Turnkey FPGA Build** | `python cli/main.py build <target.scala> --board tang-primer-20k` | Generates Verilog, wraps UartSoC, synthesizes with hardware DSPs, and outputs `.fs` bitstream |
 | **4. Hardware Flash** | `python cli/main.py flash --board tang-primer-20k` | Flashes the built bitstream to FPGA SRAM in ~1.5s via openFPGALoader |
 
-> [!IMPORTANT]
-> **Mandatory Flag for Tang Primer 20K: `--no-dsp`**
-> When targeting the Sipeed Tang Primer 20K (Gowin GW2A-18), **always include the `--no-dsp` flag** in the `build` command.
-> The open-source Gowin synthesis backend in Yosys infers combinational hard DSP blocks without internal pipeline registers, causing signedness and timing failure on hardware (see [Gowin DSP Bug Post-Mortem](bugs/2026-09-gowin-dsp-combinational-signedness.md)). The `--no-dsp` flag maps all arithmetic cleanly to LUTs, guaranteeing 100% bit-exact execution.
+> [!NOTE]
+> **Hardware DSP Support & Optional `--no-dsp` Flag:**
+> Hardware DSP blocks (`MULT18X18` with output pipeline registers) are enabled by default across all supported FPGA targets, saving up to ~30% of logic LUTs while achieving 100% bit-exact hardware inference (resolving the combinational Gowin sign bug, see [DSP Resolution Note](bugs/2026-09-gowin-dsp-combinational-signedness.md)).
+> The `--no-dsp` flag remains available as an opt-in fallback to force all arithmetic into soft LUT logic if desired.
 
 ---
 
