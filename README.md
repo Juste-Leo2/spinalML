@@ -1,6 +1,14 @@
 <div align="center">
 
+<img src="docs/assets/logo.svg" width="180" alt="SpinalML Logo" />
+
 # SpinalML
+
+**High-Level Machine Learning Hardware Accelerators in Scala (SpinalHDL)**
+
+*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Numerically validated physical FPGA inference*
+
+<br/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.12](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
@@ -12,11 +20,6 @@
 [![nextpnr: Himbaechel](https://img.shields.io/badge/nextpnr-Himbaechel-00897B.svg)](https://github.com/YosysHQ/nextpnr)
 [![CI - Verification](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml)
 [![CI - Sentrux](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml)
-<!-- Logo placeholder: <img src="docs/assets/logo.png" width="180" alt="SpinalML Logo" /> -->
-
-**High-Level Machine Learning Hardware Accelerators in Scala (SpinalHDL)**
-
-*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Numerically validated physical FPGA inference*
 
 </div>
 
