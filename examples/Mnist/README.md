@@ -45,17 +45,17 @@ Synthesized using **Yosys** and placed & routed via **nextpnr-himbaechel** for t
 
 | Resource | Used | Capacity | Utilization | Status |
 | :--- | :---: | :---: | :---: | :---: |
-| **Logic (LUT4)** | **14,630** | 20,736 | **70.6 %** | OK |
-| **Registers (FF)** | **5,977** | 15,552 | **38.4 %** | OK |
+| **Logic (LUT4)** | **10,309** | 20,736 | **49.7 %** | OK (-4,321 LUTs saved) |
+| **Registers (FF)** | **5,577** | 15,552 | **35.9 %** | OK |
 | **Block RAM (BSRAM)** | **27** | 46 | **58.7 %** | OK |
-| **DSP (MULT)** | **0** | 48 | **0.0 %** (`--no-dsp`) | OK |
+| **DSP (MULT)** | **25** | 48 | **52.1 %** (`MULT18X18`) | OK |
 
 ### Timing & Performance Summary
 - **Target Clock**: 27.00 MHz
-- **Estimated Fmax**: **45.93 MHz** (Timing constraints MET, +18.93 MHz slack)
+- **Estimated Fmax**: **47.58 MHz** (Timing constraints MET, +20.58 MHz slack)
 - **Bitstream Size**: ~7.09 MB (`top.fs`)
 - **Inference Latency**:
-  - **~180 ms per inference over UART** (including 784-byte image transmission at 115,200 baud, FPGA hardware execution, and 10-class logit retrieval).
+  - **~180 ms total roundtrip over UART** (a large portion of this duration is taken up by serial communication: transferring the 784-byte image and retrieving logits at 115,200 baud).
   - **~440 ms on first run** (includes automatic one-time upload of the 2,936-byte weight payload into FPGA BRAM).
 
 ---
@@ -96,14 +96,11 @@ If you want to re-synthesize the hardware design using Yosys and nextpnr:
 
 ```bash
 # Step 1: Synthesize and generate the bitstream
-python cli/main.py build examples/Mnist/Model.scala --board tang-primer-20k --no-dsp
+python cli/main.py build examples/Mnist/Model.scala --board tang-primer-20k
 
 # Step 2: Flash the generated bitstream
 python cli/main.py flash hw_build/tang-primer-20k/top.fs --board tang-primer-20k
 ```
-
-> [!TIP]
-> The `--no-dsp` flag ensures safe synthesis into FPGA LUTs on the Gowin GW2A-18, eliminating DSP routing bottlenecks.
 
 ---
 

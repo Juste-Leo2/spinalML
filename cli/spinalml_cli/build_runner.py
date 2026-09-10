@@ -20,7 +20,7 @@ from rich.text import Text
 from .config import CLI_DIR, TOOLS_DIR, get_bin_path
 from .board import load_board_config, resolve_constraints_file, parse_frequency
 
-console = Console()
+console = Console(legacy_windows=False)
 
 def get_eda_env() -> Dict[str, str]:
     """Sets up the environment variables for OSS CAD Suite tools on Windows and Linux."""
@@ -402,55 +402,22 @@ def render_final_report(
     else:
         console.print(f"[bold green][✓] Synthesis, Placement & Routing completed in {duration:.1f}s. Ready to flash![/bold green]\n")
 
-def run_build(
-    src: Optional[Path] = None,
-    out_dir: Optional[Path] = None,
-    board: str = "tang-primer-20k",
-    cst_override: Optional[Path] = None,
-    top_name: Optional[str] = None,
-    synth_only: bool = False,
-    pnr_only: bool = False,
-    clk_override: Optional[str] = None,
-    no_dsp: bool = False
-) -> int:
-    """
-    Orchestrates the entire hardware build pipeline:
-    1. Optional compilation of .scala model -> Verilog
-    2. Yosys RTL Elaboration & Technology Mapping
-    3. nextpnr Placement & Routing
-    4. Bitstream Packaging (gowin_pack)
-    """
-    project_root = CLI_DIR.parent
-    start_total_time = time.time()
-
-    # 1. Load board configuration
-    try:
-        board_cfg = load_board_config(board)
-    except Exception as e:
-        console.print(f"[bold red]Error loading board profile '{board}': {e}[/bold red]")
-        return 1
-
-    # 2. Resolve clock frequency
-    final_clk_hz = parse_frequency(clk_override) if clk_override else board_cfg["clk_freq"]
-    final_clk_mhz = final_clk_hz / 1_000_000.0
-
-    # 3. Resolve destination output directory (default: hw_build/<board>/)
-    board_slug = board_cfg["file_path"].stem
-    if out_dir:
-        hw_build_dir = out_dir if out_dir.is_absolute() else (project_root / out_dir).resolve()
-    else:
-        hw_build_dir = project_root / "hw_build" / board_slug
-    hw_build_dir.mkdir(parents=True, exist_ok=True)
-
-    log_path = hw_build_dir / "build.log"
-    log_file = open(log_path, "w", encoding="utf-8")
-
-    # 4. Handle Source
-    v_files: List[Path] = []
+def _prepare_sources_and_constraints(
+    src: Optional[Path],
+    project_root: Path,
+    hw_build_dir: Path,
+    board: str,
+    board_cfg: Dict[str, Any],
+    clk_override: Optional[str],
+    no_dsp: bool,
+    top_name: Optional[str],
+    cst_override: Optional[Path],
+    log_file: Any,
+) -> Tuple[Optional[List[Path]], Optional[str], Optional[Path]]:
+    """Resolves source files, compiles .scala if needed, detects top module and adapts CST constraints."""
     if src is not None:
         src_p = src if src.is_absolute() else (project_root / src).resolve()
     else:
-        # Default source: rtl/ or verilog/
         rtl_cand = project_root / "rtl"
         verilog_cand = project_root / "verilog"
         if rtl_cand.exists() and list(rtl_cand.glob("*.v")):
@@ -468,11 +435,10 @@ def run_build(
             title="[bold cyan]spinalML Hardware Builder[/bold cyan]",
             border_style="cyan"
         ))
-        console.print(f"\n[bold cyan] Step 0: Compiling Scala model to Verilog (turnkey UartSoC)...[/bold cyan]")
+        console.print("\n[bold cyan] Step 0: Compiling Scala model to Verilog (turnkey UartSoC)...[/bold cyan]")
         from .cli import compile as compile_cmd
         rtl_dir = project_root / "rtl"
         rtl_dir.mkdir(parents=True, exist_ok=True)
-        # Clean stale Verilog/bin artifacts from previous builds to prevent duplicate module collisions in Yosys
         for old_f in list(rtl_dir.glob("*.v")) + list(rtl_dir.glob("*.bin")):
             try:
                 old_f.unlink()
@@ -490,17 +456,16 @@ def run_build(
                 baud=None,
                 out_count=None,
                 word_width=None,
-                bram_words=None
+                bram_words=None,
+                no_dsp=no_dsp
             )
         except typer.Exit as te:
             if te.exit_code != 0:
                 console.print(f"[bold red]Scala compilation exited with code {te.exit_code}[/bold red]")
-                log_file.close()
-                return te.exit_code
+                return None, None, None
         except Exception as e:
             console.print(f"[bold red]Scala compilation failed: {e}[/bold red]")
-            log_file.close()
-            return 1
+            return None, None, None
         src_p = rtl_dir
 
     if src_p.is_dir():
@@ -509,18 +474,17 @@ def run_build(
         v_files = [src_p]
     else:
         console.print(f"[bold red]Error: No Verilog files found at {src_p}[/bold red]")
-        log_file.close()
-        return 1
+        return None, None, None
 
     if not v_files:
         console.print(f"[bold red]Error: No .v files found in directory {src_p}[/bold red]")
-        log_file.close()
-        return 1
+        return None, None, None
 
-    # Detect top module & ports
     actual_top, ports = detect_top_module(v_files, top_name)
 
-    # Display builder banner
+    final_clk_hz = parse_frequency(clk_override) if clk_override else board_cfg["clk_freq"]
+    final_clk_mhz = final_clk_hz / 1_000_000.0
+
     console.print(Panel(
         f"[bold]Target Board :[/bold] {board_cfg['name']} ({board_cfg['fpga']})\n"
         f"[bold]Source RTL   :[/bold] {src_p.relative_to(project_root) if src_p.is_relative_to(project_root) else src_p} ({len(v_files)} Verilog file(s), top: [cyan]{actual_top}[/cyan])\n"
@@ -530,26 +494,32 @@ def run_build(
         border_style="cyan"
     ))
 
-    # 5. Adapt physical constraints
     resolved_cst = resolve_constraints_file(board_cfg, cst_override)
     adapted_cst = hw_build_dir / "pins.cst"
     adapt_constraints_for_ports(resolved_cst, ports, adapted_cst)
 
-    eda_env = get_eda_env()
+    return v_files, actual_top, adapted_cst
+
+
+def _execute_yosys_synthesis(
+    board_cfg: Dict[str, Any],
+    actual_top: str,
+    v_files: List[Path],
+    hw_build_dir: Path,
+    synth_json: Path,
+    project_root: Path,
+    eda_env: Dict[str, str],
+    log_file: Any,
+    no_dsp: bool,
+) -> Tuple[int, Dict[str, int], float]:
+    """Runs Yosys synthesis and returns (returncode, resources, duration)."""
     yosys_bin = get_bin_path("yosys")
-
-    resources: Dict[str, int] = {}
-    timing_info: Dict[str, Any] = {"target_mhz": final_clk_mhz}
-
-    # =========================================================================
-    # Phase 1: Yosys Synthesis
-    # =========================================================================
-    synth_json = hw_build_dir / "synth.json"
     synth_cmd_name = board_cfg.get("build", {}).get("synth_cmd", "synth_gowin")
-    if no_dsp:
-        synth_cmd_name = f"{synth_cmd_name} -nodsp"
 
-    # Filter duplicate module definitions across Verilog files (e.g. UartSoC already bundling submodules)
+    if no_dsp or "synth_gowin" in synth_cmd_name:
+        if "-nodsp" not in synth_cmd_name:
+            synth_cmd_name = f"{synth_cmd_name} -nodsp"
+
     selected_v_files = filter_unique_verilog_files(v_files, actual_top)
     v_args = " ".join([f'"{str(vf).replace(chr(92), "/")}"' for vf in selected_v_files])
     yosys_script = f"read_verilog -sv {v_args}; {synth_cmd_name} -top {actual_top} -json \"{str(synth_json).replace(chr(92), '/')}\""
@@ -561,10 +531,10 @@ def run_build(
     log_file.flush()
 
     pass_regex = re.compile(r'^\s*([0-9]+(?:\.[0-9]+)*)\.\s+(Executing\s+.*)')
-    cell_regex = re.compile(r'^\s*Number of cells:\s*(\d+)')
     lut_regex = re.compile(r'^\s*(?:LUT\d+|LUT)\s+(\d+)')
     dff_regex = re.compile(r'^\s*(?:DFF\w*|DFFE|DFFR)\s+(\d+)')
 
+    resources: Dict[str, int] = {}
     t0 = time.time()
     current_status = "Elaborating RTL hierarchy..."
 
@@ -586,8 +556,7 @@ def run_build(
                 pass_no = m_pass.group(1)
                 pass_desc = m_pass.group(2).strip()
                 current_status = f"Pass {pass_no} : {pass_desc}"
-            
-            # Count cells/LUTs/DFFs from Yosys log
+
             m_lut = lut_regex.search(line)
             if m_lut:
                 resources["LUT4"] = resources.get("LUT4", 0) + int(m_lut.group(1))
@@ -602,23 +571,26 @@ def run_build(
 
     duration_synth = time.time() - t0
     if proc.returncode != 0:
+        log_path = hw_build_dir / "build.log"
         console.print(f"[bold red]Yosys synthesis failed with returncode {proc.returncode}. See {log_path} for details.[/bold red]")
-        log_file.close()
-        return proc.returncode
+        return proc.returncode, resources, duration_synth
 
     console.print(f" [bold green]✓[/bold green] [Step 1/3] Yosys synthesis completed in {duration_synth:.1f}s.")
-
-    # Extract accurate resource counts directly from synth.json
     resources = extract_yosys_resources(synth_json, actual_top)
+    return 0, resources, duration_synth
 
-    if synth_only:
-        log_file.close()
-        render_final_report(board_cfg, actual_top, resources, timing_info, None, duration_synth, stopped_at="synth")
-        return 0
 
-    # =========================================================================
-    # Phase 2: nextpnr Place & Route
-    # =========================================================================
+def _execute_nextpnr(
+    board_cfg: Dict[str, Any],
+    synth_json: Path,
+    hw_build_dir: Path,
+    adapted_cst: Path,
+    final_clk_mhz: float,
+    project_root: Path,
+    eda_env: Dict[str, str],
+    log_file: Any,
+) -> Tuple[int, Dict[str, int], Dict[str, Any], float]:
+    """Runs nextpnr place & route and returns (returncode, resources, timing_info, duration)."""
     pnr_tool_name = board_cfg.get("build", {}).get("pnr_tool", "nextpnr-himbaechel")
     pnr_bin = get_bin_path(pnr_tool_name)
     pnr_json = hw_build_dir / "pnr.json"
@@ -639,6 +611,8 @@ def run_build(
     log_file.write(f"\n--- nextpnr Command ---\n{' '.join(pnr_args)}\n\n")
     log_file.flush()
 
+    resources: Dict[str, int] = {}
+    timing_info: Dict[str, Any] = {"target_mhz": final_clk_mhz}
     t1 = time.time()
     pnr_status = "Packing logic clusters..."
 
@@ -694,11 +668,10 @@ def run_build(
 
     duration_pnr = time.time() - t1
     if proc.returncode != 0:
+        log_path = hw_build_dir / "build.log"
         console.print(f"[bold red]nextpnr failed with returncode {proc.returncode}. See {log_path} for details.[/bold red]")
-        log_file.close()
-        return proc.returncode
+        return proc.returncode, resources, timing_info, duration_pnr
 
-    # If pnr_report.json exists, parse it for high-precision resource counts & achieved Fmax
     pnr_res, fmax_achieved = extract_pnr_resources(pnr_report_path)
     if pnr_res:
         resources.update(pnr_res)
@@ -706,16 +679,18 @@ def run_build(
         timing_info["fmax_mhz"] = fmax_achieved
 
     console.print(f" [bold green]✓[/bold green] [Step 2/3] nextpnr Place & Route completed in {duration_pnr:.1f}s.")
+    return 0, resources, timing_info, duration_pnr
 
-    if pnr_only:
-        log_file.close()
-        total_d = time.time() - start_total_time
-        render_final_report(board_cfg, actual_top, resources, timing_info, None, total_d, stopped_at="pnr")
-        return 0
 
-    # =========================================================================
-    # Phase 3: Bitstream Packing (gowin_pack)
-    # =========================================================================
+def _execute_bitstream_packing(
+    board_cfg: Dict[str, Any],
+    pnr_json: Path,
+    hw_build_dir: Path,
+    project_root: Path,
+    eda_env: Dict[str, str],
+    log_file: Any,
+) -> Tuple[int, Optional[Path], float]:
+    """Packs bitstream using board pack tool and returns (returncode, bitstream_path, duration)."""
     pack_tool_name = board_cfg.get("build", {}).get("pack_tool", "gowin_pack")
     if pack_tool_name == "gowin_pack":
         ensure_apycula_patched()
@@ -749,12 +724,136 @@ def run_build(
 
     duration_pack = time.time() - t2
     if proc.returncode != 0:
+        log_path = hw_build_dir / "build.log"
         console.print(f"[bold red]Bitstream packing failed with returncode {proc.returncode}. See {log_path} for details.[/bold red]")
-        log_file.close()
-        return proc.returncode
+        return proc.returncode, None, duration_pack
 
     console.print(f" [bold green]✓[/bold green] [Step 3/3] Bitstream {bitstream_name} packaged successfully in {duration_pack:.1f}s.")
+    return 0, bitstream_path, duration_pack
+
+
+def run_build(
+    src: Optional[Path] = None,
+    out_dir: Optional[Path] = None,
+    board: str = "tang-primer-20k",
+    cst_override: Optional[Path] = None,
+    top_name: Optional[str] = None,
+    synth_only: bool = False,
+    pnr_only: bool = False,
+    clk_override: Optional[str] = None,
+    no_dsp: bool = False
+) -> int:
+    """
+    Orchestrates the entire hardware build pipeline:
+    1. Optional compilation of .scala model -> Verilog
+    2. Yosys RTL Elaboration & Technology Mapping
+    3. nextpnr Placement & Routing
+    4. Bitstream Packaging (gowin_pack)
+    """
+    project_root = CLI_DIR.parent
+    start_total_time = time.time()
+
+    # 1. Load board configuration
+    try:
+        board_cfg = load_board_config(board)
+    except Exception as e:
+        console.print(f"[bold red]Error loading board profile '{board}': {e}[/bold red]")
+        return 1
+
+    # 2. Resolve clock frequency & output directories
+    final_clk_hz = parse_frequency(clk_override) if clk_override else board_cfg["clk_freq"]
+    final_clk_mhz = final_clk_hz / 1_000_000.0
+
+    board_slug = board_cfg["file_path"].stem
+    if out_dir:
+        hw_build_dir = out_dir if out_dir.is_absolute() else (project_root / out_dir).resolve()
+    else:
+        hw_build_dir = project_root / "hw_build" / board_slug
+    hw_build_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = hw_build_dir / "build.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+
+    # 3. Source & constraint preparation
+    v_files, actual_top, adapted_cst = _prepare_sources_and_constraints(
+        src=src,
+        project_root=project_root,
+        hw_build_dir=hw_build_dir,
+        board=board,
+        board_cfg=board_cfg,
+        clk_override=clk_override,
+        no_dsp=no_dsp,
+        top_name=top_name,
+        cst_override=cst_override,
+        log_file=log_file
+    )
+    if v_files is None or actual_top is None or adapted_cst is None:
+        log_file.close()
+        return 1
+
+    eda_env = get_eda_env()
+    synth_json = hw_build_dir / "synth.json"
+    timing_info: Dict[str, Any] = {"target_mhz": final_clk_mhz}
+
+    # 4. Phase 1: Yosys Synthesis
+    rc_synth, resources, duration_synth = _execute_yosys_synthesis(
+        board_cfg=board_cfg,
+        actual_top=actual_top,
+        v_files=v_files,
+        hw_build_dir=hw_build_dir,
+        synth_json=synth_json,
+        project_root=project_root,
+        eda_env=eda_env,
+        log_file=log_file,
+        no_dsp=no_dsp
+    )
+    if rc_synth != 0:
+        log_file.close()
+        return rc_synth
+
+    if synth_only:
+        log_file.close()
+        render_final_report(board_cfg, actual_top, resources, timing_info, None, duration_synth, stopped_at="synth")
+        return 0
+
+    # 5. Phase 2: nextpnr Place & Route
+    rc_pnr, pnr_res, pnr_timing, duration_pnr = _execute_nextpnr(
+        board_cfg=board_cfg,
+        synth_json=synth_json,
+        hw_build_dir=hw_build_dir,
+        adapted_cst=adapted_cst,
+        final_clk_mhz=final_clk_mhz,
+        project_root=project_root,
+        eda_env=eda_env,
+        log_file=log_file
+    )
+    if rc_pnr != 0:
+        log_file.close()
+        return rc_pnr
+
+    resources.update(pnr_res)
+    timing_info.update(pnr_timing)
+
+    if pnr_only:
+        log_file.close()
+        total_d = time.time() - start_total_time
+        render_final_report(board_cfg, actual_top, resources, timing_info, None, total_d, stopped_at="pnr")
+        return 0
+
+    # 6. Phase 3: Bitstream Packaging
+    pnr_json = hw_build_dir / "pnr.json"
+    rc_pack, bitstream_path, _ = _execute_bitstream_packing(
+        board_cfg=board_cfg,
+        pnr_json=pnr_json,
+        hw_build_dir=hw_build_dir,
+        project_root=project_root,
+        eda_env=eda_env,
+        log_file=log_file
+    )
     log_file.close()
+
+    if rc_pack != 0:
+        return rc_pack
 
     total_duration = time.time() - start_total_time
     render_final_report(board_cfg, actual_top, resources, timing_info, bitstream_path, total_duration, stopped_at="full")

@@ -148,6 +148,7 @@ def compile(
     out_count: Optional[int] = typer.Option(None, "--out-count", help="Number of output stream bytes/logits (auto-detected from model if omitted)"),
     word_width: Optional[int] = typer.Option(None, "--word-width", help="AXI data bus width in bits (auto-detected from model if omitted)"),
     bram_words: Optional[int] = typer.Option(None, "--bram-words", help="BRAM capacity in 64-bit words (default: from board or 4096)"),
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)")
 ):
     """
     Compile a Scala file into Verilog by running it within the workspace module,
@@ -174,6 +175,7 @@ def compile(
     out_count = _unwrap(out_count, None)
     word_width = _unwrap(word_width, None)
     bram_words = _unwrap(bram_words, None)
+    no_dsp = _unwrap(no_dsp, False)
 
     if not file.exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
@@ -189,6 +191,14 @@ def compile(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
+    # Configure DSP target environment for SpinalHDL compilation
+    vendor = board_cfg.get("vendor", "Generic")
+    os.environ["SPINALML_TARGET"] = vendor
+    if no_dsp:
+        os.environ["SPINALML_NO_DSP"] = "1"
+    elif "SPINALML_NO_DSP" in os.environ:
+        del os.environ["SPINALML_NO_DSP"]
+
     model_params = detect_model_parameters(file)
     final_clk = parse_frequency(clk) if clk else board_cfg["clk_freq"]
     final_baud = baud if baud is not None else board_cfg["baud_rate"]
@@ -196,7 +206,9 @@ def compile(
     final_word_width = word_width if word_width is not None else model_params.get("word_width", 64)
     final_bram_words = bram_words if bram_words is not None else board_cfg.get("bram_words", 4096)
 
+    dsp_status = "Disabled (LUTs only)" if no_dsp else f"Enabled ({vendor} DSP mapping)"
     typer.echo(f"Target Board   : {board_cfg['name']} ({board_cfg.get('fpga', 'FPGA')})")
+    typer.echo(f"DSP Policy     : {dsp_status}")
     typer.echo(f"Hardware Clock : {final_clk/1e6:.2f} MHz | UART: {final_baud} baud (CLK_PER_BIT = {final_clk // final_baud})")
     typer.echo(f"Model Protocol : {final_out_count} output bytes | {final_word_width}-bit AXI | {final_bram_words} words BRAM")
 

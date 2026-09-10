@@ -1,16 +1,25 @@
 <div align="center">
 
-# SpinalML
+<img src="docs/assets/logo.svg" width="150" alt="SpinalML Logo" />
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: In Development](https://img.shields.io/badge/Status-In%20Development-orange.svg)]()
-[![CI - Verification](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml)
-[![CI - Sentrux](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml)
-<!-- Logo placeholder: <img src="docs/assets/logo.png" width="180" alt="SpinalML Logo" /> -->
+# SpinalML
 
 **High-Level Machine Learning Hardware Accelerators in Scala (SpinalHDL)**
 
-*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Bit-exact physical FPGA inference*
+*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Numerically validated physical FPGA inference*
+
+<br/>
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Scala: 2.12.18](https://img.shields.io/badge/Scala-2.12.18-DC322F.svg?logo=scala&logoColor=white)](https://www.scala-lang.org/)
+[![SpinalHDL: 1.15.0](https://img.shields.io/badge/SpinalHDL-1.15.0-6D4C41.svg)](https://spinalhdl.github.io/SpinalDoc-RTD/)
+[![Mill: 1.1.8](https://img.shields.io/badge/Mill-1.1.8-00599C.svg)](https://mill-build.org/)
+[![Verilator: 5.053](https://img.shields.io/badge/Verilator-5.053-5C6BC0.svg)](https://www.veripool.org/verilator/)
+[![Yosys: 0.68+](https://img.shields.io/badge/Yosys-0.68%2B-2E7D32.svg)](https://yosyshq.net/yosys/)
+[![nextpnr: Himbaechel](https://img.shields.io/badge/nextpnr-Himbaechel-00897B.svg)](https://github.com/YosysHQ/nextpnr)
+[![CI - Verification](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml)
+[![CI - Sentrux](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml)
 
 </div>
 
@@ -20,6 +29,16 @@ SpinalML is a hardware Machine Learning acceleration library designed for FPGA s
 
 > [!NOTE]
 > **In Development**: SpinalML is currently under active development and research. Hardware primitives, quantization pipelines, and board targets are continuously evolving.
+
+---
+
+## Why SpinalML?
+
+FPGA-based AI acceleration is typically confined to expensive enterprise boards or locked behind opaque vendor tools. **SpinalML was created with a different vision:** democratizing neural execution (with the long-term goal of running **quantized Small Language Models**) on **resource-constrained edge FPGAs**.
+
+* **Zero Black Boxes**: Unlike traditional C-based HLS tools that generate bloated, unpredictable Verilog, SpinalML produces 100% deterministic, cycle-accurate RTL with full architectural transparency through SpinalHDL.
+* **Frugal Silicon Surgery**: Custom mixed-precision (INT4, W4A8, FP8), temporal resource sharing, and double-buffered DMA streaming to fit modern neural networks into devices with as few as 20K LUTs.
+* **PyTorch Ergonomics, Hardware Control**: Define networks with a clean, declarative API (`Sequential`, `Conv2D`, `Linear`, `Attention`) without ever losing bare-metal control over physical registers, FIFOs, and DSP slices.
 
 ---
 
@@ -58,13 +77,13 @@ Once provisioned, explore ready-to-use application examples in the [`examples/`]
 SpinalML provides a turnkey flow that translates your Scala model, synthesizes RTL, places-and-routes, and generates a bitstream:
 
 ```bash
-# Build for Sipeed Tang Primer 20K (Gowin GW2A-18)
-python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k --no-dsp
+# Build for Sipeed Tang Primer 20K (Gowin GW2A-18) with hardware DSPs enabled
+python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k
 ```
 
-> [!IMPORTANT]
-> **Why `--no-dsp` is required on Gowin Tang Primer 20K:**
-> The open-source Gowin synthesis flow (Yosys/Apycula) infers unpipelined hard DSP blocks in combinational mode by default, which can cause timing and signedness issues. Specifying `--no-dsp` forces arithmetic operations into FPGA LUTs, ensuring **100% bit-exact hardware results** (see [Gowin DSP Bug Report](docs/bugs/2026-09-gowin-dsp-combinational-signedness.md)). Universal pipelined DSP mapping is on the project roadmap.
+> [!TIP]
+> **Universal Hardware DSP Acceleration:**
+> SpinalML transparently infers hardware DSP blocks (`MULT18X18` on Gowin, `DSP48` on Xilinx, sysDSP on Lattice) with registered output pipelining, saving ~30% of logic LUTs while maintaining **numerically validated hardware inference** on physical silicon against software golden references. The `--no-dsp` flag is optionally supported to force LUT-only synthesis.
 
 ### 4. Flash and Run Physical Hardware Inference
 ```bash
