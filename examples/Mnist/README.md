@@ -96,14 +96,11 @@ If you want to re-synthesize the hardware design using Yosys and nextpnr:
 
 ```bash
 # Step 1: Synthesize and generate the bitstream
-python cli/main.py build examples/Mnist/Model.scala --board tang-primer-20k --no-dsp
+python cli/main.py build examples/Mnist/Model.scala --board tang-primer-20k
 
 # Step 2: Flash the generated bitstream
 python cli/main.py flash hw_build/tang-primer-20k/top.fs --board tang-primer-20k
 ```
-
-> [!TIP]
-> The `--no-dsp` flag ensures safe synthesis into FPGA LUTs on the Gowin GW2A-18, eliminating DSP routing bottlenecks.
 
 ---
 
