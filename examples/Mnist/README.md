@@ -55,7 +55,7 @@ Synthesized using **Yosys** and placed & routed via **nextpnr-himbaechel** for t
 - **Estimated Fmax**: **47.58 MHz** (Timing constraints MET, +20.58 MHz slack)
 - **Bitstream Size**: ~7.09 MB (`top.fs`)
 - **Inference Latency**:
-  - **~180 ms per inference over UART** (including 784-byte image transmission at 115,200 baud, FPGA hardware execution, and 10-class logit retrieval).
+  - **~180 ms total roundtrip over UART** (a large portion of this duration is taken up by serial communication: transferring the 784-byte image and retrieving logits at 115,200 baud).
   - **~440 ms on first run** (includes automatic one-time upload of the 2,936-byte weight payload into FPGA BRAM).
 
 ---

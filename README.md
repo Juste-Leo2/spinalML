@@ -29,6 +29,16 @@ SpinalML is a hardware Machine Learning acceleration library designed for FPGA s
 
 ---
 
+## Why SpinalML?
+
+FPGA-based AI acceleration is typically confined to expensive enterprise boards or locked behind opaque vendor tools. **SpinalML was created with a different vision:** democratizing neural execution (with the long-term goal of running **quantized Small Language Models**) on **resource-constrained edge FPGAs**.
+
+* **Zero Black Boxes**: Unlike traditional C-based HLS tools that generate bloated, unpredictable Verilog, SpinalML produces 100% deterministic, cycle-accurate RTL with full architectural transparency through SpinalHDL.
+* **Frugal Silicon Surgery**: Custom mixed-precision (INT4, W4A8, FP8), temporal resource sharing, and double-buffered DMA streaming to fit modern neural networks into devices with as few as 20K LUTs.
+* **PyTorch Ergonomics, Hardware Control**: Define networks with a clean, declarative API (`Sequential`, `Conv2D`, `Linear`, `Attention`) without ever losing bare-metal control over physical registers, FIFOs, and DSP slices.
+
+---
+
 ## Quick Start (with `uv`)
 
 We recommend using [**uv**](https://docs.astral.sh/uv/) for ultra-fast, modern Python environment setup.
