@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/logo.svg" width="180" alt="SpinalML Logo" />
+<img src="docs/assets/logo.svg" width="130" alt="SpinalML Logo" />
 
 # SpinalML
 
