@@ -16,8 +16,7 @@ It manages external EDA dependencies (Mill, Verilator, SymbiYosys, Yosys, nextpn
 | **4. Hardware Flash** | `python cli/main.py flash --board tang-primer-20k` | Flashes the built bitstream to FPGA SRAM in ~1.5s via openFPGALoader |
 
 > [!NOTE]
-> **Hardware DSP Support & Optional `--no-dsp` Flag:**
-> Hardware DSP blocks (`MULT18X18` with output pipeline registers) are enabled by default across all supported FPGA targets, saving up to ~30% of logic LUTs while achieving 100% bit-exact hardware inference (resolving the combinational Gowin sign bug, see [DSP Resolution Note](bugs/2026-09-gowin-dsp-combinational-signedness.md)).
+> Hardware DSP blocks (`MULT18X18` with output pipeline registers) are enabled by default across all supported FPGA targets, saving up to ~30% of logic LUTs while achieving reliable, numerically validated hardware inference on physical silicon (resolving the combinational Gowin sign bug, see [DSP Resolution Note](bugs/2026-09-gowin-dsp-combinational-signedness.md)).
 > The `--no-dsp` flag remains available as an opt-in fallback to force all arithmetic into soft LUT logic if desired.
 
 ---

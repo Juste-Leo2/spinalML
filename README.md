@@ -3,14 +3,20 @@
 # SpinalML
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: In Development](https://img.shields.io/badge/Status-In%20Development-orange.svg)]()
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Scala: 2.12.18](https://img.shields.io/badge/Scala-2.12.18-DC322F.svg?logo=scala&logoColor=white)](https://www.scala-lang.org/)
+[![SpinalHDL: 1.15.0](https://img.shields.io/badge/SpinalHDL-1.15.0-6D4C41.svg)](https://spinalhdl.github.io/SpinalDoc-RTD/)
+[![Mill: 1.1.8](https://img.shields.io/badge/Mill-1.1.8-00599C.svg)](https://mill-build.org/)
+[![Verilator: 5.053](https://img.shields.io/badge/Verilator-5.053-5C6BC0.svg)](https://www.veripool.org/verilator/)
+[![Yosys: 0.68+](https://img.shields.io/badge/Yosys-0.68%2B-2E7D32.svg)](https://yosyshq.net/yosys/)
+[![nextpnr: Himbaechel](https://img.shields.io/badge/nextpnr-Himbaechel-00897B.svg)](https://github.com/YosysHQ/nextpnr)
 [![CI - Verification](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-simulations.yml)
 [![CI - Sentrux](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml/badge.svg?branch=main)](https://github.com/Juste-Leo2/spinalML/actions/workflows/ci-sentrux.yml)
 <!-- Logo placeholder: <img src="docs/assets/logo.png" width="180" alt="SpinalML Logo" /> -->
 
 **High-Level Machine Learning Hardware Accelerators in Scala (SpinalHDL)**
 
-*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Bit-exact physical FPGA inference*
+*PyTorch-like developer ergonomics • Zero-to-Silicon automated flow • Numerically validated physical FPGA inference*
 
 </div>
 
@@ -64,7 +70,7 @@ python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-prim
 
 > [!TIP]
 > **Universal Hardware DSP Acceleration:**
-> SpinalML transparently infers hardware DSP blocks (`MULT18X18` on Gowin, `DSP48` on Xilinx, sysDSP on Lattice) with registered output pipelining, saving ~30% of logic LUTs while guaranteeing **100% bit-exact hardware inference** on physical silicon. The `--no-dsp` flag is optionally supported to force LUT-only synthesis.
+> SpinalML transparently infers hardware DSP blocks (`MULT18X18` on Gowin, `DSP48` on Xilinx, sysDSP on Lattice) with registered output pipelining, saving ~30% of logic LUTs while maintaining **numerically validated hardware inference** on physical silicon against software golden references. The `--no-dsp` flag is optionally supported to force LUT-only synthesis.
 
 ### 4. Flash and Run Physical Hardware Inference
 ```bash
