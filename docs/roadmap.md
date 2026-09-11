@@ -148,4 +148,132 @@ Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assum
   - [ ] **Auto-Generated CSR Address Map for Host Drivers**: Automatically export CSR register offsets (`0x00`, `0x08`, `0x0C`) from Scala elaboration into a Python/C header to eliminate manual register map synchronization.
   - [ ] **Full-Duplex Real-Time Streaming Mode**: Add hardware interrupt signaling or asynchronous streaming DMA to allow continuous inference without host polling.
 
+## 10. Dual-Target (FPGA & ASIC) Roadmap: Sequenced Refactoring Plan
+
+> [!IMPORTANT]
+> **Golden Rule: Don't fight the wrong battle — One single unified codebase, four ordered stages.**  
+> The goal is neither to maintain two diverging codebases nor to pit FPGA against ASIC. The FPGA is the mandatory bit-exact in-circuit hardware emulator before any silicon tapeout.  
+> For the SpinalHDL codebase to serve both targets simultaneously, the architecture relies on the **"3-Layer Sandwich"**:
+> 1. **Layer 1: Algorithmic SpinalML Core** (100% portable, `Stream[Tensor]` dataflow, control FSMs, arithmetic pipelines).
+> 2. **Layer 2: Abstract Memory Adapter** (`MemoryAdapter`: the only swappable boundary between FPGA Gowin/Xilinx BRAM and ASIC OpenRAM SRAM macros).
+> 3. **Layer 3: Physical Implementation** (pinout constraints `.cst`/`.xdc` vs padring/CTS/OpenROAD).
+>
+> **Uncompromising Reality Check**: The current codebase sits at **~20%** of this effective decoupling (several hardware primitives remain tightly coupled or hardcoded). Introducing these abstractions now costs **virtually zero effort**; postponing them until after adding 15 new vision layers would produce **over 200 tangled refactoring sites** to unwind. Purging this architectural debt from the existing foundation is therefore the absolute top priority before any further feature expansion.
+
+---
+
+### Phase 1 (Absolute Priority, Months 0 → 3): Hardening Foundation Portability
+
+Mandatory structural refactoring of existing modules before adding any new vision operators:
+
+- [ ] **Refactoring 1.1: Migrate `im2col.scala` Line Buffers to `Mem.readSync` (Eliminating Flip-Flop Bloat)**
+  - **Impacted file**: [`spinalML/src/spinalML/layers/im2col.scala:L55-59`](file:///e:/spinalML/spinalML/src/spinalML/layers/im2col.scala#L55-L59)
+  - **Problem**: Line buffers are currently instantiated via `Vec(Reg(dataType), W * C)`. For even a modest vision layer ($160\times160\times32$), this synthesizes 81,920 flip-flops (FFs), instantly blowing past the 15,552 FF limit of the Gowin GW2A-18 and preventing any mapping to ASIC SRAM macros.
+  - **Action**: Replace with SpinalHDL synchronous memory instances `Mem(dataType, depth = lineBufferDepth)` using `readSync`. Adjust the downstream stream validation pipeline to account for the single-cycle synchronous read latency.
+  - **Success Criteria**: BRAM inference confirmed in Yosys synthesis logs (`bram_words` utilized, dramatic FF reduction) with bit-exact Verilator simulation maintained.
+
+- [ ] **Refactoring 1.2: Multiplier Abstraction (`Target` Trait & DSP Decoupling)**
+  - **Impacted files**: [`spinalML/src/spinalML/layers/Conv2D.scala`](file:///e:/spinalML/spinalML/src/spinalML/layers/Conv2D.scala), [`spinalML/src/spinalML/ops/matmul.scala`](file:///e:/spinalML/spinalML/src/spinalML/ops/matmul.scala), [`spinalML/src/spinalML/utils/DspConfig.scala`](file:///e:/spinalML/spinalML/src/spinalML/utils/DspConfig.scala)
+  - **Problem**: `Conv2DLayer` directly instantiates `DspMul`, hard-coupling compute logic to FPGA DSP primitives without a clean target boundary.
+  - **Action**: Define a polymorphic `Target` trait injected into model elaboration configuration:
+    - `Target.FPGA(family: FpgaFamily, useHardDsp: Boolean)`: maps to `DspMul` (hard silicon `MULT18X18` on Gowin, `DSP48` on Xilinx, or carry-chain LUT logic when `--no-dsp` is asserted).
+    - `Target.ASIC(pdk: PdkFamily)`: emits pure behavioral multiplication `a * b` with retiming pipeline stages, synthesized into standard cell logic via OpenROAD without proprietary IP.
+  - **Success Criteria**: The exact same model description compiles without modification for FPGA (leveraging DSPs) and for generic ASIC cell libraries in Verilator simulation.
+
+- [ ] **Refactoring 1.3: Extract Abstract Memory Adapter (`MemoryAdapter`)**
+  - **Impacted files**: [`spinalML/src/spinalML/io/AxiReadMem.scala`](file:///e:/spinalML/spinalML/src/spinalML/io/AxiReadMem.scala), [`spinalML/src/spinalML/io/UartSoC.scala`](file:///e:/spinalML/spinalML/src/spinalML/io/UartSoC.scala), [`spinalML/src/spinalML/Accelerator.scala`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala)
+  - **Problem**: `AxiReadMem` and its hardcoded address offsets (`imgBase = 0x10000`, `weightBase = 0x20000`) are baked directly into `UartSoC`, locking the accelerator to a simulated 32 KB on-chip BRAM.
+  - **Action**: Decouple the accelerator behind a generic `MemoryAdapter` interface exposing read/write command/response streams:
+    - `BramAdapter`: for unit tests and small models on FPGA internal BRAM.
+    - `DdrAdapter`: interfacing the physical DDR3 controller on Tang Primer 20K.
+    - `SramAsicAdapter`: interfacing with OpenRAM-generated SRAM memory macro banks.
+  - **Success Criteria**: Ability to swap the backing memory implementation without modifying a single line of code in `Accelerator` or `Sequential`.
+
+- [ ] **Refactoring 1.4: Universal Parametric `lanes` Propagation**
+  - **Impacted files**: Internal pipeline modules in [`spinalML/src/spinalML/layers/`](file:///e:/spinalML/spinalML/src/spinalML/layers/), UART serialization in [`spinalML/src/spinalML/io/UartSoC.scala:L82-86`](file:///e:/spinalML/spinalML/src/spinalML/io/UartSoC.scala#L82-L86)
+  - **Problem**: While `Linear.weightLanes` and `Conv2D.outLanes` are configurable, intermediate data adapters and interfaces (specifically UART output serialization) still hardcode `lanes = 1` or truncate to 8 bits.
+  - **Action**: Propagate SIMD parallelism (`lanes: Int`) across the entire datapath, automatically inserting `Repack` (gearbox) modules wherever bus widths differ between consecutive stages.
+  - **Success Criteria**: Bit-exact execution verified for `lanes = 1, 2, 4, 8` across all universal test suites.
+
+- [ ] **Refactoring 1.5: Enable AXI Master Write Channels (`DMAWriter`)**
+  - **Impacted file**: [`spinalML/src/spinalML/Accelerator.scala:L60-65`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala#L60-L65)
+  - **Problem**: The current accelerator hardwires its write channels inactive (`aw.valid := False`, `w.valid := False`). It operates exclusively as a read-only master, making it impossible to spill intermediate activation maps to external RAM.
+  - **Action**: Develop the counterpart `DMAWriter` module, aggregating outgoing tensor streams into standard AXI4 bursts (up to 256 beats) directed to external RAM.
+  - **Success Criteria**: Cocotb / Verilator co-simulation test validating bit-exact, full-tensor write-back to external memory.
+
+---
+
+### Phase 2 (Months 3 → 9): Modern Vision Primitives (Dual-Target)
+
+Once foundation portability is secured, implement the essential operators required by convolutional vision networks (CNNs / YOLO):
+
+- [ ] **Primitive 2.1: Virtual Hardware Padding (`same` / $P \ge 1$) with Zero Memory Overhead**
+  - **Target file**: `spinalML/src/spinalML/layers/im2col.scala`
+  - **Design**: Coordinate $(x, y)$ counter FSM injecting virtual zeros whenever indices fall outside the active receptive field, without allocating any BRAM or register storage for zero boundaries.
+  - **Validation**: Convolution with padding preserving spatial dimensions ($H_{out} = H_{in}, W_{out} = W_{in}$).
+
+- [ ] **Primitive 2.2: Hardware Striding ($S = 2$) via Temporal Decimation**
+  - **Target file**: `spinalML/src/spinalML/layers/im2col.scala`
+  - **Design**: Coordinate filtering logic advancing the GEMM stream only for windows matching $(x \pmod S == 0)$ and $(y \pmod S == 0)$, halving spatial dimensions without pipeline stalls.
+  - **Validation**: Non-regression on stride 1 and bit-exact validation on stride 2.
+
+- [ ] **Primitive 2.3: Non-Linear SiLU (Swish) Activation**
+  - **Target files**: `spinalML/src/spinalML/ops/Activations.scala`, new `spinalML/src/spinalML/layers/SiLU.scala`
+  - **Design**: Portable implementation via piecewise-linear approximation (8-segment PWL) or compact int8 synchronous ROM table ($x \cdot \sigma(x)$), inferring BRAM on FPGA or standard combinational cells on ASIC.
+  - **Validation**: Maximum approximation error $< 1\%$ compared to PyTorch floating-point golden oracle.
+
+- [ ] **Primitive 2.4: Channel Concatenation (`Concat` axis 2) & Slicing (`SplitChannel`)**
+  - **Target files**: `spinalML/src/spinalML/layers/Concat.scala`, `Sequential.scala`
+  - **Design**: Concatenation along the channel dimension supporting multi-scale YOLO detection heads and residual connections in C2f/Bottleneck blocks.
+  - **Validation**: End-to-end simulation and synthesis of a representative CSP/C2f macro-block.
+
+- [ ] **Primitive 2.5: Hardware $2\times$ Nearest-Neighbor Upsampling (`UpsampleNearest2D`)**
+  - **Target file**: New `spinalML/src/spinalML/layers/UpsampleNearest2D.scala`
+  - **Design**: Spatial replication repeating samples along the active line, coupled with a synchronous line buffer for vertical line duplication.
+  - **Validation**: Continuous streaming unit test verifying resolution doubling ($10\times10 \to 20\times20$).
+
+- [ ] **Primitive 2.6: Synchronous Dual-Bank Activation Ping-Pong Scratchpad**
+  - **Target file**: New `spinalML/src/spinalML/memory/ActivationScratchpad.scala`
+  - **Design**: Synchronous ping-pong memory architecture (Bank A / Bank B) using `readSync`, allowing layer $k$ to write its outputs while layer $k-1$ reads its activations, without arbitration conflicts.
+  - **Validation**: Formal verification proving mutual exclusion, zero collision, and lossless data flow under backpressure.
+
+---
+
+### Phase 3 (Months 9 → 18): Model-Tailored Folded Core & Temporal Sequencer
+
+Architectural shift from a spatially unrolled pipeline to a dedicated, model-tailored neural coprocessor:
+
+- [ ] **Refactor 3.1: Refactor `Sequential.scala` into a Temporal Execution Engine**
+  - **Design**: Replace the spatial daisy-chain loop (`for (i <- layers.indices)`) with the elaboration of a **single composite compute core**, sized by Scala static introspection to fit the largest layer of the target model.
+  - **Benefit**: Hardware silicon area remains constant and minimal, regardless of network depth (60 layers in YOLOv8n).
+
+- [ ] **Refactor 3.2: Layer FSM & Descriptor ROM Table**
+  - **Design**: Synchronous FSM sequentially updating hyperparameters $(H, W, C_{in}, C_{out}, K, S, P)$ and weight base pointers across passes, eliminating costly generic instruction decoders.
+  - **Validation**: Autonomous sequential execution of 5 heterogeneous layers through the same physical compute core in Verilator.
+
+- [ ] **Refactor 3.3: In-Circuit Hardware Deployment & Benchmarking on Tang Primer 20K**
+  - **Design**: Full integration with the on-board DDR3 memory controller for activation staging (or Z-Flow band streaming).
+  - **Physical Validation**: Complete vision subgraph inference executed on physical Tang Primer 20K silicon. Measure effective throughput and correlate with the theoretical physical ceiling (48 DSPs @ 100 MHz $\implies \sim 2.5$ FPS on YOLOv8n).
+
+---
+
+### Phase 4 (Months 18 → 30): Silicon Industrialization & ASIC Tapeout
+
+Transition from FPGA hardware emulation to dedicated physical integrated circuit:
+
+- [ ] **Flow 4.1: Open-Source RTL-to-GDSII Flow Setup (OpenLane 2 / OpenROAD)**
+  - Automated toolchain integration: Yosys logic synthesis, automated floorplanning, placement, clock tree synthesis (CTS), detailed routing, and physical verification (DRC/LVS).
+
+- [ ] **Flow 4.2: Open Silicon PDK Targeting (SkyWater SKY130 or GlobalFoundries GF180MCU)**
+  - Design rule adaptation and multi-corner static timing analysis (STA) across PVT corners (Process, Voltage, Temperature).
+
+- [ ] **Flow 4.3: OpenRAM Memory Macro Generation**
+  - Automated integration of compiled OpenRAM synchronous SRAM macros directly replacing the `SramAsicAdapter` (Layer 2 of the sandwich).
+
+- [ ] **Flow 4.4: Shuttle Tapeout Submission (MPW / Tiny Tapeout)**
+  - Padring integration (I/O cells, power grid, reset, clock pads) and submission to multi-project wafer shuttles (Tiny Tapeout for compact educational silicon, or Efabless/ChipFoundry MPW).
+  - Packaged silicon testbench PCB design and bit-exact empirical validation on physical chips.
+
+
+
 
