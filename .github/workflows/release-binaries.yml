@@ -5,7 +5,6 @@ on:
     types: [published]
   workflow_dispatch:
 
-
 permissions:
   contents: write
 
@@ -22,108 +21,66 @@ jobs:
             platform: windows-x64
             binary: spinalml-windows-x64.exe
             archive: spinalml-windows-x64.zip
-            is_self_hosted: false
 
           - os: ubuntu-latest
             runner: ubuntu-latest
             platform: linux-x64
             binary: spinalml-linux-x64
             archive: spinalml-linux-x64.tar.gz
-            is_self_hosted: false
 
-          - os: self-hosted
-            runner: [self-hosted, arm64, radxa]
+          - os: ubuntu-24.04-arm
+            runner: ubuntu-24.04-arm
             platform: linux-arm64
             binary: spinalml-linux-arm64
             archive: spinalml-linux-arm64.tar.gz
-            is_self_hosted: true
 
           - os: macos-latest
             runner: macos-latest
             platform: darwin-arm64
             binary: spinalml-darwin-arm64
             archive: spinalml-darwin-arm64.tar.gz
-            is_self_hosted: false
 
           - os: macos-13
             runner: macos-13
             platform: darwin-x64
             binary: spinalml-darwin-x64
             archive: spinalml-darwin-x64.tar.gz
-            is_self_hosted: false
 
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       # =========================================================================
-      # 1. SETUP PYTHON & UV (GITHUB-HOSTED RUNNERS)
+      # 1. SETUP PYTHON & UV
       # =========================================================================
-      - name: Setup Python 3.12 (GitHub Runners)
-        if: ${{ !matrix.is_self_hosted }}
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
 
       - name: Setup uv Package Manager
-        if: ${{ !matrix.is_self_hosted }}
         run: |
           python -m pip install --upgrade pip
           pip install uv
           uv venv --python 3.12 .venv
 
-
       # =========================================================================
-      # 2. SETUP PYTHON & UV (SELF-HOSTED RADXA RUNNER)
-      # =========================================================================
-      - name: Detect Python 3.12 & uv (Radxa Self-Hosted)
-        if: ${{ matrix.is_self_hosted }}
-        run: |
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.pyenv/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.pyenv/shims" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
-
-          if ! command -v uv &> /dev/null; then
-            echo "Installing uv..."
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          fi
-
-          PYENV_PY="$HOME/.pyenv/versions/3.12.1/bin/python"
-          if [ -x "$PYENV_PY" ]; then
-            uv venv --python "$PYENV_PY" --clear .venv
-          else
-            uv venv --python python3.12 --clear .venv
-          fi
-
-      # =========================================================================
-      # 3. INSTALL MINIMAL CLI DEPENDENCIES & PYINSTALLER
+      # 2. INSTALL MINIMAL CLI DEPENDENCIES & PYINSTALLER
       # =========================================================================
       - name: Install Build Dependencies via uv
         run: |
-          if ! command -v uv &> /dev/null; then
-            export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
-          fi
           uv pip install --python .venv -r cli/requirements.txt pyinstaller
 
       # =========================================================================
-      # 4. COMPILE STANDALONE EXECUTABLE WITH PYINSTALLER
+      # 3. COMPILE STANDALONE EXECUTABLE WITH PYINSTALLER
       # =========================================================================
       - name: Build Standalone Binary
         run: |
-          if ! command -v uv &> /dev/null; then
-            export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
-          fi
           uv run --python .venv python cli/build_binary.py --name "${{ matrix.binary }}"
 
-
-
       # =========================================================================
-      # 5. FAST SMOKE TESTS (< 1 MINUTE)
+      # 4. FAST SMOKE TESTS (< 1 MINUTE)
       # =========================================================================
       - name: Run Binary Smoke Tests (Unix)
         if: runner.os != 'Windows'
@@ -159,7 +116,7 @@ jobs:
           .\dist\${{ matrix.binary }} test tests/universal/UniversalOpsDemo.scala
 
       # =========================================================================
-      # 6. PACKAGE ARCHIVE & GENERATE SHA256 CHECKSUM
+      # 5. PACKAGE ARCHIVE & GENERATE SHA256 CHECKSUM
       # =========================================================================
       - name: Create Archive & Compute SHA256 (Unix)
         if: runner.os != 'Windows'
@@ -180,7 +137,7 @@ jobs:
           Get-Content "dist/${{ matrix.archive }}.sha256"
 
       # =========================================================================
-      # 7. UPLOAD AS RELEASE ASSET (IF RELEASE EVENT)
+      # 6. UPLOAD AS RELEASE ASSET (IF RELEASE EVENT)
       # =========================================================================
       - name: Upload to GitHub Release via GitHub CLI
         if: github.event_name == 'release'
@@ -188,17 +145,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          if ! command -v gh &> /dev/null; then
-            (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
-             sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
-             sudo apt-get update && sudo apt-get install -y gh) || sudo apt-get install -y gh || true
-          fi
           gh release upload "${{ github.event.release.tag_name }}" "dist/${{ matrix.archive }}" "dist/${{ matrix.archive }}.sha256" --clobber
 
-
       # =========================================================================
-      # 8. UPLOAD AS ARTIFACT (IF WORKFLOW_DISPATCH)
+      # 7. UPLOAD AS ARTIFACT (IF WORKFLOW_DISPATCH)
       # =========================================================================
       - name: Upload Build Artifacts
         if: github.event_name == 'workflow_dispatch'
