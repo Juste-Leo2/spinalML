@@ -5,11 +5,18 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 
-from .config import CLI_DIR
+from .config import CLI_DIR, BUNDLE_DIR, get_project_root
 
 def get_boards_dir() -> Path:
-    """Returns the path to the boards/ directory at the project root."""
+    """Returns the path to the boards/ directory (active project first, bundled fallback)."""
+    local_boards = get_project_root() / "boards"
+    if local_boards.exists():
+        return local_boards
+    bundled_boards = BUNDLE_DIR / "boards"
+    if bundled_boards.exists():
+        return bundled_boards
     return CLI_DIR.parent / "boards"
+
 
 def list_available_boards() -> List[str]:
     """Returns a list of all board profile names found in boards/*.json."""
@@ -78,13 +85,21 @@ def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to read board config file {target_file}: {e}")
 
     # Standardize and supply defaults
-    project_root = CLI_DIR.parent
+    project_root = get_project_root()
     raw_build = data.get("build", {})
     raw_flash = data.get("flash", {})
     raw_limits = data.get("limits", {})
 
     default_cst_rel = raw_build.get("default_cst")
-    default_cst_path = (project_root / default_cst_rel).resolve() if default_cst_rel else None
+    default_cst_path = None
+    if default_cst_rel:
+        if (project_root / default_cst_rel).exists():
+            default_cst_path = (project_root / default_cst_rel).resolve()
+        elif (BUNDLE_DIR / default_cst_rel).exists():
+            default_cst_path = (BUNDLE_DIR / default_cst_rel).resolve()
+        else:
+            default_cst_path = (project_root / default_cst_rel).resolve()
+
 
     config = {
         "name": data.get("name", target_file.stem),
@@ -128,7 +143,7 @@ def resolve_constraints_file(board_cfg: Dict[str, Any], override_cst: Optional[U
     if override_cst:
         p = Path(override_cst)
         if not p.is_absolute():
-            p = CLI_DIR.parent / p
+            p = get_project_root() / p
         if p.exists():
             return p.resolve()
         raise FileNotFoundError(f"Specified constraints file not found: {override_cst}")

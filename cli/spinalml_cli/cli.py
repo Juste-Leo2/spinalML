@@ -6,8 +6,9 @@ import typer
 from typing import List, Optional
 from pathlib import Path
 
-from .config import load_config, get_bin_path, CLI_DIR
+from .config import load_config, get_bin_path, CLI_DIR, get_project_root, get_active_framework_root
 from .installer import setup_tools
+
 from .board import load_board_config, parse_frequency, detect_model_parameters, list_available_boards
 
 app = typer.Typer(
@@ -82,8 +83,10 @@ def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int
     
     # Run the command
     try:
-        result = subprocess.run(cmd, cwd=str(CLI_DIR.parent))
+        work_dir = str(get_active_framework_root() if tool_name == "mill" else get_project_root())
+        result = subprocess.run(cmd, cwd=work_dir)
         if exit_on_error and result.returncode != 0:
+
             sys.exit(result.returncode)
         return result.returncode
     except KeyboardInterrupt:
@@ -217,17 +220,19 @@ def compile(
     pkg = pkg_match.group(1) if pkg_match else ""
     app_match = re.search(r'^\s*object\s+(\w+)\s+extends\s+App', content, re.MULTILINE)
 
-    workspace_src = CLI_DIR.parent / "spinalML" / "src" / "cli_temp"
+    framework_root = get_active_framework_root()
+    workspace_src = framework_root / "spinalML" / "src" / "cli_temp"
     if workspace_src.exists():
         shutil.rmtree(workspace_src)
     workspace_src.mkdir(parents=True, exist_ok=True)
 
     # Check if file is already in spinalML/src
-    spinalml_src = CLI_DIR.parent / "spinalML" / "src"
+    spinalml_src = framework_root / "spinalML" / "src"
     try:
         is_internal = file.resolve().is_relative_to(spinalml_src.resolve())
     except AttributeError:
         is_internal = str(file.resolve()).startswith(str(spinalml_src.resolve()))
+
 
     if not is_internal:
         shutil.copy(file, workspace_src / file.name)
@@ -304,8 +309,9 @@ object AutoRunner extends App {{
         auto_generated = True
         typer.echo(f"Auto-generating runner for component {comp_name}...")
 
-    project_root = CLI_DIR.parent
+    project_root = get_project_root()
     start_time = time.time() - 2
+
 
     typer.echo(f"Running Mill spinalML.runMain {full_main}...")
     ret_code = run_tool("mill", ["--no-server", "spinalML.runMain", full_main], exit_on_error=False)
@@ -390,7 +396,8 @@ def _run_single_test_file(target_file: Path) -> int:
         comp_name = comp_match.group(1)
         
         # Run the Universal Bit-Exact Verification Engine using UniversalTestHarness
-        test_temp_dir = CLI_DIR.parent / "spinalML" / "test" / "src" / "cli_test_temp"
+        framework_root = get_active_framework_root()
+        test_temp_dir = framework_root / "spinalML" / "test" / "src" / "cli_test_temp"
         if test_temp_dir.exists():
             shutil.rmtree(test_temp_dir)
         test_temp_dir.mkdir(parents=True, exist_ok=True)
@@ -399,12 +406,13 @@ def _run_single_test_file(target_file: Path) -> int:
             # If the file is located outside the spinalML source tree (e.g. at repo root or tests/universal),
             # copy it into test_temp_dir so Mill automatically compiles it alongside the test scaffold.
             try:
-                target_file.resolve().relative_to((CLI_DIR.parent / "spinalML" / "src").resolve())
+                target_file.resolve().relative_to((framework_root / "spinalML" / "src").resolve())
             except ValueError:
                 try:
-                    target_file.resolve().relative_to((CLI_DIR.parent / "spinalML" / "test" / "src").resolve())
+                    target_file.resolve().relative_to((framework_root / "spinalML" / "test" / "src").resolve())
                 except ValueError:
                     shutil.copy(target_file, test_temp_dir / target_file.name)
+
 
             import_stmt = f"import {pkg}.{comp_name}" if pkg else f"import _root_.{comp_name}"
             scaffold_code = f"""package cli_test_temp
@@ -561,7 +569,7 @@ def test(
     if rc != 0:
         raise typer.Exit(code=rc)
 
-@app.command(name="test-all")
+@app.command(name="test-all", hidden=True)
 def test_all(
     filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (regex or substring)"),
     fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
@@ -579,7 +587,7 @@ def test_all(
     if code != 0:
         raise typer.Exit(code=code)
 
-@app.command(name="test-all-formal")
+@app.command(name="test-all-formal", hidden=True)
 def test_all_formal(
     filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter formal tests by name pattern (regex or substring)"),
     fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),
@@ -598,8 +606,9 @@ def test_all_formal(
     if code != 0:
         raise typer.Exit(code=code)
 
-@app.command(name="test-all-python", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(name="test-all-python", hidden=True, context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def test_all_python(
+
     ctx: typer.Context,
     filter: Optional[str] = typer.Option(None, "-k", "--filter", help="Filter tests by name pattern (regex or substring)"),
     fail_fast: bool = typer.Option(False, "-x", "--fail-fast", help="Stop execution immediately on first failure"),

@@ -1,14 +1,10 @@
-# Test python
+# CLI runtime
+-r cli/requirements.txt
 
+# Python co-simulations & tests (cocotb not supported on native Windows)
 pytest==8.0.0
 pytest-cov==4.1.0
-cocotb==1.9.2
-cocotb-test==0.2.6
 numpy==1.26.3
-cocotbext-axi==0.1.28
-
-# CLI
-typer>=0.9.0
-requests>=2.31.0
-rich>=13.0.0
-pyserial>=3.5
+cocotb==1.9.2; sys_platform != 'win32'
+cocotb-test==0.2.6; sys_platform != 'win32'
+cocotbext-axi==0.1.28; sys_platform != 'win32'

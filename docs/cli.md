@@ -6,7 +6,7 @@ It manages external EDA dependencies (Mill, Verilator, SymbiYosys, Yosys, nextpn
 
 ---
 
-## 🚀 Fast-Track: 4 Essential Commands
+## Fast-Track: 4 Essential Commands
 
 | Task | Command | Description |
 | :--- | :--- | :--- |

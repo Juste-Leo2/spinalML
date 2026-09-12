@@ -12,8 +12,9 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import CLI_DIR, TOOLS_DIR, get_bin_path
-from .test_runner import setup_tool_env, get_project_root
+from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root, get_active_framework_root
+from .test_runner import setup_tool_env
+
 
 console = Console(force_terminal=True)
 
@@ -69,8 +70,9 @@ def run_all_formal_tests(
     verbose: bool = False,
     ci_sleep: float = 0.0
 ) -> int:
-    project_root = get_project_root()
+    project_root = get_active_framework_root()
     formal_src = project_root / "spinalML" / "test" / "src" / "spinalML" / "symbolicTest"
+
     
     if log_dir is None:
         log_dir = project_root / "out" / "formal_reports"

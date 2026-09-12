@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from .config import CLI_DIR, TOOLS_DIR, get_bin_path
+from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root
 from .board import load_board_config
 from .build_runner import get_eda_env
 
@@ -29,7 +29,8 @@ def run_flash(
     - Default mode is SRAM (fast volatile, -m).
     - Optional mode is Flash (SPI non-volatile, -f).
     """
-    project_root = CLI_DIR.parent
+    project_root = get_project_root()
+
 
     # 1. Load board configuration
     try:

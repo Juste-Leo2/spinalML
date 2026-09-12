@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -12,10 +13,30 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import CLI_DIR, TOOLS_DIR
-from .test_runner import setup_tool_env, get_project_root
+from .config import CLI_DIR, TOOLS_DIR, get_project_root
+from .test_runner import setup_tool_env
 
 console = Console(force_terminal=True)
+
+def find_python_interpreter() -> Optional[str]:
+    """Finds an external Python interpreter capable of running pytest/cocotb."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    root = get_project_root()
+    # Check local .venv
+    venv_win = root / ".venv" / "Scripts" / "python.exe"
+    if venv_win.exists():
+        return str(venv_win)
+    venv_unix = root / ".venv" / "bin" / "python"
+    if venv_unix.exists():
+        return str(venv_unix)
+    # Check system / PATH
+    for candidate in ["python3.12", "python3", "python"]:
+        found = shutil.which(candidate)
+        if found:
+            return found
+    return None
+
 
 def discover_python_tests(test_dir: Path, filter_pattern: Optional[str] = None) -> List[Path]:
     """
@@ -114,7 +135,14 @@ def run_all_python_tests(
 
         test_start = time.time()
         rel_test_path = str(test_file.relative_to(project_root))
-        cmd = [sys.executable, "-m", "pytest", rel_test_path]
+        py_bin = find_python_interpreter()
+        if not py_bin:
+            console.print("[bold red]Error:[/] Could not locate a Python interpreter for pytest/cocotb.\n"
+                          "Python co-simulations require a local environment with pytest & cocotb.\n"
+                          "Install requirements with: pip install -r requirements.txt")
+            return 1
+        cmd = [py_bin, "-m", "pytest", rel_test_path]
+
 
         # Only pass -k to pytest if the filter was targeting a specific test inside the file (content match, not filename)
         matched_filename = bool(re.search(filter_pattern, test_file.stem, re.IGNORECASE) or re.search(filter_pattern, test_file.name, re.IGNORECASE)) if filter_pattern else False

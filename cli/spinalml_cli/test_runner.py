@@ -12,12 +12,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import CLI_DIR, TOOLS_DIR, get_bin_path
+from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root, get_active_framework_root
 
 console = Console(force_terminal=True)
 
-def get_project_root() -> Path:
-    return CLI_DIR.parent.resolve()
 
 def setup_tool_env() -> dict:
     """Prepares environment with verilator and compiler toolchains on PATH."""
@@ -88,8 +86,9 @@ def run_all_tests(
     verbose: bool = False,
     ci_sleep: float = 0.0
 ) -> int:
-    project_root = get_project_root()
+    project_root = get_active_framework_root()
     test_src = project_root / "spinalML" / "test" / "src"
+
     
     if log_dir is None:
         log_dir = project_root / "out" / "test_reports"

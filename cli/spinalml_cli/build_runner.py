@@ -17,8 +17,9 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from .config import CLI_DIR, TOOLS_DIR, get_bin_path
+from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root
 from .board import load_board_config, resolve_constraints_file, parse_frequency
+
 
 console = Console(legacy_windows=False)
 
@@ -384,8 +385,10 @@ def render_final_report(
 
     if bitstream_path and bitstream_path.exists():
         size_kib = bitstream_path.stat().st_size / 1024.0
-        rel_bitstream = bitstream_path.relative_to(CLI_DIR.parent) if bitstream_path.is_relative_to(CLI_DIR.parent) else bitstream_path
+        root = get_project_root()
+        rel_bitstream = bitstream_path.relative_to(root) if bitstream_path.is_relative_to(root) else bitstream_path
         timing_text.append(f"Bitstream File : {rel_bitstream} ({size_kib:.1f} KiB)\n", style="bold cyan")
+
 
     panel = Panel(
         timing_text,
@@ -750,8 +753,9 @@ def run_build(
     3. nextpnr Placement & Routing
     4. Bitstream Packaging (gowin_pack)
     """
-    project_root = CLI_DIR.parent
+    project_root = get_project_root()
     start_total_time = time.time()
+
 
     # 1. Load board configuration
     try:

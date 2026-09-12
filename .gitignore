@@ -31,3 +31,11 @@ true_math_errors.log
 
 # Hardware FPGA build artifacts
 hw_build/
+
+# CLI & PyInstaller build artifacts
+cli/out/
+build/
+dist/
+*.spec
+out_smoke/
+smoke_rtl/

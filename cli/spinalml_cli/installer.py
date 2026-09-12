@@ -57,11 +57,13 @@ def clean_coursier_cache(console=None, debug: bool = False):
             console.print(f"[dim cyan]{msg}[/dim cyan]")
 
 def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False):
-    from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_os_arch
+    from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_os_arch, get_active_framework_root
     
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    get_active_framework_root()
     
     if force or clean_cache:
+
         clean_coursier_cache(debug=debug)
 
     is_win = "windows" in get_os_arch()

@@ -43,59 +43,67 @@ FPGA-based AI acceleration is typically confined to expensive enterprise platfor
 
 ---
 
-## Quick Start (with `uv`)
+---
 
-We recommend using [**uv**](https://docs.astral.sh/uv/) for ultra-fast, modern Python environment setup.
+## Quick Start
 
-### 1. Install `uv`
-- **Linux / macOS**:
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-- **Windows (PowerShell)**:
-  ```powershell
-  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-  ```
+### Option A: Standalone Precompiled CLI (Recommended)
 
-### 2. Setup Environment & Toolchain
-```bash
-# Clone the repository
-git clone https://github.com/Juste-Leo2/spinalML.git
-cd spinalML
+SpinalML provides standalone, single-file executables for **Windows**, **Linux (x64 & ARM64)**, and **macOS** with zero Python dependencies required.
 
-# Setup Python virtual environment
-uv venv -p 3.12.1
-# Linux/macOS: source .venv/bin/activate | Windows: .\.venv\Scripts\Activate.ps1
-uv pip install -r requirements.txt
+> [!NOTE]
+> **Disk Space Requirement:**
+> Please ensure you have **2 to 3 GB** of free disk space. Running `spinalml setup` automatically provisions the full open-source FPGA toolchain (OSS CAD Suite, Mill, Verilator, Yosys, nextpnr, openFPGALoader) into `~/.spinalml_tools`.
 
-# Provision hardware toolchain (Mill, Verilator, Yosys, nextpnr, SymbiYosys, openFPGALoader)
-python cli/main.py setup
-```
+1. **Download the precompiled binary** for your operating system from the latest [**GitHub Releases**](https://github.com/Juste-Leo2/spinalML/releases).
 
-Once provisioned, explore ready-to-use application examples in the [`examples/`](examples/) directory, including the complete [MNIST hardware demo](examples/Mnist/README.md).
+2. **Add the binary to your PATH** to invoke `spinalml` from any directory:
+   - **Linux / macOS**:
+     ```bash
+     chmod +x spinalml
+     # Move to system PATH (e.g. /usr/local/bin) or export the folder:
+     sudo mv spinalml /usr/local/bin/spinalml
+     # or: export PATH="$PATH:/path/to/binary/folder"
+     ```
+   - **Windows (PowerShell)**:
+     ```powershell
+     # Add binary location to current session PATH (or add permanently in System Settings):
+     $env:Path += ";$PWD"
+     ```
 
-### 3. Compile from Scala to Silicon in One Command
-SpinalML provides an automated flow that translates your Scala model, synthesizes RTL, places-and-routes, and generates a bitstream:
+3. **Initialize the toolchain:**
+   ```bash
+   spinalml setup
+   ```
 
-```bash
-# Build for Sipeed Tang Primer 20K (Gowin GW2A-18) with hardware DSPs enabled
-python cli/main.py build tests/universal/Universal1DDemo.scala --board tang-primer-20k
-```
+4. **Verify, compile & simulate a sample model directly (no git clone required):**
+   Download the self-contained sample component [`Universal1DDemo.scala`](https://raw.githubusercontent.com/Juste-Leo2/spinalML/main/tests/universal/Universal1DDemo.scala):
+   ```bash
+   # Download standalone sample model
+   curl -O https://raw.githubusercontent.com/Juste-Leo2/spinalML/main/tests/universal/Universal1DDemo.scala
 
-> [!TIP]
-> **Universal Hardware DSP Acceleration:**
-> SpinalML transparently infers hardware DSP blocks (`MULT18X18` on Gowin, `DSP48` on Xilinx, sysDSP on Lattice) with registered output pipelining, saving ~30% of logic LUTs while maintaining **numerically validated hardware inference** on physical silicon against software golden references. The `--no-dsp` flag is optionally supported to force LUT-only synthesis.
+   # Run bit-exact cycle-accurate C++ simulation with Verilator
+   spinalml test Universal1DDemo.scala
 
-### 4. Flash and Run Physical Hardware Inference
-```bash
-# Flash bitstream to SRAM
-python cli/main.py flash hw_build/top.fs --board tang-primer-20k
+   # Turnkey FPGA build for Sipeed Tang Primer 20K (Gowin GW2A-18)
+   spinalml build Universal1DDemo.scala --board tang-primer-20k
 
-# Run real-time physical inference over UART
-python scripts/test_hardware_1d.py --port COM8
-```
+   # Flash bitstream to SRAM via openFPGALoader
+   spinalml flash --board tang-primer-20k
+   ```
 
 ---
+
+### Option B: Developer Environment from Source (with Python Co-Simulations)
+
+If you are developing SpinalML or running **Python Cocotb co-simulations**, clone the repository and follow:
+
+**[Guide: Setting up SpinalML from Source & Running All Tests](docs/building_from_source.md)**
+
+*(Includes the essential Python 3.12 global interpreter requirement for Cocotb VPI on Ubuntu / WSL 2, and `uv` bootstrap instructions).*
+
+---
+
 
 ## Real-World Application Examples
 

@@ -2,19 +2,79 @@
 
 import json
 import os
+import sys
 import platform
 from pathlib import Path
 
-# Paths
+# Paths & PyInstaller detection
+IS_FROZEN = getattr(sys, "frozen", False)
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).parent.parent.resolve()))
 CLI_DIR = Path(__file__).parent.parent.resolve()
-CONFIG_FILE = CLI_DIR / "config.json"
 TOOLS_DIR = Path.home() / ".spinalml_tools"
 
+def get_project_root() -> Path:
+    """
+    Returns the active project/workspace root directory.
+    Searches upwards from current working directory for repository markers (build.mill, .git, spinalML),
+    falling back to CLI_DIR.parent if running from source, or Path.cwd().
+    """
+    curr = Path.cwd().resolve()
+    for p in [curr] + list(curr.parents):
+        if (p / "build.mill").exists() or (p / ".git").exists() or (p / "spinalML").is_dir():
+            return p
+    if not IS_FROZEN and (CLI_DIR.parent / "build.mill").exists():
+        return CLI_DIR.parent.resolve()
+    return curr
+
+def get_bundled_scaffold_dir() -> Path:
+    """Returns the bundled framework directory containing spinalML and build.mill."""
+    if IS_FROZEN:
+        return BUNDLE_DIR
+    return CLI_DIR.parent
+
+def get_active_framework_root() -> Path:
+    """
+    Returns the root directory where build.mill and spinalML/ are located.
+    If running inside the spinalML repository, returns that repository.
+    If running standalone outside any repository, seeds ~/.spinalml_tools/framework
+    from the bundled assets to provide a persistent, warm Mill build workspace.
+    """
+    root = get_project_root()
+    if (root / "spinalML").is_dir() and (root / "build.mill").is_file():
+        return root
+
+    scaffold = TOOLS_DIR / "framework"
+    bundled = get_bundled_scaffold_dir()
+    if not (scaffold / "build.mill").exists() and (bundled / "build.mill").exists():
+        scaffold.mkdir(parents=True, exist_ok=True)
+        import shutil
+        if (bundled / "build.mill").exists():
+            shutil.copy2(bundled / "build.mill", scaffold / "build.mill")
+        if (bundled / "spinalML").exists():
+            if (scaffold / "spinalML").exists():
+                shutil.rmtree(scaffold / "spinalML")
+            shutil.copytree(bundled / "spinalML", scaffold / "spinalML")
+        if (bundled / "boards").exists() and not (scaffold / "boards").exists():
+            shutil.copytree(bundled / "boards", scaffold / "boards")
+
+    if (scaffold / "build.mill").exists():
+        return scaffold
+    return root
+
+
 def load_config() -> dict:
-    if not CONFIG_FILE.exists():
-        raise FileNotFoundError(f"Config file not found at {CONFIG_FILE}")
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    candidates = [
+        BUNDLE_DIR / "config.json",
+        BUNDLE_DIR / "cli" / "config.json",
+        CLI_DIR / "config.json",
+        get_project_root() / "cli" / "config.json"
+    ]
+    for cfg in candidates:
+        if cfg.exists():
+            with open(cfg, "r", encoding="utf-8") as f:
+                return json.load(f)
+    raise FileNotFoundError(f"Config file not found. Checked: {candidates}")
+
 
 def get_os_arch() -> str:
     system = platform.system().lower()

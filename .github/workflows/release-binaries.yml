@@ -1,0 +1,186 @@
+name: Release Standalone Binaries
+
+on:
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runner: windows-latest
+            platform: windows-x64
+            binary: spinalml-windows-x64.exe
+            archive: spinalml-windows-x64.zip
+            is_self_hosted: false
+
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+            platform: linux-x64
+            binary: spinalml-linux-x64
+            archive: spinalml-linux-x64.tar.gz
+            is_self_hosted: false
+
+          - os: self-hosted
+            runner: [self-hosted, arm64, radxa]
+            platform: linux-arm64
+            binary: spinalml-linux-arm64
+            archive: spinalml-linux-arm64.tar.gz
+            is_self_hosted: true
+
+          - os: macos-latest
+            runner: macos-latest
+            platform: darwin-arm64
+            binary: spinalml-darwin-arm64
+            archive: spinalml-darwin-arm64.tar.gz
+            is_self_hosted: false
+
+          - os: macos-13
+            runner: macos-13
+            platform: darwin-x64
+            binary: spinalml-darwin-x64
+            archive: spinalml-darwin-x64.tar.gz
+            is_self_hosted: false
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # =========================================================================
+      # 1. SETUP PYTHON & UV (GITHUB-HOSTED RUNNERS)
+      # =========================================================================
+      - name: Setup uv Package Manager
+        if: ${{ !matrix.is_self_hosted }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Setup Python 3.12 (GitHub Runners)
+        if: ${{ !matrix.is_self_hosted }}
+        run: |
+          uv python install 3.12
+          uv venv --python 3.12 .venv
+
+      # =========================================================================
+      # 2. SETUP PYTHON & UV (SELF-HOSTED RADXA RUNNER)
+      # =========================================================================
+      - name: Detect Python 3.12 & uv (Radxa Self-Hosted)
+        if: ${{ matrix.is_self_hosted }}
+        run: |
+          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          if ! command -v uv &> /dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          PYENV_PY="$HOME/.pyenv/versions/3.12.1/bin/python"
+          if [ -x "$PYENV_PY" ]; then
+            uv venv --python "$PYENV_PY" --clear .venv
+          else
+            uv venv --python python3.12 --clear .venv
+          fi
+
+      # =========================================================================
+      # 3. INSTALL MINIMAL CLI DEPENDENCIES & PYINSTALLER
+      # =========================================================================
+      - name: Install Build Dependencies via uv
+        run: |
+          uv pip install --python .venv -r cli/requirements.txt pyinstaller
+
+      # =========================================================================
+      # 4. COMPILE STANDALONE EXECUTABLE WITH PYINSTALLER
+      # =========================================================================
+      - name: Build Standalone Binary
+        run: |
+          uv run --python .venv python cli/build_binary.py --name "${{ matrix.binary }}"
+
+
+
+      # =========================================================================
+      # 5. FAST SMOKE TESTS (< 1 MINUTE)
+      # =========================================================================
+      - name: Run Binary Smoke Tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x "dist/${{ matrix.binary }}"
+          echo "=== Testing --help ==="
+          ./dist/${{ matrix.binary }} --help
+
+          echo "=== Testing setup & tool download ==="
+          ./dist/${{ matrix.binary }} setup
+
+          echo "=== Testing compile on lightweight component ==="
+          ./dist/${{ matrix.binary }} compile tests/universal/UniversalOpsDemo.scala -o smoke_rtl --no-chain
+
+          echo "=== Testing Universal bit-exact verification under Verilator ==="
+          ./dist/${{ matrix.binary }} test tests/universal/UniversalOpsDemo.scala
+
+      - name: Run Binary Smoke Tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "=== Testing --help ==="
+          .\dist\${{ matrix.binary }} --help
+
+          Write-Host "=== Testing setup & tool download ==="
+          .\dist\${{ matrix.binary }} setup
+
+          Write-Host "=== Testing compile on lightweight component ==="
+          .\dist\${{ matrix.binary }} compile tests/universal/UniversalOpsDemo.scala -o smoke_rtl --no-chain
+
+          Write-Host "=== Testing Universal bit-exact verification under Verilator ==="
+          .\dist\${{ matrix.binary }} test tests/universal/UniversalOpsDemo.scala
+
+      # =========================================================================
+      # 6. PACKAGE ARCHIVE & GENERATE SHA256 CHECKSUM
+      # =========================================================================
+      - name: Create Archive & Compute SHA256 (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd dist
+          tar -czf "${{ matrix.archive }}" "${{ matrix.binary }}"
+          shasum -a 256 "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+          cat "${{ matrix.archive }}.sha256"
+
+      - name: Create Archive & Compute SHA256 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/${{ matrix.binary }}" -DestinationPath "dist/${{ matrix.archive }}" -Force
+          $hash = (Get-FileHash -Path "dist/${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.archive }}" | Out-File -FilePath "dist/${{ matrix.archive }}.sha256" -Encoding ascii
+          Get-Content "dist/${{ matrix.archive }}.sha256"
+
+      # =========================================================================
+      # 7. UPLOAD AS RELEASE ASSET (IF RELEASE EVENT)
+      # =========================================================================
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ matrix.archive }}
+            dist/${{ matrix.archive }}.sha256
+
+      # =========================================================================
+      # 8. UPLOAD AS ARTIFACT (IF WORKFLOW_DISPATCH)
+      # =========================================================================
+      - name: Upload Build Artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-binary
+          path: |
+            dist/${{ matrix.archive }}
+            dist/${{ matrix.archive }}.sha256
