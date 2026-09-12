@@ -6,6 +6,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
+import spinalML.memory.LineBuffer2D
 
 /**
  * AvgPool2DOp: 2D Average Pooling with multi-channel support.
@@ -31,11 +32,15 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
   }
 
   // Line buffers: buffer i delays its input by (i+1) full rows (depth beats each)
-  val lineBuffers: Seq[LineBuffer2D[T]] = Seq.tabulate(K - 1) { i =>
-    val lb = LineBuffer2D(dataType, depth)
-    lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else lineBuffers(i - 1).io.pop.payload)
-    lb.io.push.valid := io.a.stream.fire
-    lb
+  val lineBuffers: Seq[LineBuffer2D[T]] = {
+    val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
+    for (i <- 0 until K - 1) {
+      val lb = LineBuffer2D(dataType, depth)
+      lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else bufs(i - 1).io.pop.payload)
+      lb.io.push.valid := io.a.stream.fire
+      bufs += lb
+    }
+    bufs.toSeq
   }
 
   // Column assembly: partial latches per beat (channel index fastest)

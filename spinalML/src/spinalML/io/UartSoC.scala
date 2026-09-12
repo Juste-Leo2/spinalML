@@ -25,6 +25,7 @@ class UartSoC[T <: Data](
   val memoryWords: Int = 4096,
   val imgBase: Int    = 0x10000,
   val weightBase: Int = 0x20000,
+  val memoryAdapterFactory: Option[(Axi4Config) => spinalML.memory.MemoryAdapter] = None,
   val outCount: Int   = 10,
   val version: Int    = 0x01
 ) extends Component {
@@ -59,7 +60,10 @@ class UartSoC[T <: Data](
 
     val rx = new UartRx(clkFreq, baudRate)
     val tx = new UartTx(clkFreq, baudRate)
-    val mem = new AxiReadMem(axiConfig, memoryWords, imgBase, weightBase)
+    val mem = memoryAdapterFactory match {
+      case Some(factory) => factory(axiConfig)
+      case None          => new spinalML.memory.BramAdapter(axiConfig, memoryWords, imgBase, weightBase)
+    }
     val bridge = new UartBridge(
       outCount = outCount,
       wordWidth = axiConfig.dataWidth,
