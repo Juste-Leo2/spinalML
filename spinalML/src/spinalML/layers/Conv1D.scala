@@ -11,14 +11,27 @@ import spinalML.ops._
  * Conv1DLayer: A 1D Convolutional Layer (Single Input/Output Channel).
  * Formula: Y = Conv1D(X, W) + b
  */
-case class Conv1DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc], L_in: Int, inChannels: Int, outChannels: Int, K: Int, outLanes: Int, tileSize: Int = 1024, parallelN: Boolean = false, temporal: Int = 0) extends Component {
+case class Conv1DLayer[T <: Data, TAcc <: Data](
+  dataType: HardType[T],
+  accType: HardType[TAcc],
+  L_in: Int,
+  inChannels: Int,
+  outChannels: Int,
+  K: Int,
+  outLanes: Int,
+  tileSize: Int = 1024,
+  parallelN: Boolean = false,
+  temporal: Int = 0,
+  inLanes: Int = 1,
+  convOutLanes: Int = 1
+) extends Component {
   val L_out = L_in - K + 1
 
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(L_in, inChannels), lanes = 1)) // Input Sequence
+    val x = slave(Tensor(dataType, Seq(L_in, inChannels), lanes = inLanes)) // Input Sequence
     val w = slave(Tensor(dataType, Seq(K * inChannels, outChannels), lanes = outLanes)) // Kernel Weights
     val b = slave(Tensor(accType, Seq(1, outChannels), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(L_out, outChannels), lanes = 1)) // Output Sequence
+    val y = master(Tensor(accType, Seq(L_out, outChannels), lanes = convOutLanes)) // Output Sequence
     // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
     val reArm = in Bool()
   }
@@ -33,16 +46,30 @@ case class Conv1DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
   val matmulResult = matmul(cols, io.w, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal)
 
   // 3. Add Bias
-  io.y <> bias_add(matmulResult, io.b)
+  val biased = bias_add(matmulResult, io.b)
+  if (convOutLanes == biased.lanes) io.y <> biased else io.y <> repack(biased, convOutLanes)
 }
 
 object Conv1D {
-  def apply[T <: Data, TAcc <: Data](x: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None, temporal: Int = 0): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](
+    x: Tensor[T],
+    w: Tensor[T],
+    b: Tensor[TAcc],
+    accType: HardType[TAcc],
+    parallelN: Boolean = false,
+    reArm: Option[Bool] = None,
+    temporal: Int = 0,
+    outLanes: Int = 1
+  ): Tensor[TAcc] = {
     val inChannels = if (x.shape.length == 2) x.shape(1) else 1
     val outChannels = w.shape(1)
     val K = w.shape(0) / inChannels
 
-    val comp = Conv1DLayer(x.dataType, accType, x.shape(0), inChannels, outChannels, K, outLanes = w.lanes, tileSize = w.shape(0), parallelN = parallelN, temporal = temporal)
+    val comp = Conv1DLayer(
+      x.dataType, accType, x.shape(0), inChannels, outChannels, K,
+      outLanes = w.lanes, tileSize = w.shape(0), parallelN = parallelN, temporal = temporal,
+      inLanes = x.lanes, convOutLanes = outLanes
+    )
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.x <> x
     comp.io.w <> w

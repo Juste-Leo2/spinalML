@@ -110,11 +110,11 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
 
 object bias_add {
   def apply[T <: Data](a: Tensor[T], b: Tensor[T], reArm: Option[Bool] = None): Tensor[T] = {
-    require(b.lanes == 1, "Bias must have 1 lane for BiasAddOp")
+    val bIn = if (b.lanes != 1) repack(b, 1) else b
     
-    val comp = BiasAddOp(a.dataType, a.shape, b.shape, a.lanes)
+    val comp = BiasAddOp(a.dataType, a.shape, bIn.shape, a.lanes)
     comp.io.a <> a
-    comp.io.b <> b
+    comp.io.b <> bIn
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.c
   }

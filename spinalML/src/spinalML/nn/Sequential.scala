@@ -120,10 +120,13 @@ case class Sequential(
       case c: Conv2D => c.lanes
       case l: Linear => l.lanes
       case c: Conv1D => c.lanes
-      case mp: MaxPool1D => nodeLanes(i)
-      case ap: AvgPool1D => nodeLanes(i)
+      case mp: MaxPool1D => if (mp.lanes > 0) mp.lanes else (if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1)
+      case ap: AvgPool1D => if (ap.lanes > 0) ap.lanes else (if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1)
       case mp2: MaxPool2D => mp2.lanes
       case ap2: AvgPool2D => ap2.lanes
+      case bn: BatchNorm1D => if (bn.lanes > 0) bn.lanes else bn.features
+      case ln: LayerNorm1D => if (ln.lanes > 0) ln.lanes else ln.features
+      case a: ClassicalAttention => a.lanes
       case sm: Softmax => sm.lanes
       case rp: Repack => rp.newLanes
       case ad: Add => nodeLanes(ad.a)
@@ -510,8 +513,7 @@ case class Sequential(
 
     val nextTensor: Tensor[Data] = layer match {
       case c: Conv1D =>
-        val c1dOut = Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
-        if (c1dOut.lanes != c.lanes) repack(c1dOut, c.lanes) else c1dOut
+        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
 
       case c: Conv2D =>
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
@@ -548,26 +550,35 @@ case class Sequential(
         if (smOut.lanes != sm.lanes) repack(smOut, sm.lanes) else smOut
 
       case bn: BatchNorm1D =>
-        batchnorm(inTensor, layerWeights, layerBias)
+        val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
+        val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias)
+        if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
         val seqLen = nodeShapes(i)(0)
-        val channels = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
-        val comp = spinalML.layers.LayerNorm1D(nodeTypes(i), channels, seqLen)
-        comp.io.x <> inTensor
+        val targetLanes = if (ln.lanes > 0) ln.lanes else ln.features
+        val inRepacked = if (inTensor.lanes != ln.features) repack(inTensor, ln.features) else inTensor
+        val comp = spinalML.layers.LayerNorm1D(nodeTypes(i), ln.features, seqLen)
+        comp.io.x <> inRepacked
         comp.io.gamma <> layerWeights
         comp.io.beta <> layerBias
-        comp.io.y
+        val lnOut = comp.io.y
+        if (lnOut.lanes != targetLanes) repack(lnOut, targetLanes) else lnOut
 
       case mp: MaxPool1D =>
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
+        val targetLanes = if (mp.lanes > 0) mp.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        maxpool1d(repacked, mp.poolSize, mp.stride)
+        val pooled = maxpool1d(repacked, mp.poolSize, mp.stride)
+        if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case ap: AvgPool1D =>
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
+        val targetLanes = if (ap.lanes > 0) ap.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        avgpool1d(repacked, ap.poolSize, ap.stride)
+        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride)
+        if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case mp2: MaxPool2D =>
         val pooled = maxpool2d(inTensor, mp2.poolSize, mp2.stride)
@@ -662,8 +673,8 @@ case class Sequential(
         comp.io.wk <> spinalML.ops.slice(w1, a.embedDim, 2 * a.embedDim, axis = 0)
         comp.io.wv <> spinalML.ops.slice(w2, 2 * a.embedDim, 3 * a.embedDim, axis = 0)
         comp.io.wo <> spinalML.ops.slice(w3, 3 * a.embedDim, 4 * a.embedDim, axis = 0)
-
-        comp.io.y
+        val rawY = comp.io.y
+        if (rawY.lanes != a.lanes) repack(rawY, a.lanes) else rawY
     }
 
     registerNode(nextTensor)

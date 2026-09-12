@@ -6,6 +6,7 @@ import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
+import spinalML.ops.repack
 
 case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
   val io = new Bundle {
@@ -64,13 +65,19 @@ case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
 }
 
 object batchnorm {
-  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T]): Tensor[T] = {
+  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T], outLanes: Int = -1): Tensor[T] = {
     val seqLen = x.shape(0)
     val channels = if (x.shape.length > 1) x.shape(1) else 1
-    val comp = BatchNorm1D(x.dataType, channels, seqLen)
-    comp.io.x <> x
-    comp.io.gamma <> gamma
-    comp.io.beta <> beta
-    comp.io.y
+    val inX = if (x.lanes != channels) repack(x, channels) else x
+    val inGamma = if (gamma.lanes != channels) repack(gamma, channels) else gamma
+    val inBeta = if (beta.lanes != channels) repack(beta, channels) else beta
+
+    val comp = BatchNorm1D(inX.dataType, channels, seqLen)
+    comp.io.x <> inX
+    comp.io.gamma <> inGamma
+    comp.io.beta <> inBeta
+    val rawY = comp.io.y
+    val finalLanes = if (outLanes > 0) outLanes else channels
+    if (rawY.lanes != finalLanes) repack(rawY, finalLanes) else rawY
   }
 }

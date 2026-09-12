@@ -125,19 +125,19 @@ case class Softmax(lanes: Int = 1) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class BatchNorm1D(features: Int) extends LayerSpec {
+case class BatchNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
   override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
 }
 
-case class LayerNorm1D(features: Int) extends LayerSpec {
+case class LayerNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
   override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
 }
 
-case class MaxPool1D(poolSize: Int, stride: Int) extends LayerSpec {
+case class MaxPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2, "MaxPool1D requires at least 2D input shape (L, C)")
     val l = inShape(0)
@@ -149,7 +149,7 @@ case class MaxPool1D(poolSize: Int, stride: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class AvgPool1D(poolSize: Int, stride: Int) extends LayerSpec {
+case class AvgPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2, "AvgPool1D requires at least 2D input shape (L, C)")
     val l = inShape(0)
