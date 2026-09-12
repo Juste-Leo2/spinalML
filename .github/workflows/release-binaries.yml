@@ -2,8 +2,9 @@ name: Release Standalone Binaries
 
 on:
   release:
-    types: [published, prereleased]
+    types: [published]
   workflow_dispatch:
+
 
 permissions:
   contents: write
@@ -79,11 +80,19 @@ jobs:
       - name: Detect Python 3.12 & uv (Radxa Self-Hosted)
         if: ${{ matrix.is_self_hosted }}
         run: |
-          export PATH="$HOME/.pyenv/bin:$HOME/.pyenv/shims:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.pyenv/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.pyenv/shims" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+
           if ! command -v uv &> /dev/null; then
+            echo "Installing uv..."
             curl -LsSf https://astral.sh/uv/install.sh | sh
-            export PATH="$HOME/.cargo/bin:$PATH"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
+
           PYENV_PY="$HOME/.pyenv/versions/3.12.1/bin/python"
           if [ -x "$PYENV_PY" ]; then
             uv venv --python "$PYENV_PY" --clear .venv
@@ -96,6 +105,9 @@ jobs:
       # =========================================================================
       - name: Install Build Dependencies via uv
         run: |
+          if ! command -v uv &> /dev/null; then
+            export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+          fi
           uv pip install --python .venv -r cli/requirements.txt pyinstaller
 
       # =========================================================================
@@ -103,6 +115,9 @@ jobs:
       # =========================================================================
       - name: Build Standalone Binary
         run: |
+          if ! command -v uv &> /dev/null; then
+            export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH"
+          fi
           uv run --python .venv python cli/build_binary.py --name "${{ matrix.binary }}"
 
 
@@ -174,7 +189,10 @@ jobs:
         shell: bash
         run: |
           if ! command -v gh &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y gh || true
+            (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+             sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+             sudo apt-get update && sudo apt-get install -y gh) || sudo apt-get install -y gh || true
           fi
           gh release upload "${{ github.event.release.tag_name }}" "dist/${{ matrix.archive }}" "dist/${{ matrix.archive }}.sha256" --clobber
 
