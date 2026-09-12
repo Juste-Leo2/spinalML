@@ -6,35 +6,15 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
-
-/**
- * LineBuffer: A simple memory that delays data by exactly `depth` valid cycles.
- * Used to store rows of an image for 2D convolutions.
- */
-case class LineBuffer[T <: Data](dataType: HardType[T], depth: Int) extends Component {
-  val io = new Bundle {
-    val push = in(dataType())
-    val pop = out(dataType())
-    val en = in Bool()
-  }
-  
-  // If depth is very small (like for small tests), use registers.
-  // Otherwise use Mem (BRAM). Mem(..., depth) works nicely.
-  val mem = Mem(dataType, depth)
-  val ptr = Counter(depth)
-  
-  // Read oldest data
-  io.pop := mem.readSync(ptr.value) // Using Sync read is better for BRAM, but requires 1 cycle delay.
-  // Wait, if we use readSync, the output is delayed by 1 cycle.
-  // If we readAsync, it's combinational, but BRAM doesn't support async read.
-  // Let's use registers for simplicity in this abstract ML framework, unless depth is huge.
-  // SpinalHDL Mem will infer registers if readAsync is used.
-}
+import spinalML.memory.LineBuffer2D
 
 /**
  * Im2ColOp: Converts a 2D image into flattened sliding windows.
- * Input A: shape [H, W], lanes = 1
- * Output C: shape [H_out * W_out, K * K], lanes = K * K
+ * Uses LineBuffer2D (Mem.readSync circular buffer) to eliminate flip-flop bloat,
+ * guaranteeing BRAM inference on FPGA and macro SRAM portability on ASIC.
+ *
+ * Input A: shape [H, W, C], lanes = 1
+ * Output C: shape [H_out * W_out, K * K * C], lanes = outLanes
  */
 case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, outLanes: Int) extends Component {
   require(H >= K && W >= K, "Image dimensions must be >= kernel size")
@@ -52,10 +32,16 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
   
   // Line Buffers to hold previous rows of the image.
   // Each row has W pixels, and each pixel has C channels.
-  val lineBuffers = for (i <- 0 until K - 1) yield new Area {
-    val regs = Vec(Reg(dataType), W * C)
-    regs.foreach(r => r.init(r.getZero.asInstanceOf[T]))
-    val pop = regs(W * C - 1) // Oldest element
+  val lineBufferDepth = W * C
+  val lineBuffers: Seq[LineBuffer2D[T]] = {
+    val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
+    for (i <- 0 until K - 1) {
+      val lb = LineBuffer2D(dataType, lineBufferDepth)
+      lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else bufs(i - 1).io.pop.payload)
+      lb.io.push.valid := io.a.stream.fire
+      bufs += lb
+    }
+    bufs.toSeq
   }
   
   // 1D Shift Register holding the flattened window in row-major order [K, K, C]
@@ -96,7 +82,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
       if (r == K - 1) {
         currentPixels(r)(C - 1) := io.a.stream.payload(0)
       } else {
-        currentPixels(r)(C - 1) := lineBuffers(K - 2 - r).pop
+        currentPixels(r)(C - 1) := lineBuffers(K - 2 - r).io.pop.payload
       }
     }
     
@@ -107,17 +93,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
           // Push to tempVecs (only matters for C > 1)
           tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
           for (i <- 0 until K - 1) {
-            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).pop
-          }
-          
-          // Shift Line Buffers
-          if (K > 1) {
-            for (i <- (1 until K - 1).reverse) {
-              for (j <- (1 until W * C).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
-              lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
-            }
-            for (j <- (1 until W * C).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
-            lineBuffers(0).regs(0) := io.a.stream.payload(0)
+            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).io.pop.payload
           }
           
           channelCount.increment()
@@ -172,16 +148,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
         when(io.a.stream.valid) {
           tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
           for (i <- 0 until K - 1) {
-            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).pop
-          }
-          
-          if (K > 1) {
-            for (i <- (1 until K - 1).reverse) {
-              for (j <- (1 until W * C).reverse) lineBuffers(i).regs(j) := lineBuffers(i).regs(j - 1)
-              lineBuffers(i).regs(0) := lineBuffers(i - 1).pop
-            }
-            for (j <- (1 until W * C).reverse) lineBuffers(0).regs(j) := lineBuffers(0).regs(j - 1)
-            lineBuffers(0).regs(0) := io.a.stream.payload(0)
+            tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).io.pop.payload
           }
           
           channelCount.increment()

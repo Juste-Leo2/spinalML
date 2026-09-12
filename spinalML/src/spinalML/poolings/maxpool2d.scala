@@ -7,32 +7,7 @@ import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
 
-/**
- * BRAM delay-line: delays its input stream by exactly `depth` accepted beats.
- * Circular Mem + readSync guarantees Block RAM inference (guideline opsSupport.md).
- * Read address = ptr + 1 so that the popped value is aligned with the current
- * input beat even under arbitrary valid/ready stalls.
- */
-case class LineBuffer2D[T <: Data](dataType: HardType[T], depth: Int) extends Component {
-  require(depth >= 2, "LineBuffer2D depth (W*C) must be >= 2")
-
-  val io = new Bundle {
-    val push = slave Flow (dataType())
-    val pop = master Flow (dataType())
-  }
-
-  val mem = Mem(dataType, depth)
-  mem.init(Seq.fill(depth)(dataType().getZero))
-
-  val ptr = Counter(depth)
-  val rdAddr = Mux(ptr.value === depth - 1, U(0, log2Up(depth) bits), ptr.value + 1)
-
-  mem.write(ptr.value, io.push.payload, enable = io.push.valid)
-  when(io.push.valid) { ptr.increment() }
-
-  io.pop.valid := RegNext(io.push.valid) init (False)
-  io.pop.payload := mem.readSync(rdAddr, enable = io.push.valid)
-}
+import spinalML.memory.LineBuffer2D
 
 /**
  * MaxPool2DOp: 2D Max Pooling with multi-channel support.
@@ -55,11 +30,15 @@ case class MaxPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
   }
 
   // Line buffers: buffer i delays its input by (i+1) full rows (depth beats each)
-  val lineBuffers: Seq[LineBuffer2D[T]] = Seq.tabulate(K - 1) { i =>
-    val lb = LineBuffer2D(dataType, depth)
-    lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else lineBuffers(i - 1).io.pop.payload)
-    lb.io.push.valid := io.a.stream.fire
-    lb
+  val lineBuffers: Seq[LineBuffer2D[T]] = {
+    val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
+    for (i <- 0 until K - 1) {
+      val lb = LineBuffer2D(dataType, depth)
+      lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else bufs(i - 1).io.pop.payload)
+      lb.io.push.valid := io.a.stream.fire
+      bufs += lb
+    }
+    bufs.toSeq
   }
 
   // Column assembly: partial latches per beat (channel index fastest)
