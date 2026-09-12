@@ -58,18 +58,20 @@ jobs:
       # =========================================================================
       # 1. SETUP PYTHON & UV (GITHUB-HOSTED RUNNERS)
       # =========================================================================
-      - name: Setup uv Package Manager
-        if: ${{ !matrix.is_self_hosted }}
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          version: "latest"
-
       - name: Setup Python 3.12 (GitHub Runners)
         if: ${{ !matrix.is_self_hosted }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Setup uv Package Manager
+        if: ${{ !matrix.is_self_hosted }}
         run: |
-          uv python install 3.12
+          python -m pip install --upgrade pip
+          pip install uv
           uv venv --python 3.12 .venv
+
 
       # =========================================================================
       # 2. SETUP PYTHON & UV (SELF-HOSTED RADXA RUNNER)
@@ -165,13 +167,17 @@ jobs:
       # =========================================================================
       # 7. UPLOAD AS RELEASE ASSET (IF RELEASE EVENT)
       # =========================================================================
-      - name: Upload to GitHub Release
+      - name: Upload to GitHub Release via GitHub CLI
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/${{ matrix.archive }}
-            dist/${{ matrix.archive }}.sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if ! command -v gh &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y gh || true
+          fi
+          gh release upload "${{ github.event.release.tag_name }}" "dist/${{ matrix.archive }}" "dist/${{ matrix.archive }}.sha256" --clobber
+
 
       # =========================================================================
       # 8. UPLOAD AS ARTIFACT (IF WORKFLOW_DISPATCH)
