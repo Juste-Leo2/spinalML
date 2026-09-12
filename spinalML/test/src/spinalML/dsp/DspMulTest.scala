@@ -122,7 +122,9 @@ class DspMulTest extends AnyFunSuite {
     val configs = Seq(
       DspConfig(target = DspTarget.Generic, useDsp = true, latency = 1),
       DspConfig(target = DspTarget.Gowin, useDsp = true, latency = 1),
-      DspConfig(target = DspTarget.Generic, useDsp = false, latency = 1) // --no-dsp mode
+      DspConfig(target = DspTarget.Generic, useDsp = false, latency = 1), // --no-dsp mode
+      DspConfig.asic(PdkFamily.Sky130, latency = 1),
+      DspConfig(target = Target.Simulation, latency = 1)
     )
 
     for (cfg <- configs) {
@@ -141,4 +143,23 @@ class DspMulTest extends AnyFunSuite {
       }
     }
   }
+
+  test("HardwareMul: Target.ASIC generates pure behavioral Verilog without vendor blackboxes") {
+    val targetDir = "out/test_asic_mul"
+    SpinalConfig(targetDirectory = targetDir).generateVerilog(
+      DspMulSIntComp(8, 16, latency = 1, DspConfig.asic(PdkFamily.Sky130, latency = 1))
+    )
+    val content = scala.io.Source.fromFile(s"$targetDir/DspMulSIntComp.v").mkString
+    assert(!content.contains("MULT18X18"), "ASIC generated Verilog must NEVER contain Gowin MULT18X18")
+  }
+
+  test("HardwareMul: Target.FPGA(Gowin) synthesizes MULT18X18 hardware macro") {
+    val targetDir = "out/test_gowin_mul"
+    SpinalConfig(targetDirectory = targetDir).generateVerilog(
+      DspMulSIntComp(8, 16, latency = 1, DspConfig.fpga(FpgaFamily.Gowin, useDsp = true, latency = 1))
+    )
+    val content = scala.io.Source.fromFile(s"$targetDir/DspMulSIntComp.v").mkString
+    assert(content.contains("MULT18X18"), "Gowin target must instantiate MULT18X18 hard macro")
+  }
 }
+
