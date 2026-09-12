@@ -95,15 +95,36 @@ class UartSoC[T <: Data](
     bridge.io.tx.ready := tx.io.ready
     io.uartTx := tx.io.tx
 
-    // Output stream: one FP8 byte per logit
-    val outElem = acc.io.outStream.stream.payload(0)
-    val outByte = outElem match {
+    // Output stream: one FP8 byte per logit (handles lanes >= 1 with sequential deserialization)
+    val outLanes = acc.io.outStream.lanes
+    def toByte(elem: Data): Bits = elem match {
       case f: FloatML => (f.sign ## f.exponent ## f.mantissa).asBits
       case b          => b.asBits.resize(8)
     }
-    bridge.io.outStream.valid := acc.io.outStream.stream.valid
-    bridge.io.outStream.payload := outByte
-    acc.io.outStream.stream.ready := bridge.io.outStream.ready
+
+    if (outLanes == 1) {
+      val outByte = toByte(acc.io.outStream.stream.payload(0))
+      bridge.io.outStream.valid := acc.io.outStream.stream.valid
+      bridge.io.outStream.payload := outByte
+      acc.io.outStream.stream.ready := bridge.io.outStream.ready
+    } else {
+      val laneIdx = Reg(UInt(log2Up(outLanes) bits)) init 0
+      val outBytes = Vec(Bits(8 bits), outLanes)
+      for (i <- 0 until outLanes) {
+        outBytes(i) := toByte(acc.io.outStream.stream.payload(i))
+      }
+      bridge.io.outStream.valid := acc.io.outStream.stream.valid
+      bridge.io.outStream.payload := outBytes(laneIdx)
+
+      when(bridge.io.outStream.fire) {
+        when(laneIdx === U(outLanes - 1, log2Up(outLanes) bits)) {
+          laneIdx := 0
+        } otherwise {
+          laneIdx := laneIdx + 1
+        }
+      }
+      acc.io.outStream.stream.ready := bridge.io.outStream.ready && (laneIdx === U(outLanes - 1, log2Up(outLanes) bits))
+    }
 
     // Status sources
     bridge.io.statusArValid := acc.io.axiMaster.ar.valid

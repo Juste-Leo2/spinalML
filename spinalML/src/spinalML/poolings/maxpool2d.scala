@@ -6,7 +6,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
-
+import spinalML.ops.repack
 import spinalML.memory.LineBuffer2D
 
 /**
@@ -163,10 +163,10 @@ object maxpool2d {
   def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
     require(a.shape.length >= 2 && a.shape.length <= 3, "MaxPool2D expects a 2D [H, W] or 3D [H, W, channels] tensor")
     val C = if (a.shape.length == 3) a.shape(2) else 1
-    require(a.lanes == 1, s"MaxPool2D input must have lanes = 1")
+    val in = if (a.lanes != 1) repack(a, 1) else a
 
-    val comp = MaxPool2DOp(a.dataType, a.shape(0), a.shape(1), C, poolSize, stride)
-    comp.io.a <> a
+    val comp = MaxPool2DOp(in.dataType, in.shape(0), in.shape(1), C, poolSize, stride)
+    comp.io.a <> in
     comp.io.c
   }
 }

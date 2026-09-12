@@ -13,10 +13,10 @@ import spinalML.memory.LineBuffer2D
  * Uses LineBuffer2D (Mem.readSync circular buffer) to eliminate flip-flop bloat,
  * guaranteeing BRAM inference on FPGA and macro SRAM portability on ASIC.
  *
- * Input A: shape [H, W, C], lanes = 1
+ * Input A: shape [H, W, C], lanes = inLanes
  * Output C: shape [H_out * W_out, K * K * C], lanes = outLanes
  */
-case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, outLanes: Int) extends Component {
+case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, outLanes: Int, inLanes: Int = 1) extends Component {
   require(H >= K && W >= K, "Image dimensions must be >= kernel size")
   val H_out = H - K + 1
   val W_out = W - K + 1
@@ -26,10 +26,12 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
   val outCycles = windowSize / outLanes
   
   val io = new Bundle {
-    val a = slave(Tensor(dataType, Seq(H, W, C), lanes = 1))
+    val a = slave(Tensor(dataType, Seq(H, W, C), lanes = inLanes))
     val c = master(Tensor(dataType, Seq(totalWindows, windowSize), lanes = outLanes))
   }
   
+  val inTensor = if (inLanes != 1) repack(io.a, 1) else io.a
+
   // Line Buffers to hold previous rows of the image.
   // Each row has W pixels, and each pixel has C channels.
   val lineBufferDepth = W * C
@@ -37,8 +39,8 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
     val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
     for (i <- 0 until K - 1) {
       val lb = LineBuffer2D(dataType, lineBufferDepth)
-      lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else bufs(i - 1).io.pop.payload)
-      lb.io.push.valid := io.a.stream.fire
+      lb.io.push.payload := (if (i == 0) inTensor.stream.payload(0) else bufs(i - 1).io.pop.payload)
+      lb.io.push.valid := inTensor.stream.fire
       bufs += lb
     }
     bufs.toSeq
@@ -59,7 +61,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
   val windowCount = Counter(totalWindows)
   val outChunkCount = Counter(outCycles)
   
-  io.a.stream.ready := False
+  inTensor.stream.ready := False
   io.c.stream.valid := False
   
   // Map output payload directly from shift register based on current chunk
@@ -80,7 +82,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
         currentPixels(r)(ch) := tempVecs(r)(ch)
       }
       if (r == K - 1) {
-        currentPixels(r)(C - 1) := io.a.stream.payload(0)
+        currentPixels(r)(C - 1) := inTensor.stream.payload(0)
       } else {
         currentPixels(r)(C - 1) := lineBuffers(K - 2 - r).io.pop.payload
       }
@@ -88,10 +90,10 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
     
     val stateFill: State = new State with EntryPoint {
       whenIsActive {
-        io.a.stream.ready := True
-        when(io.a.stream.valid) {
+        inTensor.stream.ready := True
+        when(inTensor.stream.valid) {
           // Push to tempVecs (only matters for C > 1)
-          tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
+          tempVecs(K - 1)(channelCount.value) := inTensor.stream.payload(0)
           for (i <- 0 until K - 1) {
             tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).io.pop.payload
           }
@@ -144,9 +146,9 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
     
     val stateWaitA: State = new State {
       whenIsActive {
-        io.a.stream.ready := True
-        when(io.a.stream.valid) {
-          tempVecs(K - 1)(channelCount.value) := io.a.stream.payload(0)
+        inTensor.stream.ready := True
+        when(inTensor.stream.valid) {
+          tempVecs(K - 1)(channelCount.value) := inTensor.stream.payload(0)
           for (i <- 0 until K - 1) {
             tempVecs(K - 2 - i)(channelCount.value) := lineBuffers(i).io.pop.payload
           }
@@ -192,9 +194,7 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
 object im2col {
   def apply[T <: Data](a: Tensor[T], kernelSize: Int, outLanes: Int): Tensor[T] = {
     val C = if (a.shape.length == 3) a.shape(2) else 1
-    require(a.lanes == 1, "Im2Col input must have lanes = 1")
-    
-    val comp = Im2ColOp(a.dataType, a.shape(0), a.shape(1), C, kernelSize, outLanes)
+    val comp = Im2ColOp(a.dataType, a.shape(0), a.shape(1), C, kernelSize, outLanes, inLanes = a.lanes)
     comp.io.a <> a
     comp.io.c
   }
