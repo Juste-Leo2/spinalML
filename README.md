@@ -41,7 +41,37 @@ FPGA-based AI acceleration is typically confined to expensive enterprise platfor
 * **Resource-Conscious Design**: Custom mixed-precision (INT4, W4A8, FP8), temporal resource sharing, and double-buffered DMA streaming designed to fit models into devices with limited logic (down to 20K LUTs).
 * **PyTorch-like Ergonomics with Hardware Control**: Define networks with a clean, declarative API (`Sequential`, `Conv2D`, `Linear`, `Attention`) while retaining direct visibility over physical registers, FIFOs, and DSP slices.
 
----
+### Automated Toolchain Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Build ["spinalml build"]
+        direction LR
+        A["Scala Model"] --> B["SpinalHDL\n(Verilog RTL)"]
+        B --> C["Yosys\n(Synthesis)"]
+        C --> D["nextpnr\n(Place & Route)"]
+        D --> E["Bitstream\n(top.fs)"]
+    end
+
+    subgraph Flash ["spinalml flash"]
+        direction LR
+        E --> F["openFPGALoader"]
+        F --> G["FPGA Silicon\n(Tang Primer 20K)"]
+    end
+```
+
+### Turnkey Verification Engine
+
+Any neural network model defined with SpinalML can be simulated and verified without writing boilerplate testbenches:
+
+```bash
+# Automatically scaffold, simulate, and verify any model under Verilator
+spinalml test examples/Mnist/Model.scala
+```
+
+- **Automated SoC Simulation**: Scaffolds an AXI4 memory harness and AXI-Lite control plane under Verilator 5.
+- **Bit-Exact Software Oracles**: Validates hardware outputs against `ModelReplica` with zero numerical deviation (`deviation = 0.000`).
+- **Formal Verification**: Streaming flows, handshakes, and operations across the codebase are formally proven against protocol violations and deadlocks via SymbiYosys and SMT solvers (`cvc4`) (`spinalml test-all-formal`).
 
 ---
 
@@ -133,7 +163,7 @@ case class TinyMLP(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
 ) extends Accelerator(
   dataType = I8(),             // 8-bit integer quantization
-  inputShape = Seq(16, 1),     // 1D input vector of length 16
+  inputShape = Seq(1, 16),     // 1D input vector of length 16 (1x16)
   modelSpec = Seq(
     Linear(inFeatures = 16, outFeatures = 32),
     ReLU(),
@@ -145,7 +175,7 @@ case class TinyMLP(
 
 No boilerplate `App` object or manual Verilog runner needed: the SpinalML CLI automatically elaborates your class, wraps it in the SoC bus, and compiles it directly:
 ```bash
-python cli/main.py build TinyMLP.scala --board tang-primer-20k --no-dsp
+python cli/main.py build TinyMLP.scala --board tang-primer-20k
 ```
 
 ---
@@ -179,34 +209,26 @@ Explore detailed guides in the [`docs/`](docs/) directory:
 - [**High-Level Tutorial**](docs/HighLevelTutorial.md): Complete guide to the PyTorch-like API, quantization, and DAG topologies.
 - [**Operations API Reference**](docs/opsDocs.md): Detailed specifications of all supported hardware operations and layers.
 - [**CLI Reference**](docs/cli.md): Commands for compilation, simulation, synthesis, formal verification, and flashing.
-- [**Project Structure**](docs/project_structure.md): Repository layout, conventions, and architectural roadmap.
+- [**Project Structure & Architecture**](docs/project_structure.md): Repository layout, 3-layer hardware sandwich architecture, and verification framework.
+- [**Project Roadmap**](docs/roadmap.md): High-level architectural roadmap, ONNX ingestion, and edge SLM goals.
+- [**Full Technical Roadmap**](docs/full_roadmap.md): Complete phase-by-phase implementation plan and detailed checklist.
+- [**FPGA Board Roadmap**](docs/roadmap_board.md): Hardware compatibility matrix and community board support guidelines.
 - [**UART Bridge & Protocol**](docs/uart_bridge.md): Specifications for physical UART host communication and CSR bridges.
 - [**Application Examples**](examples/): Silicon-validated hardware projects, including the [Tang Primer 20K MNIST Accelerator](examples/Mnist/README.md).
-- [**Supported FPGA Boards**](#supported-fpga-boards): Hardware compatibility matrix and supported vendor targets.
+- [**Supported FPGA Boards**](#supported-fpga-boards): Hardware compatibility status.
 
 ---
 
 ## Supported FPGA Boards
 
-> [!IMPORTANT]
-> **Current Hardware Status: 1 Board Supported & Tested**  
-> Physical in-circuit synthesis, flashing, and real-time UART inference testing are currently validated **only on the Sipeed Tang Primer 20K** (Gowin GW2A-18).  
-> The other platforms listed below represent theoretical architectural targets and an exploratory roadmap. If you own any of these boards and would like to test or contribute a validated profile, pull requests are warmly welcomed!
+Physical in-circuit synthesis, place-and-route, bitstream generation, and real-time UART inference are validated on hardware for:
 
-| Vendor | Board | FPGA Device | Toolchain / Programmer | Target Slug | Hardware Tested |
+| Vendor | Board | FPGA Device | Toolchain / Programmer | Target Slug | Hardware Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| **Gowin** | **Sipeed Tang Primer 20K** | GW2A-LV18PG256C8/I7 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-primer-20k` | ✅ **Validated** |
-| Gowin | Sipeed Tang Nano 20K | GW2A-LV18QN88 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-nano-20k` | ❌ Untested |
-| Gowin | Sipeed Tang Nano 9K | GW1NR-LV9QN88PC6/I5 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-nano-9k` | ❌ Untested |
-| Gowin | Sipeed Tang Mega 138K | GW5AST-LV138FPG676A | Yosys / Gowin EDA / openFPGALoader | `tang-mega-138k` | ❌ Untested |
-| **AMD / Xilinx** | Digilent Arty A7-35T / 100T | Artix-7 (XC7A35T / XC7A100T) | Yosys + nextpnr-xilinx / Vivado | `arty-a7` | ❌ Untested |
-| AMD / Xilinx | Digilent Basys 3 | Artix-7 (XC7A35T) | Vivado / openFPGALoader | `basys3` | ❌ Untested |
-| AMD / Xilinx | Digilent PYNQ-Z2 / Cora Z7 | Zynq-7000 (XC7Z020 / XC7Z010) | Vivado / PYNQ Linux (AXI PS-PL) | `pynq-z2` | ❌ Untested |
-| AMD / Xilinx | AMD Kria KV260 / KR260 | Zynq UltraScale+ MPSoC | Vivado / Vitis AI | `kria-kv260` | ❌ Untested |
-| **Lattice** | Lattice iCE40 UltraPlus (iCEBreaker) | iCE40UP5K-SG48 | Yosys + nextpnr-ice40 / iceprog | `ice40-up5k` | ❌ Untested |
-| Lattice | Lattice ECP5 (Colorlight 5A-75B / OrangeCrab) | LFE5U-25F / 45F / 85F | Yosys + nextpnr-ecp5 / openFPGALoader | `ecp5` | ❌ Untested |
-| **Intel / Altera** | Terasic DE10-Lite | MAX 10 (10M50DAF484C7G) | Quartus Prime / openFPGALoader | `de10-lite` | ❌ Untested |
-| Intel / Altera | Terasic DE10-Nano | Cyclone V SE (5CSEBA6U23I7) | Quartus Prime / openFPGALoader | `de10-nano` | ❌ Untested |
+| **Gowin** | **Sipeed Tang Primer 20K** | GW2A-LV18PG256C8/I7 | Yosys + nextpnr-himbaechel / openFPGALoader | `tang-primer-20k` | ✅ Hardware Validated |
+
+> [!NOTE]
+> SpinalML generates generic, vendor-agnostic RTL. For the complete matrix of planned FPGA targets (including AMD/Xilinx Artix-7/Zynq, Lattice ECP5/iCE40, and Intel Cyclone V) or to contribute a board definition, see the [**FPGA Board Roadmap**](docs/roadmap_board.md).
 
 ---
 

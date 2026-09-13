@@ -1,0 +1,279 @@
+# SpinalML Full Technical Roadmap & Backlog
+
+This document provides the exhaustive technical implementation history, backlog, and engineering tracking for the SpinalML library. For the high-level project milestones, see [roadmap.md](roadmap.md).
+
+## 1. Tensor Management and Data Flows
+- [x] Define foundational data types (e.g., fixed-point (I8), floating-point (BF16, FP8)).
+- [x] Implement the base Tensor hardware representation in SpinalHDL.
+- [x] Create memory management and addressing logic for Tensors (Enforcing BRAM inference via `readSync` for large buffers).
+- [x] Implement data flow interfaces (like AXI-Stream) for input and output data streaming.
+- [x] Test and validate memory access patterns and stream handshaking.
+
+## 2. Basic Operations
+- [x] Implement element-wise arithmetic (Addition, Subtraction, Multiplication).
+- [x] Implement scalar operations (Broadcast add/mul).
+- [x] Implement basic Matrix Multiplication (MatMul). (Accumulator data type selection and Tiling/Double-Buffering system for large matrices are complete)
+- [x] Implement Dot Product for 1D Tensors.
+- [x] Test and validate all basic operations for accuracy and hardware synthesis efficiency.
+
+## 3. Advanced Operations
+- [x] Implement Dense (Linear) layers.
+- [x] Implement Convolutional layers (1D and 2D) using `seq2col` and `im2col` strategies..
+- [x] Implement Activation functions (ReLU, Sigmoid, Tanh).
+- [x] Implement Pooling layers (MaxPool, AvgPool).
+- [x] **Multi-Channel Convolutions**: Upgrade `Conv1DLayer` and `Conv2DLayer` hardware implementations to support `inChannels > 1` and `outChannels > 1` (requires cross-channel accumulation).
+- [x] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
+- [x] Implement Normalization layers (BatchNorm, LayerNorm).
+- [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
+
+## 4. System Integration & Advanced Improvements (Future Work)
+
+- [ ] **Advanced Tiling (Matrix A)**: Implement a Write-Back module and advanced tiling logic for massive matrices where partial sums cannot fit entirely in the on-chip accumulators. Concretely: split `A` row-blocks so `M × N` partial sums spill to DDR between accumulation passes, add an accumulator write-back/read-modify-write path through the AXI master (today read-only), and track per-tile completion so bias/activation are applied exactly once on the final pass.
+- [ ] **Multi-Tile Continuous Inference (Streaming Execution Model)**: Today `Sequential` runs a **one-shot contract**: every buffer holds exactly one full tensor, each `start` pulse fetches image + all weights from DDR and executes one whole inference. This silently caps models at what fits on-chip. The building blocks are already tile-aware — `StreamDoubleBuffer` ping/pong with its `nextTile` handshake, `MatmulOp` zero-overhead re-entry per matrix (exploited by attention heads), `DMAReader2D` patch fetching — but the execution model above them is not. Concretely missing for large-model / real-time inference (video frames, LLM token streams):
+  - [x] **Weight residency** (Phase-2a, Aug 2026): weights loaded once then kept across `start`s. Landed: CSR run-mode plane (`0x10` bit0 = WEIGHT_RESIDENT, default STREAM_PER_PASS; `0x14` write = one-shot RELOAD), conditional weight/bias fork branches in `Sequential` (fetch on first use / RELOAD / resident-mode rising edge — that edge self-fetches once because the compute pointer usually sits on a flipped-empty bank), and a `residentHold` input on `StreamDoubleBuffer` neutralising `nextTile` so the resident tile stays visible forever. Proven by `WeightResidentChainTest`: both BF16 & W4A8 chains bit-exact, weight-region AXI ARs strictly ZERO in steady residency, reload path non-vacuous; plus formal `StreamDoubleBufferHoldFormal` (hold ⇒ no bank flip, consumed flag never erased). Note: the former "residency almost free" hypothesis is partially false — masking triggers alone deadlocks (the streamer's `nextTile` empties the bank); the freeze primitive is what makes it work. Prefetch (section 5 Weight Manager) remains open.
+  - [x] **Per-layer activation tiling in `Sequential`** (Phase-3, Aug 2026): segment large intermediates into tile sequences flowing layer to layer without ever materializing a full tensor on-chip. Requires per-layer tile framing and halo handling (overlap lines between adjacent tiles) for kernels/pools with reach > 1. [x] LANDED V1 (vertical stripes): compile-time `tileHeight` (Sequential/Accelerator), per-band 2D patch commands issued back-to-back by an internal band sequencer (cmd.fire-synchronous, last-band remainder handled), on-chip buffer sized to ONE band, halo handled by DESIGN: the im2col/reach>1 window state persists across the band seam, which the stream presents as a mere stall — proven op-level (stall-equivalence, `Im2ColContinuityTest`), proven end-to-end (MNIST tileHeight 28/14/10 bit-exact vs replica, BF16+W4A8, `BandTilingTest`). Next: multi-channel/pool DAG coverage (S4, skip-chain validé — voir validation ci-dessous).
+  - [ ] **DAG tap contract for continuous flow**: `TapBuffer` FIFOs are sized to exactly one tile under the guarantee that deferred branches drain entirely within one inference. With tiles streaming back-to-back the producer keeps pushing while the deferred branch is still busy — options to resolve: multi-tile-capacity taps, an admission-control rule (deferred branch must catch up within N tiles, checked at elaboration), or spill-to-DDR taps for skip connections.
+  - [x] **Continuous control semantics** (Phase-3 S1, Aug 2026): run/stop (not just single-shot start), backpressure exposed toward the AXI slave side when the datapath saturates, and per-tile output framing so software can associate each output chunk with its input tile. [x] CSR 0x1C bit0 RUN: auto-advance + hardware image-cursor walk (frame k reads base + k·imageBytes; host pre-writes contiguous images — zero host↔HW race), 0x18 TILE_CNT (RO), status 0x04 busy/done (Sequential frame accounting on the real output-stream fires), STOP = RUN=0 (in-flight frame completes, then silence). Porte : `MnistContinuousTest` (4 frames auto bit-exact + STOP propre, ×2 modèles).
+  - [x] **Inter-start state re-arming**: DONE (Aug 2026, see `docs/bugs/2026-08-rearm-session.md`). Three stacked root causes fixed: region-padding beats polluting exact-size double buffers (`DMAReader trimToElements` on weight/bias readers), lane-gearbox partial-group phase retention (`flushableGearbox` with cmd.fire flush + empty-gated acceptance, weight/bias only — the image path keeps the legacy adapter for now), and the absence of a distributed command boundary (`StreamDoubleBuffer.io.reArm`: image buffer armed by the rising edge of `io.start.valid` — NOT `start.fire`, bounded below by the 2D DMA's late acceptance; weight/bias buffers armed by their own `reqW/reqB.fire`, residency-friendly). MatmulOp/Conv1D/Conv2D/Linear thread the pulse to their internal B buffers. Validated by MnistChainedTest: 10 consecutive inferences per session bit-exact vs the JVM replica, both BF16 and W4A8. Follow-ups documented: ~~formal re-runs with the new ports~~ (DONE — harnesses pass BMC in CI and locally), structured-gearbox × DAG latent investigation (sprint Aug 2026: the flushable gearbox itself is CLEARED — bit-exact under randomized stalls (`RepackStallDiffTest`, 9 sessions) and formally proven identity+mutual-exclusion (BMC, `RepackFormal`/`RepackChainFormalMain`); remaining suspect is a consumer op's pacing sensitivity → network bisection step pending, see `docs/open-mysteries.md` M1), chained random-input tests (DONE — `MNIST_CHAIN_SEED`, 20/20).
+  - [x] **Validation**: extend the end-to-end goldens (section 7) with a two-plus-tile chain including a skip connection, checking tile-boundary continuity bit-exactly. (Phase-3 S4, Aug 2026 — la chaîne bandée MNIST (S3) validait déjà la continuité de frontière sans skip ; le skip est désormais couvert : `WideResidualTilingTest` bit-exact vs réplique à `tileHeight` 16 (4 bandes) ET 64 (pleine), PLAIN et SKIP, `WIDE_SIDE=64 WIDE_TILES="64,16"` ≈ 53 min. Au passage : cause racine du beat +1 du fork fermée dans `docs/open-mysteries.md` M3.5 — push FIFO du TapBuffer non gaté sur le handshake du tee (+ slack capacité), fix 1 ligne permanent. Reste ouvert comme extension : la couverture multi-canaux/pool en DAG.)
+- [x] **Dynamic Padding**: Add hardware or software-side logic to support tensor dimensions that are not perfect multiples of the `lanes` or `tileSize` parameters.
+- [x] **Hardware Adder Tree (Timing Optimization)**: Replace the linear accumulation loop in `MatmulOp` with a logarithmic pipelined Adder Tree to resolve severe combinatorial timing delays and preserve high $F_{max}$.
+- [x] **Matmul Temporal Window (rows-in-flight bound)**: The LUT wall of `MatmulOp` is the full M×N partial-sum register table + its index mux (the Conv is 87% of the W4A8 design: ~31.7 k LC / ~19.3 k FF). `temporal` (0 = legacy byte-identical; ≥1 = `min(temporal,M)×N` circular slots, row drained as soon as it completes, `computeN → flush(3+treeLatency) → emitRow`) cuts the W4A8 synth from ~34.7 k to ~3.9 k LCs — the `fadd` sum order is unchanged, so bit-exactness holds by construction (verified `temporal` 0/1/16 vs replica, both models; default 16 on the `Mnistw4a8` top, 0 on the BF16/socle). Re-implemented over the merged PR in `ops/matmul.scala`; see `docs/bugs/2026-08-lut-matmul-session.md`.
+- [ ] **Floating-Point Pipelining (Retiming)**: Introduce internal pipeline registers inside `FloatML` arithmetic operations (`Add`, `Mul`) to prevent synthesis timing violations.
+- [x] **True Matrix-Matrix Multiplication (GEMM)**: Upgrade the `MatmulOp` from Matrix-Vector (currently restricted by `shapeB(1) == 1`) to full Matrix-Matrix support for batch processing and attention mechanisms.
+
+## 5. Advanced Memory Architecture
+- [x] **AXI4 Memory Mapped Master (DDR4)**: Implement an internal DMA controller capable of random addressing to autonomously fetch data and weights from external DDR4 memory.
+- [x] **Hardware Tiling & Caching**: Implement automated 2D tiling to split large tensors (e.g. images) that cannot fit in FPGA BRAM, swapping them dynamically with DDR4 (Implemented via `DMAReader2D`; rewritten in Aug 2026 to support sub-beat row widths and unaligned row starts — serialized rows, aligned-down fetches with head/tail trim, counters sized from the static shape — and formally proven, see §8).
+- [x] **W4A8 Bring-Up Hardening Debt (Genericity Guards)**: DONE (follow-up session, see git history & `docs/bugs/2026-08-w4a8-session.md`). All five planned items landed: (a) `utils/MemLayout.scala` is now the single source of truth (`regionBytes`, `alignToBeat`) used by `Sequential` and both Mnist benches; (b) `DMAReader2D` guards: `require(shape.length >= 2)`, `require(bitsWidth >= 8)`, `require(elemsPerWord >= 1)`, `require(shape(1) % outLanes == 0)` — the lanes>1 × unaligned-row case is excluded by a documented caller precondition and *formally pinned* (contract proven under alignment); (c) conv auto-widen restricted to genuine widening (`require(weightBits < actBits)`) plus a friendly refusal for float-acts × int-weights; (d) Conv2D scaladoc documents the int-widen vs Linear-dequant asymmetry; (e) `patchWidth` marked IGNORED-by-hardware in its docstring (kept for API compatibility). The session also paid extra debt beyond this list: DMAReader2D counter widths are now derived from the static shape (no more fixed 8/9/12-bit ceilings), `patchHeight/Width` widened to 16 bits (no silent truncation above 255 rows), burst-length guards (>64K beats refused with a multi-tile pointer), and division-by-zero guards for dtypes wider than the AXI beat.
+- [x] **Weight Manager — residency + prefetch (Phases 2a+2b, Aug 2026)**: the run-mode plane landed in two halves. 2a *residency*: weights fetched on first use / RELOAD / resident-mode rising edge, then held (`residentHold` on `StreamDoubleBuffer` neutralises `nextTile`) and re-diffused every pass — proven by `WeightResidentChainTest` (bit-exact BF16+W4A8, steady-state weight-region ARs strictly zero). 2b *prefetch*: with `PREFETCH_EN` (CSR 0x10 bit1) a RELOAD fires EAGERLY against reader-ready × loader-empty, filling the IDLE bank while the held tile is still consumed, and a governed swap (buffer-internal `switchArmed` FSM) moves the consumer onto fresh weights at the NEXT end-of-pass edge — never mid-stream. Proven by `WeightPrefetchChainTest`: SERIALIZED reloads show their full weight-AR pattern inside the START→first-beat window while EAGER reloads show ZERO; weightsBase relocation makes each eager generation a genuine new fetch through fresh addresses. Eager went FULLY bit-exact (Sep 2026) after two remaining roots were closed: the streamer delivery FIFO (16-deep) was never purged in the prefetch world (`reArm` guard carried the flush), and the `BiasAddOp` cache had no command boundary (last logits absorbed the previous generation's bias) — fixes + session notes in `docs/bugs/2026-08-prefetch-eager-stale-fifo-session.md`. Remaining open piece for the LLM-style Folding-L2 use case: continuous execution control (multi-tile entry in section 4).
+- [ ] **V1 Resource-Scaling Scope Decisions (documented limitations, category C of the Aug 2026 audit)**: three deliberate V1 simplifications, each fine for MNIST-scale models but blocking for bigger architectures — revisit together with the multi-tile/streaming work: (1) `Sequential` sizes weight/bias DMA output lanes as `Conv2D -> K²` / `Linear -> inFeatures` / attention -> `embedDim`, so a 7×7 kernel costs 49 parallel lanes and a 4096-input Linear instantiates a 4096-lane matmul — resource usage explodes quadratically-ish with layer size instead of streaming weights through a fixed-width datapath (this is the per-layer facet of the Weight Manager / Level-2 folding work below); (2) the AXI read arbiter is a single-stage `Axi4ReadOnlyArbiter` regardless of port count (the code comments "single stage if <= 16 ports" but nothing cascades beyond) — many-layered DAGs will need a tree/cascade; (3) `Tensor` deliberately does NOT enforce `totalElements % lanes == 0`: streams may emit a partial FINAL beat (exact-size double buffers stop after the last valid element, e.g. Conv2D weights [2][5][5]=50 elems at lanes=4) — any future refactor must preserve that contract (see the NOTE in `tensors/Tensor.scala`).
+
+## 6. High-Level AI Abstraction
+- [x] **Automatic Dimension & Bus Management**: Develop a smart compilation pass that automatically deduces output shapes and dynamically inserts `repack` (Gearbox) or `StreamFork` modules to avoid manual hardware wiring.
+- [x] **Sequential Model Builder**: Create a PyTorch-like `Sequential` API that hides the underlying AXI4-Stream handshakes and automatically manages weight/bias tensor instantiations.
+- [x] **Automatic Tiling & Double Buffering**: Integrate `StreamDoubleBuffer` and 2D tiling dynamically into `Sequential` or `Accelerator` to automatically segment and double-buffer large input images/tensors that exceed BRAM capacity.
+- [x] **SoC Integration Testing (Cocotb)**: Implement full system-level testing of the `HighLevelTemplate` (including AXI-Lite and AXI4 memory) using Python, Cocotb, and `cocotbext-axi`, replacing manual Scala simulation.
+- [x] **Support of hardware utilities in LayerSpec**: Expose utility layers in the high-level `LayerSpec` API (e.g. `Repack`, `Concat`) to give users manual control over bus widths and complex topologies.
+- [x] **Expose Pooling 2D, remaining activations and Cast in LayerSpec**: Wire `MaxPool2D`/`AvgPool2D` (with automatic lanes repacking around the C-lane output), `Sigmoid`, `Tanh` and mid-network `Cast` (SInt -> FloatML) into the `Sequential` builder. Also fixed the SoC double-buffer deadlock (buffers must be sized to the exact tensor element count) and converted the legacy SoC simulations (`SequentialTest`, `SequentialCNNTest`, `Comprehensive1DCNNTest`) into real ScalaTest suites running in CI.
+- [x] **Mixed Precision (Dynamic Quantization)**: Implement specific conversion layers (e.g. `Requantize`) in `LayerSpec` to dynamically alter the hardware datapath precision in the middle of a `Sequential` model.
+- [x] **Weight-Only Quantization (wXaY) for Linear**: Support mixed weight/activation dtypes in `LinearLayer` (industry scheme `wXaY`: SInt weights `I4`/`I8` + compile-time per-tensor/per-channel scale, float activations). Weights are dequantized through a scaled `Cast` before the float matmul; validated bit-exactly against the Python golden model on all six schemes (`w8a16`...`w4a4`). Also fixed exponent-wrap bugs in `Float.mul`/`Float.add` saturation paths (found by exhaustive FP4/FP8 sweeps).
+- [x] **wXaY exposed through the high-level API**: `weightScales` (per-tensor or per-channel) added to the `Linear` and `ClassicalAttention` LayerSpecs, wired through `Sequential` (fixed a latent weightType mismatch that ignored `customWeightType` for attention). Compilation coverage of 4 DMA-compatible schemes × {classical, multi-head} plus per-channel scales via the Sequential builder; first full runtime SoC simulation of a quantized multi-head attention template (`HighLevelAttentionTemplate`). Also hardened `TransposeOp` against degenerate 1-sized dimensions.
+- [x] **True Integer Convolution + Mixed Int/Float Pipeline (W4A8)**: full INT4-weight convolution in the integer domain — true nibble-packed I4 weights fetched straight from DDR (16 per 64-bit beat), on-chip sign-extension to the activation width, I16 accumulator, bias folded into the int domain (`b_q = round(b/s)`), ReLU/MaxPool evaluated pre-scale — then ONE dequantization boundary via the new scaled `Cast(targetType, scales)` LayerSpec into an FP8 E4M3 Linear. Enabled by: `CastOp` SInt->SInt widening, `Sequential` auto-widen for narrow SInt conv weights, sub-byte region layout (`MemLayout.regionBytes`) and the `DMAReader2D` unaligned-row rewrite. Validated black-box under Verilator: `Mnistw4a8Test` classifies 5/5 digits with no golden model (the trained network IS the reference); software replica agrees within E4M3 rounding. See `docs/bugs/2026-08-w4a8-session.md`.
+- [ ] **ONNX One-Liner Importer**: Develop a parser that reads an ONNX model file and automatically generates a fully functional SpinalML hardware accelerator in a single line of Scala code.
+- [x] **Linear Multi-Row Support**: `Linear` now follows the features-last convention (`[..., inFeatures] -> [..., outFeatures]`), natively consuming `[M, K]` tensors and streaming an `[M, N]` result without any reshape. `Flatten` produces a `[1, totalElements]` vector accordingly. This also exposed and fixed a latent `Softmax` lanes bug (`Softmax1D` requires `lanes = channels`; repack added on both sides). Note: the DDR weight layout for `Linear` is `[outFeatures, inFeatures]` (torch-style W^T), one row per AXI beat.
+- [x] **DAG Topology Support (Beyond Linear Chains)**: A DAG (Directed Acyclic Graph) is a computation graph where each layer output can feed *several* consumers and each layer input can come from *several* producers — enabling skip connections (ResNet), multi-branch backbones and parallel paths, while remaining cycle-free. Implemented in `Sequential` through explicit merge nodes: `Add(a, b)` and `Concat(a, b, axis = 0)` reference earlier graph nodes by index (node 0 = input, node k = output of the k-th spec entry). The builder forks multi-consumer nodes automatically and stores deferred branches in exact-capacity FIFOs (`memory/TapBuffer.scala`); forward references, dtype mismatches and shape mismatches are rejected at elaboration with clear messages.
+- [ ] **Generalized Explicit References (`from`) for All Layers**: Extend the DAG node-referencing mechanism beyond `Add`/`Concat` through an optional `from: Option[Int]` field on the `LayerSpec` trait (`None` = previous node, i.e. today's implicit behavior; `Some(k)` = consume node k). Today a second branch cannot "rewind" to an earlier node — two independent parallel paths starting from a shared origin (Inception-style towers, dual encoders) are not expressible because standard layers always implicitly chain. With `from`, any layer can tap any earlier node. The heavy infrastructure already exists in the builder (consumer map, automatic fan-out taps via `TapBuffer`, acyclicity/dtype/shape validation), so only the trait field, the `consumedNodes` resolution and tests are needed. The same pattern will host future merge ops: `Slice(a, i, j)` to split one producer into partial consumers, `Mul`, `Max`, weighted sums...
+- [ ] **Layer Folding Level 1 — Single Physical Copy, Shared Weights**: When consecutive `LayerSpec`s repeat identically (same kinds/shapes, e.g. stacked dense or conv blocks), today they cost N physical copies (N× LUT/FF). Instead, instantiate **one** copy plus an iteration controller that loops activations back to its input M times through a wrap mux and a counter, exiting to the next layer once `count` reaches M — temporal reuse instead of spatial replication (the group-level counterpart of the per-op resource knobs like line-buffer depth). Weights are fetched once and shared by every pass (parameter-sharing scheme, as in ALBERT). This is a *controlled cycle*: an explicit `Fold` construct (e.g. `Fold(startIdx, count)`) that carves the repeated segment out of the otherwise acyclic graph, validated at elaboration (shape consistency across passes, no side effects). Feasibility is high now: the node-based builder already supports pattern detection over `modelSpec`, and the existing DMA path fetches the single copy's weights unchanged. Biggest LUT win for small FPGAs running deep uniform stacks.
+- [ ] **Layer Folding Level 2 — Weight-Swapped Passes (LLM-style)**: Same single physical layer, but weights are **re-fetched from DDR before every pass** instead of being resident: one transformer block in hardware, N layers of weights streamed through it sequentially. This is exactly how small-FPGA LLM accelerators fit large models. Prerequisites: the *Weight Manager* pre-fetching (section 5) to overlap weight transfer of pass k+1 with compute of pass k, and ideally the continuous execution control semantics (multi-tile entry above) since a folded stack is itself a sequence of weight tiles. The Level 1 controller (wrap mux + counter) carries over unchanged; only the weight source becomes per-iteration.
+- [ ] **Multi-Tile Continuous Inference (Streaming Execution Model)**: see the canonical entry in section 4 (System Integration) — it covers weight residency, per-layer activation tiling + halo handling, the DAG tap contract under continuous flow, run/stop control semantics, inter-start state re-arming (DONE, Aug 2026 — first milestone shipped) and the two-plus-tile validation chain.
+
+## 7. Simulation & CI Infrastructure
+
+- [x] **Hybrid Co-simulation (Python/Cocotb)**: Implement a robust dual-simulator testing architecture using Cocotb. Use Icarus Verilog for control-heavy flow tests (DMA, streams) for maximum stability, and Verilator 5 for mathematically intensive layers (Conv, Linear) for maximum speed.
+- [x] **Continuous Integration (CI)**: Setup GitHub Actions to run the full Python and Scala test suite autonomously on Linux runners, ensuring non-regression of the SpinalHDL and Verilog generated code.
+- [x] **Dynamic Test Data (No Hardcoded Examples)**: the Mnist benches accept environment-driven inputs instead of only the five curated digits: `MNIST_INDICES="3,7"` selects curated images, `MNIST_RANDOM_N=10` (+ optional `MNIST_SEED`) generates arbitrary inputs checked against a **JVM replica** of the quantized forward pass — a software port of `utils/Float.scala` bit-exact semantics (`HWFloat` in `test/src/spinalML/examples/`), validated against the curated digits first. Every random vector becomes a real test case; the trained network stops being the only oracle. Next levels: L1 = live host-driven input streaming inside one simulation session (unlocked by inter-start re-arming); L2 = UART→AXI-Lite bridge module so a PC can stre- [x] **Universal Bit-Exact CLI Test Engine (`spinalml test <model.scala>`)**:
+  - [x] **Universal Verilator Simulation Harness & Scaffolding**: Dynamic generation of SoC simulation test with beat-aligned weight and image packing, CSR execution, and bit-exact assertion (`UniversalTestHarness`, `MemoryHarness`).
+  - [x] **Quantized & Mixed-Precision Hardware Support (W4A8)**: DDR weight packing according to bit-width (`I4` nibbles 2/byte, `I8`/`FP8_E4M3` 1 byte, `I16`/`BF16` 2 bytes), image byte packing for integer inputs (`MemoryHarness.packBytes`), dynamic FloatML decoding in test harness, software oracle `ReplicaTensor` (`IntTensor` / `FloatTensor`) with integer `Conv2D`, `ReLU`, `MaxPool2D`, dequantizing `Cast`, and `FP8` Linear with lane folding (`wLanes = 4`). Validated bit-exact on `Mnistw4a8.scala` and `ResidualMLPTemplate.scala` (deviation = 0.000).
+  - [x] **Full Universal Suite Validation (Sep 2026)**: All 8 canonical test suites (`Universal1D`, `UniversalActivations`, `UniversalAttention`, `UniversalMixed2D`, `UniversalOps`, `UniversalPoolNorm`, `UniversalResidual`, `UniversalTransformer`) verified under Verilator bit-exactly against `ModelReplica` (`deviation = 0.000`).
+  - [ ] **Remaining Gaps in Universal Test Engine & Software Oracle Coverage**:
+    - [ ] **Pure Integer Linear / Dense Layer**: Support `Linear` in pure integer domain (`IntTensor` input + integer weights/bias -> integer accumulator) in `ModelReplica` without requiring an intermediate `Cast` to float.
+    - [ ] **Extended Layer Coverage in `ModelReplica`**:
+      - `AvgPool2D` and `AvgPool1D` (hardware implemented, wire into `ModelReplica` match loop).
+      - `Sigmoid` and `Tanh` (wire mathematical approximations / LUTs into replica).
+      - `Softmax` (reconcile hardware exponent LUT + sum normalization vs software logit pass-through).
+      - Multi-channel integer `Conv2D` (`inChannels > 1`): align spatial/channel loop order with `im2col` features-last layout `(r, k, ch)`.
+      - Attention mechanisms (`ClassicalAttention`, `MultiHeadAttention` in replica).
+    - [ ] **DDR Input Packing for 16-bit / 32-bit Integer Tensors**: Extend `MemoryHarness` / `cli.py` to support `I16` and `I32` input tensors (currently `packBytes` formats 8-bit bytes; add 16-bit and 32-bit word packers).
+    - [x] **External Source File Compilation in CLI Test**: Automatically mirror or copy models located outside `spinalML/src/` (e.g. project root or `tests/universal/`) into the Mill build path during `spinalml test`.
+- [x] **Sequential Python Test Runner (`test-all-python`)**: File-by-file pytest/cocotb runner (`python_runner.py`) with CI pacing (`--ci <seconds>`), Rich UI, and isolated failure logs in `out/python_reports/` preventing memory exhaustion on self-hosted workers.
+- [x] **Mill Tooling Daemon Resilience (`--no-server`)**: Enforced `--no-server` across all CLI-driven Mill test and run invocations, eliminating WSL RPC daemon worker crashes and broken-socket hangs.
+- [ ] **Extended Python/Cocotb Coverage — lanes & temporal sweeps**: the Python suite already validates the per-op math goldens (dtypes/ops LUTs/PWL), the quantized-layer goldens (wXaY/w4a4…w8a16) and a single `HighLevelTemplate` harness (cocotbext-axi). The untested surface is the M2×M3 parameter space: `Linear.weightLanes` (288/96/32/4 K-chunk fold) and `Sequential/Accelerator.temporal` (0/1/16 rows-in-flight) — today only exercised by the Scala suites through the JVM replica. Extend the Cocotb/Verilator harness so the same SoC path (Mill -> Verilog -> cocotb) is run under each (lanes × temporal) combination, reusing the Python goldens sum-fold (`wLanes` chunked accumulation) as ground truth + a Scala-side bit-exactness cross-check.
+- [ ] **End-to-End Golden Models**: Per-block math is already validated bit-exactly by the Python golden models; this item extends the validation to *whole chains* through `Sequential` + DMA + memory layout, value by value. Three distinct chain goldens:
+  - [ ] **1D Chain Golden**: e.g. `Conv1D -> ReLU -> MaxPool1D -> Flatten -> Linear` — NumPy reference of the full datapath including weight memory layout and stream framing.
+  - [ ] **2D Chain Golden**: e.g. `Conv2D -> ReLU -> MaxPool2D -> AvgPool2D -> Flatten -> Linear` — adds the 2D im2col/pooling framing and multi-channel lanes repacking to the reference.
+  - [ ] **Attention Chain Golden**: quantized MHA block (`ClassicalAttention` wXaY -> `Linear`) end to end, covering the stacked `Wq|Wk|Wv|Wo` weight layout, head slicing/forking and float softmax through DMA.
+- [ ] **Generic LayerSpec Compliance Test**: One automatic ScalaTest that enumerates every `LayerSpec` with toy shapes, instantiates it through `Sequential` and checks elaboration plus `getOutShape`/`getWeightShape` consistency against the hardware IO. Guarantees no new layer can be added without being immediately compile- and sim-covered.
+
+## 8. Formal Verification (Yosys + SymbiYosys)
+
+Exhaustive verification of hardware blocks via SpinalHDL Formal (`assert`/`assume`/`cover` properties proven for all input combinations by SAT/SMT solvers). Complements the sampled-vector coverage of the Python/Cocotb co-simulation.
+
+- [x] **Environment**: Install `yosys` + `symbiyosys` (local WSL + CI runner) and validate the SpinalHDL 1.14.2 formal API.
+- [x] **Onboarding Spike**: Write `AddFormal.scala` — prove bit-exact equivalence of `AddOp` (I8, streamed `m2sPipe`) against the golden model for all inputs (k-induction proof passed, ~0s runtime), and validated that a deliberately broken assertion is caught with a VCD counterexample. Pattern documented in `docs/symbolicTest.md`.
+- [x] **DType Units**: Prove the arithmetic/quantization units **once per concrete dtype** (`utils.Float.*` add/sub/mul, `requantize` rounding/saturation, `cast` wrap-vs-clip) as certified lemmas — a proven unit isolates bugs in the glue of every dependent op proof afterwards. **Scope caveat**: the current float lemmas use the same Scala function as oracle (netlist-fidelity proof, tautological at the algorithm level); mathematical correctness of `Float.mul/add` is guarded by exhaustive simulation sweeps instead (`FloatSweepTest`, ~72k pairs incl. saturation region) after an exponent-wrap bug escaped both formal and co-sim in Aug 2026.
+- [ ] **Combinational Ops**: Roll out formal proofs to all primitive ops (`ops/`), dtype by dtype (8/16-bit first), reusing the translated golden models from `tests/python/golden_models/`. *(Largely done Aug 2026: ~50 BMC specs across ops/layers/memory/dtypes/poolings/utils run in CI and pass — what remains is the last set: attention/passthrough combos and dtype×op sweep completeness.)*
+- [x] **Memory & Flow Invariants — DMA readers**: `DMAReader` (burst splitting, chained-burst contiguity, per-command beat-counting integrity) and the rewritten `DMAReader2D` are formally proven with CVC4 (`symbolicTest/memory/*Formal.scala`, BMC + cover passes). The 2D spec proves three contracts separately: lanes=1 with free stride (full trim exercise: aligned-down addressing, beat budgets, keep-window geometry, consecutive kept indices starting at rowSkip, exact H·W/lanes delivery per command), and lanes>1 under the documented group-alignment precondition; covers prove command completion, unaligned rows and active trimming are reachable (non-vacuity confirmed by mutation testing). Content equivalence vs memory stays simulation-covered (Mnist benches). Spec-side lessons recorded in `docs/symbolicTestPlaybook.md` §8 (bit-slicing trap, comparison-width truncation, register-only pulls, 16-bit address diet).
+- [x] **Memory & Flow Invariants — UART & Interconnect (`symbolicTest.io`)**:
+  - `UartBridgeFormal`: AXI-Lite master stability, L2 protocol parsing, stream backpressure data conservation, BRAM sequential addressing, and FSM liveness with CVC4 (BMC depth 12). Discovered and resolved a critical RTL bug where `outStream.ready` was asserted without `tx.ready`, dropping logits under backpressure.
+  - `AxiReadMemFormal`: AXI4 read burst invariants (`ARLEN + 1` beat count, `RLAST` timing), master stall stability (`rvalid`, `rid`, `rlast`, `rresp`, `rdata` constant under `rready = False`), and address mapping bounds with CVC4 (BMC depth 8).
+- [ ] **Memory & Flow Invariants — remaining**: Prove stream invariants on `StreamDoubleBuffer`/`DoubleBufferStreamer` under any backpressure pattern (liveness/deadlock), extend formal coverage to ops beyond the certified units, and revisit the float-unit oracles (see below).
+- [x] **CI Integration & Verification Map**: Add a formal-verification workflow to CI and track module-by-module status (formally proven / simulated / uncovered) in the verification map.
+- [ ] **Independent Formal Oracles for Float Units**: Rewrite the `Float.mul/add` formal oracles with explicitly widened arithmetic (or targeted saturation/no-spurious-zero properties) so the proofs certify the algorithm itself, not just netlist fidelity. Complements the exhaustive `FloatSweepTest` simulation sweeps currently guarding these units.
+
+## 9. Hardware Deployment & UART SoC Architecture
+- [x] **UART Physical Layer (`UartRx`, `UartTx`)**: Pure Scala/SpinalHDL implementation with fully parametric clock frequency and baud rate.
+- [x] **L2 Protocol Bridge (`UartBridge`)**: Byte-level FSM supporting CSR write ('C'), BRAM streaming write ('W'), stream read ('R'), status reporting ('S'), and protocol versioning ('V'). Dynamically adapts to arbitrary AXI word widths (`wordWidth = 16, 32, 64 bits`).
+- [x] **Complete SoC Integration (`UartSoC`)**: Monolithic FPGA top combining neural accelerator, `AxiReadMem` BRAM controller, `UartBridge`, and UART PHYs with fully generic constructor parameters.
+- [x] **Modular FPGA Board Profile System (`boards/`)**:
+  - Decoupled physical hardware configuration (`clk_freq`, `baud_rate`, `bram_words`, `fpga`) into clean external JSON profiles (`boards/tang-primer-20k.json`).
+  - Extensible board loader (`cli/spinalml_cli/board.py`) with automatic frequency parsing (`27MHz`, `50MHz`) and model introspection.
+- [x] **Parameterized Compilation Pipeline (`spinalml compile`)**:
+  - Key command flags supported: `--board`, `--soc`, `--clk`, `--baud`, `--out-count`, `--word-width`, `--bram-words`.
+  - Automatic `AutoRunner` generation: eliminates hardcoded values, aligns clock dividers across all modules, and outputs directly to `-o / --out` without polluting the workspace.
+  - Parametric `UartChainGen.scala` accepting CLI arguments for standalone UART chain generation.
+- [x] **Decoupling of Universal Test Models (`tests/universal/*.scala`)**:
+  - Stripped all hardcoded 27 MHz / 115200 baud `UartSoC` blocks from `tests/universal/`, restoring clean, purely mathematical `Accelerator` specifications.
+  - Output count (`outCount`) and bus width (`dataWidth`) are inferred implicitly from model architecture.
+- [x] **Host Python Driver (`uart_host.py`)**: End-to-end Python library with automatic BRAM chunking, timeout management, status polling, and unit test suite (`test_uart_host.py`).
+- [x] **Turnkey Hardware Synthesis & Bitstream Pipeline (`spinalml build`)**:
+  - Direct `.scala` compilation into turnkey `UartSoC` Verilog netlist (`AxiReadMem`, `UartBridge`, `UartRx`, `UartTx`).
+  - Dynamic live monitoring of Yosys synthesis passes and nextpnr-himbaechel placement, routing, and timing analysis.
+  - Automatic physical pin constraints adapter (`boards/constraints/*.cst`) resolving board pinout to top module port conventions.
+  - Exact post-PnR hardware resource extraction (LUT4, FF, BRAM, DSP) and static timing analysis ($F_{\max}$, clock slack) in a Rich dashboard.
+  - Resilient auto-patcher (`ensure_apycula_patched()`) fixing upstream Apycula `KeyError: 'IRBY_IREG0BL_0'` on Gowin DSP blocks (`docs/bugs/2026-09-gowin-pack-dsp-keyerror.md`).
+- [x] **FPGA Hardware Flashing & Target Deployment (`spinalml flash`)**:
+  - Rapid volatile SRAM programming (~1.5s via `openFPGALoader -m`) and permanent SPI Flash programming (`-f`).
+  - Automatic bitstream discovery in `hw_build/<board>/top.fs`.
+- [x] **Physical In-Circuit Bit-Exact Hardware Verification (Tang Primer 20K, Gowin GW2A-18)**:
+  - **100% Bit-Exact Match on Physical Silicon**: `Universal1DDemo` deployed on Tang Primer 20K over UART (`COM8` @ 115200 baud) matched the software golden oracle bit-for-bit (`[127, 127]` / `0x7F7F`).
+  - **DSP Bypass Switch (`--no-dsp`)**: Added `--no-dsp` synthesis flag to route multipliers through standard LUT4/carry logic, completely circumventing Gowin silicon/Apycula combinational DSP register bypass and signedness defects, achieving **101.33 MHz Fmax** (+74.33 MHz timing slack over 27 MHz target) with 44.9% LUT4 utilization.
+  - **Power-On Reset (POR)**: Self-contained internal boot counter running on `BOOT` clock domain cleanly initializes FPGA registers without requiring external physical buttons or unconstrained pins.
+- [ ] **Hardcoded Architecture Decoupling & Custom Chip Scaling (Future Work)**:
+  - [ ] **Universal Pipelined Multipliers & Hard DSP Block Integration**:
+    - Add an optional pipelined stage for layer multipliers (`pipelined = true`, or automatic insertion) coupled with SpinalHDL `Stream` latency tracking (`m2sPipe`).
+    - Enables FPGA synthesis tools (Yosys `synth_gowin`, `synth_xilinx`, `synth_ecp5`, etc.) to absorb internal pipeline registers (`AREG`, `BREG`, `PREG`) into dedicated silicon hard DSP blocks (Gowin `MULT18X18`, Xilinx `DSP48E1`, Intel DSP), recovering 3,000–4,000 LUTs on complex CNNs while avoiding combinational bypass/signedness errata, while preserving zero-latency combinational behavior when desired for soft simulation.
+  - [ ] **Multi-Lane & Multi-Byte Output Stream Serialization (`spinalML/src/spinalML/io/UartSoC.scala:L82-86`)**: Replace single-lane 8-bit truncation (`acc.io.outStream.stream.payload(0).resize(8)`) with a dynamic serialization gearbox supporting multiple parallel lanes (`outLanes > 1`) and multi-byte dtypes (`INT16`, `INT32`, `FP16`, `FP32`).
+  - [ ] **Configurable Memory Partitioning & External RAM Arbitration (`spinalML/src/spinalML/io/AxiReadMem.scala:L50-56`)**: Generalize the fixed dual-region BRAM formula (`imgBase = 0x10000`, `weightBase = 0x20000`) into a configurable multi-region controller or external memory interface (HyperRAM / PSRAM / DDR / ASIC SRAM).
+  - [ ] **Auto-Generated CSR Address Map for Host Drivers**: Automatically export CSR register offsets (`0x00`, `0x08`, `0x0C`) from Scala elaboration into a Python/C header to eliminate manual register map synchronization.
+  - [ ] **Full-Duplex Real-Time Streaming Mode**: Add hardware interrupt signaling or asynchronous streaming DMA to allow continuous inference without host polling.
+
+## 10. Dual-Target (FPGA & ASIC) Roadmap: Sequenced Refactoring Plan
+
+> [!IMPORTANT]
+> **Golden Rule: Don't fight the wrong battle — One single unified codebase, four ordered stages.**  
+> The goal is neither to maintain two diverging codebases nor to pit FPGA against ASIC. The FPGA is the mandatory bit-exact in-circuit hardware emulator before any silicon tapeout.  
+> For the SpinalHDL codebase to serve both targets simultaneously, the architecture relies on the **"3-Layer Sandwich"**:
+> 1. **Layer 1: Algorithmic SpinalML Core** (100% portable, `Stream[Tensor]` dataflow, control FSMs, arithmetic pipelines).
+> 2. **Layer 2: Abstract Memory Adapter** (`MemoryAdapter`: the only swappable boundary between FPGA Gowin/Xilinx BRAM and ASIC OpenRAM SRAM macros).
+> 3. **Layer 3: Physical Implementation** (pinout constraints `.cst`/`.xdc` vs padring/CTS/OpenROAD).
+>
+> **Uncompromising Reality Check**: The current codebase sits at **~20%** of this effective decoupling (several hardware primitives remain tightly coupled or hardcoded). Introducing these abstractions now costs **virtually zero effort**; postponing them until after adding 15 new vision layers would produce **over 200 tangled refactoring sites** to unwind. Purging this architectural debt from the existing foundation is therefore the absolute top priority before any further feature expansion.
+
+---
+
+### Phase 1 (Absolute Priority, Months 0 → 3): Hardening Foundation Portability
+
+Mandatory structural refactoring of existing modules before adding any new vision operators:
+
+- [ ] **Refactoring 1.1: Migrate `im2col.scala` Line Buffers to `Mem.readSync` (Eliminating Flip-Flop Bloat)**
+  - **Impacted file**: [`spinalML/src/spinalML/layers/im2col.scala:L55-59`](file:///e:/spinalML/spinalML/src/spinalML/layers/im2col.scala#L55-L59)
+  - **Problem**: Line buffers are currently instantiated via `Vec(Reg(dataType), W * C)`. For even a modest vision layer ($160\times160\times32$), this synthesizes 81,920 flip-flops (FFs), instantly blowing past the 15,552 FF limit of the Gowin GW2A-18 and preventing any mapping to ASIC SRAM macros.
+  - **Action**: Replace with SpinalHDL synchronous memory instances `Mem(dataType, depth = lineBufferDepth)` using `readSync`. Adjust the downstream stream validation pipeline to account for the single-cycle synchronous read latency.
+  - **Success Criteria**: BRAM inference confirmed in Yosys synthesis logs (`bram_words` utilized, dramatic FF reduction) with bit-exact Verilator simulation maintained.
+
+- [ ] **Refactoring 1.2: Multiplier Abstraction (`Target` Trait & DSP Decoupling)**
+  - **Impacted files**: [`spinalML/src/spinalML/layers/Conv2D.scala`](file:///e:/spinalML/spinalML/src/spinalML/layers/Conv2D.scala), [`spinalML/src/spinalML/ops/matmul.scala`](file:///e:/spinalML/spinalML/src/spinalML/ops/matmul.scala), [`spinalML/src/spinalML/utils/DspConfig.scala`](file:///e:/spinalML/spinalML/src/spinalML/utils/DspConfig.scala)
+  - **Problem**: `Conv2DLayer` directly instantiates `DspMul`, hard-coupling compute logic to FPGA DSP primitives without a clean target boundary.
+  - **Action**: Define a polymorphic `Target` trait injected into model elaboration configuration:
+    - `Target.FPGA(family: FpgaFamily, useHardDsp: Boolean)`: maps to `DspMul` (hard silicon `MULT18X18` on Gowin, `DSP48` on Xilinx, or carry-chain LUT logic when `--no-dsp` is asserted).
+    - `Target.ASIC(pdk: PdkFamily)`: emits pure behavioral multiplication `a * b` with retiming pipeline stages, synthesized into standard cell logic via OpenROAD without proprietary IP.
+  - **Success Criteria**: The exact same model description compiles without modification for FPGA (leveraging DSPs) and for generic ASIC cell libraries in Verilator simulation.
+
+- [ ] **Refactoring 1.3: Extract Abstract Memory Adapter (`MemoryAdapter`)**
+  - **Impacted files**: [`spinalML/src/spinalML/io/AxiReadMem.scala`](file:///e:/spinalML/spinalML/src/spinalML/io/AxiReadMem.scala), [`spinalML/src/spinalML/io/UartSoC.scala`](file:///e:/spinalML/spinalML/src/spinalML/io/UartSoC.scala), [`spinalML/src/spinalML/Accelerator.scala`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala)
+  - **Problem**: `AxiReadMem` and its hardcoded address offsets (`imgBase = 0x10000`, `weightBase = 0x20000`) are baked directly into `UartSoC`, locking the accelerator to a simulated 32 KB on-chip BRAM.
+  - **Action**: Decouple the accelerator behind a generic `MemoryAdapter` interface exposing read/write command/response streams:
+    - `BramAdapter`: for unit tests and small models on FPGA internal BRAM.
+    - `DdrAdapter`: interfacing the physical DDR3 controller on Tang Primer 20K.
+    - `SramAsicAdapter`: interfacing with OpenRAM-generated SRAM memory macro banks.
+  - **Success Criteria**: Ability to swap the backing memory implementation without modifying a single line of code in `Accelerator` or `Sequential`.
+
+- [ ] **Refactoring 1.4: Universal Parametric `lanes` Propagation**
+  - **Impacted files**: Internal pipeline modules in [`spinalML/src/spinalML/layers/`](file:///e:/spinalML/spinalML/src/spinalML/layers/), UART serialization in [`spinalML/src/spinalML/io/UartSoC.scala:L82-86`](file:///e:/spinalML/spinalML/src/spinalML/io/UartSoC.scala#L82-L86)
+  - **Problem**: While `Linear.weightLanes` and `Conv2D.outLanes` are configurable, intermediate data adapters and interfaces (specifically UART output serialization) still hardcode `lanes = 1` or truncate to 8 bits.
+  - **Action**: Propagate SIMD parallelism (`lanes: Int`) across the entire datapath, automatically inserting `Repack` (gearbox) modules wherever bus widths differ between consecutive stages.
+  - **Success Criteria**: Bit-exact execution verified for `lanes = 1, 2, 4, 8` across all universal test suites.
+
+- [ ] **Refactoring 1.5: Enable AXI Master Write Channels (`DMAWriter`)**
+  - **Impacted file**: [`spinalML/src/spinalML/Accelerator.scala:L60-65`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala#L60-L65)
+  - **Problem**: The current accelerator hardwires its write channels inactive (`aw.valid := False`, `w.valid := False`). It operates exclusively as a read-only master, making it impossible to spill intermediate activation maps to external RAM.
+  - **Action**: Develop the counterpart `DMAWriter` module, aggregating outgoing tensor streams into standard AXI4 bursts (up to 256 beats) directed to external RAM.
+  - **Success Criteria**: Cocotb / Verilator co-simulation test validating bit-exact, full-tensor write-back to external memory.
+
+---
+
+### Phase 2 (Months 3 → 9): Modern Vision Primitives (Dual-Target)
+
+Once foundation portability is secured, implement the essential operators required by convolutional vision networks (CNNs / YOLO):
+
+- [ ] **Primitive 2.1: Virtual Hardware Padding (`same` / $P \ge 1$) with Zero Memory Overhead**
+  - **Target file**: `spinalML/src/spinalML/layers/im2col.scala`
+  - **Design**: Coordinate $(x, y)$ counter FSM injecting virtual zeros whenever indices fall outside the active receptive field, without allocating any BRAM or register storage for zero boundaries.
+  - **Validation**: Convolution with padding preserving spatial dimensions ($H_{out} = H_{in}, W_{out} = W_{in}$).
+
+- [ ] **Primitive 2.2: Hardware Striding ($S = 2$) via Temporal Decimation**
+  - **Target file**: `spinalML/src/spinalML/layers/im2col.scala`
+  - **Design**: Coordinate filtering logic advancing the GEMM stream only for windows matching $(x \pmod S == 0)$ and $(y \pmod S == 0)$, halving spatial dimensions without pipeline stalls.
+  - **Validation**: Non-regression on stride 1 and bit-exact validation on stride 2.
+
+- [ ] **Primitive 2.3: Non-Linear SiLU (Swish) Activation**
+  - **Target files**: `spinalML/src/spinalML/ops/Activations.scala`, new `spinalML/src/spinalML/layers/SiLU.scala`
+  - **Design**: Portable implementation via piecewise-linear approximation (8-segment PWL) or compact int8 synchronous ROM table ($x \cdot \sigma(x)$), inferring BRAM on FPGA or standard combinational cells on ASIC.
+  - **Validation**: Maximum approximation error $< 1\%$ compared to PyTorch floating-point golden oracle.
+
+- [ ] **Primitive 2.4: Channel Concatenation (`Concat` axis 2) & Slicing (`SplitChannel`)**
+  - **Target files**: `spinalML/src/spinalML/layers/Concat.scala`, `Sequential.scala`
+  - **Design**: Concatenation along the channel dimension supporting multi-scale YOLO detection heads and residual connections in C2f/Bottleneck blocks.
+  - **Validation**: End-to-end simulation and synthesis of a representative CSP/C2f macro-block.
+
+- [ ] **Primitive 2.5: Hardware $2\times$ Nearest-Neighbor Upsampling (`UpsampleNearest2D`)**
+  - **Target file**: New `spinalML/src/spinalML/layers/UpsampleNearest2D.scala`
+  - **Design**: Spatial replication repeating samples along the active line, coupled with a synchronous line buffer for vertical line duplication.
+  - **Validation**: Continuous streaming unit test verifying resolution doubling ($10\times10 \to 20\times20$).
+
+- [ ] **Primitive 2.6: Synchronous Dual-Bank Activation Ping-Pong Scratchpad**
+  - **Target file**: New `spinalML/src/spinalML/memory/ActivationScratchpad.scala`
+  - **Design**: Synchronous ping-pong memory architecture (Bank A / Bank B) using `readSync`, allowing layer $k$ to write its outputs while layer $k-1$ reads its activations, without arbitration conflicts.
+  - **Validation**: Formal verification proving mutual exclusion, zero collision, and lossless data flow under backpressure.
+
+---
+
+### Phase 3 (Months 9 → 18): Model-Tailored Folded Core & Temporal Sequencer
+
+Architectural shift from a spatially unrolled pipeline to a dedicated, model-tailored neural coprocessor:
+
+- [ ] **Refactor 3.1: Refactor `Sequential.scala` into a Temporal Execution Engine**
+  - **Design**: Replace the spatial daisy-chain loop (`for (i <- layers.indices)`) with the elaboration of a **single composite compute core**, sized by Scala static introspection to fit the largest layer of the target model.
+  - **Benefit**: Hardware silicon area remains constant and minimal, regardless of network depth (60 layers in YOLOv8n).
+
+- [ ] **Refactor 3.2: Layer FSM & Descriptor ROM Table**
+  - **Design**: Synchronous FSM sequentially updating hyperparameters $(H, W, C_{in}, C_{out}, K, S, P)$ and weight base pointers across passes, eliminating costly generic instruction decoders.
+  - **Validation**: Autonomous sequential execution of 5 heterogeneous layers through the same physical compute core in Verilator.
+
+- [ ] **Refactor 3.3: In-Circuit Hardware Deployment & Benchmarking on Tang Primer 20K**
+  - **Design**: Full integration with the on-board DDR3 memory controller for activation staging (or Z-Flow band streaming).
+  - **Physical Validation**: Complete vision subgraph inference executed on physical Tang Primer 20K silicon. Measure effective throughput and correlate with the theoretical physical ceiling (48 DSPs @ 100 MHz $\implies \sim 2.5$ FPS on YOLOv8n).
+
+---
+
+### Phase 4 (Months 18 → 30): Silicon Industrialization & ASIC Tapeout
+
+Transition from FPGA hardware emulation to dedicated physical integrated circuit:
+
+- [ ] **Flow 4.1: Open-Source RTL-to-GDSII Flow Setup (OpenLane 2 / OpenROAD)**
+  - Automated toolchain integration: Yosys logic synthesis, automated floorplanning, placement, clock tree synthesis (CTS), detailed routing, and physical verification (DRC/LVS).
+
+- [ ] **Flow 4.2: Open Silicon PDK Targeting (SkyWater SKY130 or GlobalFoundries GF180MCU)**
+  - Design rule adaptation and multi-corner static timing analysis (STA) across PVT corners (Process, Voltage, Temperature).
+
+- [ ] **Flow 4.3: OpenRAM Memory Macro Generation**
+  - Automated integration of compiled OpenRAM synchronous SRAM macros directly replacing the `SramAsicAdapter` (Layer 2 of the sandwich).
+
+- [ ] **Flow 4.4: Shuttle Tapeout Submission (MPW / Tiny Tapeout)**
+  - Padring integration (I/O cells, power grid, reset, clock pads) and submission to multi-project wafer shuttles (Tiny Tapeout for compact educational silicon, or Efabless/ChipFoundry MPW).
+  - Packaged silicon testbench PCB design and bit-exact empirical validation on physical chips.
+
+
+
+
