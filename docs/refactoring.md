@@ -146,18 +146,21 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
 
 ---
 
-### Refactoring 1.5 : Canaux d'Écriture AXI Master (`DMAWriter`)
+### Refactoring 1.5 : Canaux d'Écriture AXI Master (`DMAWriter`) [COMPLÉTÉ]
 
-* **Fichiers impactés** : [`spinalML/src/spinalML/nn/Accelerator.scala`](file:///e:/spinalML/spinalML/src/spinalML/nn/Accelerator.scala), nouveau `spinalML/src/spinalML/memory/DMAWriter.scala`.
+* **Fichiers impactés** : [`spinalML/src/spinalML/nn/Accelerator.scala`](file:///e:/spinalML/spinalML/src/spinalML/nn/Accelerator.scala), [`spinalML/src/spinalML/memory/DMAWriter.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/DMAWriter.scala).
 * **Constat dans le code** :
-  * Dans `Accelerator.scala` (L68-72), les canaux d'écriture AXI sont neutralisés (`aw.valid := False`, `w.valid := False`).
-  * L'accélérateur ne sait que lire depuis la mémoire externe et cracher les résultats sur un flux sortant.
+  * Dans `Accelerator.scala` (L68-72), les canaux d'écriture AXI étaient neutralisés (`aw.valid := False`, `w.valid := False`).
+  * L'accélérateur ne savait que lire depuis la mémoire externe et cracher les résultats sur un flux sortant.
   * Pour un système ASIC ou SoC autonome, écrire les activations intermédiaires (spilling) ou stocker la carte de sortie en mémoire vive est indispensable.
-* **Solution à adopter** :
-  * Développer le pendant de `DMAReader` : `DMAWriter[T]`, capable de regrouper les streams `Tensor` en bursts AXI4 `INCR` (jusqu'à 256 beats) avec gestion du découpage aux frontières de 4 Ko.
-  * Connecter les canaux `aw`, `w` et `b` dans `Accelerator.scala`.
-* **Critère de succès** :
-  * Banc de test de co-simulation Verilator écrivant un tenseur complet en mémoire et relisant les données pour vérification d'intégrité bit-exacte.
+* **Solution adoptée & livrée** :
+  * Moteur d'écriture `DMAWriter[T]` complet avec support des bursts INCR jusqu'à 256 beats, clipping aux frontières 4 Ko, et adapteur de voies avec décharge de queue (`isLastInBeat`) pour les tenseurs incomplets sur la largeur du bus.
+  * Registres CSR ajoutés dans `Accelerator.scala` : `0x20` `OUT_ADDR`, `0x24` `OUT_CTRL` (bit 0 = `writeToDdr`), `0x28` `DMA_WR_STATUS` (`busy`, `done`).
+  * Gating sécurisé des canaux AW/W/B lorsque `writeToDdr === False` pour garantir la compatibilité ascendante et l'invariant formel.
+* **Critères de succès validés** :
+  * Preuve formelle SymbiYosys / BMC validée ([`DMAWriterFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/memory/DMAWriterFormal.scala) & [`AcceleratorFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/nn/AcceleratorFormal.scala)).
+  * Banc de test Verilator unitaire validé ([`DMAWriterTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/memory/DMAWriterTest.scala)).
+  * Banc d'intégration SoC validé avec vérification mémoire bit-exacte sous Verilator ([`AcceleratorTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/nn/AcceleratorTest.scala)).
 
 ---
 

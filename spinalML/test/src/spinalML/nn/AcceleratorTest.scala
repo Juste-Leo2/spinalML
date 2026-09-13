@@ -271,4 +271,119 @@ class AcceleratorTest extends AnyFunSuite {
       println(s"[AcceleratorTest] Continuous streaming PASSED ($numFrames frames bit-exact, clean STOP confirmed)")
     }
   }
+
+  test("Accelerator: Write-back to DDR via DMAWriter (CSR 0x20 OUT_ADDR, CSR 0x24 OUT_CTRL, bit-exact DDR check)") {
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(makeToyAccelerator())
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      val memSim = AxiMemorySim(
+        axi = dut.io.axiMaster,
+        clockDomain = dut.clockDomain,
+        config = AxiMemorySimConfig(maxOutstandingReads = 8)
+      )
+      memSim.start()
+
+      // 1. Prepare deterministic weights and input data
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
+      writeWords(memSim.memory, weightBase, packed.words)
+
+      val inInts = (0 until 16).map(idx => (idx % 3).toLong)
+      val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
+      writeWords(memSim.memory, imgBase, imgWords)
+
+      // Calculate oracle
+      val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
+      val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
+
+      // 2. AXI-Lite helpers
+      def writeCsr(addr: BigInt, data: BigInt): Unit = {
+        dut.io.ctrlBus.aw.valid #= true
+        dut.io.ctrlBus.aw.payload.addr #= addr
+        dut.io.ctrlBus.w.valid #= true
+        dut.io.ctrlBus.w.payload.data #= data
+        dut.io.ctrlBus.w.payload.strb #= 0xF
+        dut.io.ctrlBus.b.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.aw.ready.toBoolean && dut.io.ctrlBus.w.ready.toBoolean)
+        dut.io.ctrlBus.aw.valid #= false
+        dut.io.ctrlBus.w.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.b.valid.toBoolean)
+        dut.io.ctrlBus.b.ready #= false
+        dut.clockDomain.waitSampling()
+      }
+
+      def readCsr(addr: BigInt): BigInt = {
+        dut.io.ctrlBus.ar.valid #= true
+        dut.io.ctrlBus.ar.payload.addr #= addr
+        dut.io.ctrlBus.r.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.ar.ready.toBoolean)
+        dut.io.ctrlBus.ar.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.r.valid.toBoolean)
+        val data = dut.io.ctrlBus.r.payload.data.toBigInt
+        dut.io.ctrlBus.r.ready #= false
+        dut.clockDomain.waitSampling()
+        data
+      }
+
+      // Initialize control bus
+      dut.io.ctrlBus.aw.valid #= false
+      dut.io.ctrlBus.w.valid #= false
+      dut.io.ctrlBus.ar.valid #= false
+      dut.io.ctrlBus.b.ready #= false
+      dut.io.ctrlBus.r.ready #= false
+      dut.io.outStream.stream.ready #= false // Consumer ready=0 to prove write-back doesn't stall on outStream
+      dut.clockDomain.waitSampling(5)
+
+      val outBase = 0x30000L
+
+      // Program addresses
+      writeCsr(0x08, imgBase)
+      writeCsr(0x0C, weightBase)
+
+      // Configure DMA write-back
+      writeCsr(0x20, outBase)
+      writeCsr(0x24, 1) // writeToDdr = true
+
+      // Verify DMA status is idle before start
+      val dmaStatusBefore = readCsr(0x28)
+      assert(dmaStatusBefore == 0, s"DMA writer should be idle before start, got 0x$dmaStatusBefore%X")
+
+      // Pulse START
+      writeCsr(0x00, 1)
+
+      // Wait for inference and DDR write-back to finish
+      var cycles = 0
+      val timeout = 10000
+      var doneObserved = false
+
+      while (cycles < timeout && (!doneObserved || dut.io.busy.toBoolean)) {
+        if (dut.io.done.toBoolean) {
+          doneObserved = true
+        }
+        // In writeToDdr mode, outStream.stream.valid must stay false
+        assert(!dut.io.outStream.stream.valid.toBoolean, "outStream.valid pulsed high while writeToDdr was active!")
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+
+      assert(cycles < timeout, "Inference and DDR write-back timed out")
+      assert(doneObserved, "Done pulse was never observed")
+      assert(!dut.io.busy.toBoolean, "Accelerator stayed busy after completion")
+
+      // Check DDR memory contents at outBase
+      // The toy model produces 2 elements of I8 (outFeatures = 2)
+      // On a 64-bit bus, this is in byte 0 and byte 1 of the 64-bit word at outBase
+      val writtenWord = memSim.memory.readBigInt(outBase, 8)
+      val hwLogits = (0 until 2).map { b =>
+        val byteVal = ((writtenWord >> (b * 8)) & 0xFF).toLong
+        val signedByte = if (byteVal >= 128) byteVal - 256 else byteVal
+        signedByte.toDouble
+      }
+
+      val dev = hwLogits.zip(oracle.logits).map { case (hw, sw) => math.abs(hw - sw) }.max
+      assert(dev == 0.0, s"DDR Write-Back Bit-Exact mismatch: HW $hwLogits vs SW ${oracle.logits}")
+      println(f"[AcceleratorTest] DDR Write-Back bit-exact: max dev = $dev%.3f in $cycles cycles (HW=$hwLogits, SW=${oracle.logits})")
+    }
+  }
 }

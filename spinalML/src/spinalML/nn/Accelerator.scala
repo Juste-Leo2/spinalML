@@ -7,13 +7,15 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.amba4.axilite._
 import spinalML.tensors.Tensor
+import spinalML.memory.{DMAWriter, WriteRequest}
 
 /**
  * Top-level wrapper that converts a generic `Sequential` model into a complete
  * System-on-Chip (SoC) ready hardware accelerator.
  * 
  * It automatically exposes two standard memory-mapped buses:
- * - AXI4 Master (High Speed): For fetching features and weights directly from DDR.
+ * - AXI4 Master (High Speed): For fetching features and weights directly from DDR,
+ *   and writing back output tensors via DMAWriter.
  * - AXI4-Lite Slave (Control): For the CPU to configure registers and start the inference.
  */
 class Accelerator[T <: Data](
@@ -41,9 +43,20 @@ class Accelerator[T <: Data](
   // 1. Instantiate the neural network datapath first to infer its output shape
   val model = Sequential(globalDataType, inputShape, modelSpec, axiConfig,
     weightResidency = weightResidencyCSR, tileHeight = tileHeight, temporal = temporal, inLanes = inLanes)
+
+  // Instantiate DMAWriter for optional DDR write-back of final output tensor
+  val dmaWriter = DMAWriter(
+    dataType = model.finalType,
+    shape = model.finalShape,
+    inLanes = model.finalLanes,
+    axiConfig = axiConfig
+  )
+
+  val outLanesAxi = axiConfig.dataWidth / model.finalType.getBitsWidth
+  val totalOutBeats = (model.finalShape.product + outLanesAxi - 1) / outLanesAxi
   
   val io = new Bundle {
-    // High-speed Master for DDR access
+    // High-speed Master for DDR access (Read & Write)
     val axiMaster = master(Axi4(axiConfig))
     
     // Low-speed Slave for CPU configuration
@@ -58,25 +71,68 @@ class Accelerator[T <: Data](
     val done = out(Bool())
   }
 
-  io.busy := model.io.busy
-  io.done := model.io.done
-  
-  // 2. Map the AXI4 Master
-  // We connect the Read channels. Write channels are grounded since we only infer (read-only DDR).
-  io.axiMaster.ar << model.io.axiMaster.ar
-  model.io.axiMaster.r << io.axiMaster.r
-  
-  io.axiMaster.aw.valid := False
-  io.axiMaster.aw.payload.assignDontCare()
-  io.axiMaster.w.valid := False
-  io.axiMaster.w.payload.assignDontCare()
-  io.axiMaster.b.ready := False
-  
-  // 3. Map the final output stream
-  io.outStream <> model.io.outStream
-  
   // 4. Create the AXI4-Lite Control Registers
   val ctrlFactory = new AxiLite4SlaveFactory(io.ctrlBus)
+
+  // Register 0x20: Output Base Address (for DMAWriter write-back)
+  val outAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), 0x20, 0) init(0)
+
+  // Register 0x24: Output Control (bit 0: writeToDdr enable)
+  val outCtrlReg = ctrlFactory.createReadAndWrite(UInt(8 bits), 0x24, 0) init(0)
+  val writeToDdr = outCtrlReg(0)
+
+  // Register 0x28: DMA Write Status (bit 0: busy, bit 1: done)
+  ctrlFactory.read(dmaWriter.io.busy, 0x28, 0)
+  ctrlFactory.read(dmaWriter.io.done, 0x28, 1)
+
+  // 2. Map the AXI4 Master
+  // Read channels: connected to Sequential model
+  io.axiMaster.ar << model.io.axiMaster.ar
+  model.io.axiMaster.r << io.axiMaster.r
+
+  // Write channels: routed to DMAWriter when writeToDdr is active, grounded otherwise
+  when(writeToDdr) {
+    io.axiMaster.aw.valid := dmaWriter.io.axiMaster.aw.valid
+    io.axiMaster.aw.payload := dmaWriter.io.axiMaster.aw.payload
+    dmaWriter.io.axiMaster.aw.ready := io.axiMaster.aw.ready
+
+    io.axiMaster.w.valid := dmaWriter.io.axiMaster.w.valid
+    io.axiMaster.w.payload := dmaWriter.io.axiMaster.w.payload
+    dmaWriter.io.axiMaster.w.ready := io.axiMaster.w.ready
+
+    dmaWriter.io.axiMaster.b.valid := io.axiMaster.b.valid
+    dmaWriter.io.axiMaster.b.payload := io.axiMaster.b.payload
+    io.axiMaster.b.ready := dmaWriter.io.axiMaster.b.ready
+  } otherwise {
+    io.axiMaster.aw.valid := False
+    io.axiMaster.aw.payload.assignDontCare()
+    dmaWriter.io.axiMaster.aw.ready := False
+
+    io.axiMaster.w.valid := False
+    io.axiMaster.w.payload.assignDontCare()
+    dmaWriter.io.axiMaster.w.ready := False
+
+    io.axiMaster.b.ready := False
+    dmaWriter.io.axiMaster.b.valid := False
+    dmaWriter.io.axiMaster.b.payload.assignDontCare()
+  }
+
+  // 3. Map the final output stream
+  when(writeToDdr) {
+    dmaWriter.io.inStream.stream.valid := model.io.outStream.stream.valid
+    dmaWriter.io.inStream.stream.payload := model.io.outStream.stream.payload
+    model.io.outStream.stream.ready := dmaWriter.io.inStream.stream.ready
+
+    io.outStream.stream.valid := False
+    io.outStream.stream.payload.assignDontCare()
+  } otherwise {
+    io.outStream.stream.valid := model.io.outStream.stream.valid
+    io.outStream.stream.payload := model.io.outStream.stream.payload
+    model.io.outStream.stream.ready := io.outStream.stream.ready
+
+    dmaWriter.io.inStream.stream.valid := False
+    dmaWriter.io.inStream.stream.payload.assignDontCare()
+  }
   
   // Register 0x00: Control
   // Bit 0: Start inference (trigger)
@@ -87,21 +143,28 @@ class Accelerator[T <: Data](
   }
   
   val startEvent = Event
-  startEvent.valid := startPending
+  val dmaCmd = Stream(WriteRequest(axiConfig.addressWidth))
+  dmaCmd.address := outAddrReg
+  dmaCmd.length := U(totalOutBeats - 1, 16 bits)
+
+  when(writeToDdr) {
+    startEvent.valid := startPending && dmaCmd.ready
+    dmaCmd.valid := startPending && model.io.start.ready
+    model.io.start.valid := startPending && dmaCmd.ready
+    startEvent.ready := model.io.start.ready && dmaCmd.ready
+  } otherwise {
+    startEvent.valid := startPending
+    model.io.start.valid := startEvent.valid
+    startEvent.ready := model.io.start.ready
+    dmaCmd.valid := False
+  }
+
   when(startEvent.fire) {
     startPending := False
   }
-  
-  model.io.start << startEvent
-  
-  // Register 0x04: Status
-  // Bit 0: Done (We can read it if we want, currently tied to outStream valid)
-  // Bit 1: Busy — an inference is in flight (START accepted, output frame
-  //        not yet complete). Phase-3 S1.
-  // Bit 2: RUN state (mirror of 0x1C bit0).
-  ctrlFactory.read(io.outStream.stream.valid, 0x04, 0)
-  ctrlFactory.read(model.io.busy, 0x04, 1)
 
+  dmaWriter.io.cmd << dmaCmd
+  
   // Register 0x08: Image Base Address. Under RUN auto-advance the MODEL sees
   // the CSR base plus an internal frame cursor (kept in a plain register — the
   // CSR register itself is factory-driven and must not be ticked from
@@ -140,7 +203,10 @@ class Accelerator[T <: Data](
 
   val tileCntReg = Reg(UInt(32 bits)) init(0)
   val imgBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
-  val frameDone = model.io.done
+  val frameDone = Mux(writeToDdr, dmaWriter.io.done, model.io.done)
+  io.busy := Mux(writeToDdr, model.io.busy || dmaWriter.io.busy, model.io.busy)
+  io.done := frameDone
+
   when(frameDone) {
     tileCntReg := tileCntReg + 1
     when(runActive) {
@@ -149,8 +215,15 @@ class Accelerator[T <: Data](
       imgBaseOffset := imgBaseOffset + imageBytesAcc
     }
   }
-  ctrlFactory.read(tileCntReg, 0x18, 0)
+
+  // Register 0x04: Status
+  // Bit 0: Done (outStream.valid in stream mode, dmaWriter.done in DDR mode)
+  // Bit 1: Busy (model busy || dmaWriter busy)
+  // Bit 2: RUN state (mirror of 0x1C bit0)
+  ctrlFactory.read(Mux(writeToDdr, dmaWriter.io.done, io.outStream.stream.valid), 0x04, 0)
+  ctrlFactory.read(io.busy, 0x04, 1)
   ctrlFactory.read(runActive, 0x04, 2)
+  ctrlFactory.read(tileCntReg, 0x18, 0)
 
   model.io.imgBaseAddress := imgAddrReg + imgBaseOffset
 
