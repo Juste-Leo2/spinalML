@@ -58,13 +58,25 @@ class LineBuffer2DFormal extends Component {
     }
   }
 
+  // Track warm-up: uninitialized SRAM memory has undefined data until primed with `depth` beats
+  val primed = new ClockingArea(dutCd) {
+    val isPrimed = RegInit(False)
+    val pushCount = Counter(depth)
+    when(dut.comp.io.push.valid) {
+      pushCount.increment()
+      when(pushCount.willOverflowIfInc) {
+        isPrimed := True
+      }
+    }
+  }
+
   new ClockingArea(dutCd) {
     when(pastValid() && !rst) {
       // 1. Valid handshake latency: pop.valid strictly mirrors push.valid delayed by 1 cycle
       assert(dut.comp.io.pop.valid === past(dut.comp.io.push.valid), "pop.valid must match past(push.valid)")
 
-      // 2. Exact FIFO queue ordering: whenever pop is valid, payload bit-exactly matches reference delay line
-      when(dut.comp.io.pop.valid) {
+      // 2. Exact FIFO queue ordering: once primed with depth elements, payload bit-exactly matches reference delay line
+      when(dut.comp.io.pop.valid && primed.isPrimed) {
         assert(dut.comp.io.pop.payload === refQueue.q(depth - 1), "Popped data does not match reference delay line")
       }
     }

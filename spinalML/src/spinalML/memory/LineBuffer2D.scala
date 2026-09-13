@@ -12,7 +12,7 @@ import spinal.lib._
  * Read address = ptr + 1 so that the popped value is aligned with the current
  * input beat even under arbitrary valid/ready stalls.
  */
-case class LineBuffer2D[T <: Data](dataType: HardType[T], depth: Int) extends Component {
+case class LineBuffer2D[T <: Data](dataType: HardType[T], depth: Int, withMemInit: Boolean = false) extends Component {
   require(depth >= 1, s"LineBuffer2D depth must be >= 1, got $depth")
 
   val io = new Bundle {
@@ -30,7 +30,11 @@ case class LineBuffer2D[T <: Data](dataType: HardType[T], depth: Int) extends Co
     io.pop.payload := reg
   } else {
     val mem = Mem(dataType, depth)
-    mem.init(Seq.fill(depth)(dataType().getZero))
+    // Optional mem.init: on FPGA, initializes BRAM cells to zero at bitstream load.
+    // On ASIC, disabled by default (withMemInit = false) for compiled SRAM macro compatibility.
+    if (withMemInit) {
+      mem.init(Seq.fill(depth)(dataType().getZero))
+    }
 
     val ptr = Counter(depth)
     val rdAddr = Mux(ptr.value === depth - 1, U(0, log2Up(depth) bits), ptr.value + 1)

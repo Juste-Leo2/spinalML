@@ -7,6 +7,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.nn.Accelerator
 import spinalML.dtypes.FloatML
+import spinalML.Target
 
 /**
  * UART SoC top: Accelerator + AxiReadMem + UartBridge + UartRx/UartTx,
@@ -27,7 +28,8 @@ class UartSoC[T <: Data](
   val weightBase: Int = 0x20000,
   val memoryAdapterFactory: Option[(Axi4Config) => spinalML.memory.MemoryAdapter] = None,
   val outCount: Int   = 10,
-  val version: Int    = 0x01
+  val version: Int    = 0x01,
+  val target: Target  = Target.FPGA()
 ) extends Component {
   val io = new Bundle {
     val resetN = in(Bool())
@@ -35,20 +37,25 @@ class UartSoC[T <: Data](
     val uartTx = out(Bool())
   }
 
-  // Power-On Reset: bitstream boot initialization without creating any external reset port
-  val bootClockDomain = ClockDomain(
-    clock = clockDomain.clock,
-    config = ClockDomainConfig(resetKind = BOOT)
-  )
-  val porActive = new ClockingArea(bootClockDomain) {
-    val counter = Reg(UInt(8 bits)) init(0)
-    val active = counter =/= 255
-    when(active) {
-      counter := counter + 1
-    }
-  }.active
+  // Power-On Reset: on FPGA, bitstream boot initialization without creating any external reset port.
+  // On ASIC, resetKind = BOOT does not exist; external active-low reset directly drives the chip.
+  val reset = if (!target.isAsic) {
+    val bootClockDomain = ClockDomain(
+      clock = clockDomain.clock,
+      config = ClockDomainConfig(resetKind = BOOT)
+    )
+    val porActive = new ClockingArea(bootClockDomain) {
+      val counter = Reg(UInt(8 bits)) init(0)
+      val active = counter =/= 255
+      when(active) {
+        counter := counter + 1
+      }
+    }.active
+    porActive || !io.resetN
+  } else {
+    !io.resetN
+  }
 
-  val reset = porActive || !io.resetN
   val cd = ClockDomain(
     clock = clockDomain.clock,
     reset = reset,
@@ -62,7 +69,9 @@ class UartSoC[T <: Data](
     val tx = new UartTx(clkFreq, baudRate)
     val mem = memoryAdapterFactory match {
       case Some(factory) => factory(axiConfig)
-      case None          => new spinalML.memory.BramAdapter(axiConfig, memoryWords, imgBase, weightBase)
+      case None =>
+        if (target.isAsic) new spinalML.memory.SramAsicAdapter(axiConfig, memoryWords, imgBase, weightBase)
+        else new spinalML.memory.BramAdapter(axiConfig, memoryWords, imgBase, weightBase)
     }
     val bridge = new UartBridge(
       outCount = outCount,

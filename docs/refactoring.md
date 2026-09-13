@@ -168,18 +168,18 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
 
 Au-delà de la roadmap initiale, trois détails propres au monde FPGA doivent être isolés pour réussir un tapeout ASIC :
 
-1. **Le Reset `BOOT` dans `UartSoC.scala:L40`** :
-   * Le code utilise `ClockDomainConfig(resetKind = BOOT)` avec un compteur de délai.
-   * Sur FPGA, c'est l'automate de chargement du bitstream qui gère ce démarrage.
-   * **Sur ASIC, le reset `BOOT` n'existe pas.** Il faut une broche externe `rst_n` (actif bas, asynchrone) et un réseau d'arbre de reset (CTS) dédié.
-2. **L'initialisation implicite des mémoires (`mem.init`)** :
-   * Les BRAM de FPGA sont initialisées à zéro lors du chargement du bitstream.
+1. **Le Reset `BOOT` dans `UartSoC.scala:L40`** [COMPLÉTÉ] :
+   * Le code utilise `ClockDomainConfig(resetKind = BOOT)` avec un compteur de délai sur FPGA.
+   * **Résolution** : `UartSoC` est paramétré par `target: Target = Target.FPGA()`. Si `target.isAsic`, le bloc `bootClockDomain` est purement éliminé du RTL, le reset est directement relié à l'entrée matérielle externe `!io.resetN`, et la mémoire par défaut devient automatiquement `SramAsicAdapter`.
+   * **Validation** : Suite de tests [`UartSoCTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/io/UartSoCTest.scala) validant la génération Verilog pour `Target.FPGA` et `Target.ASIC`.
+2. **L'initialisation implicite des mémoires (`mem.init`)** [COMPLÉTÉ] :
    * Les macros SRAM d'un ASIC (générées par OpenRAM) démarrent dans un état **aléatoire et indéterminé**.
-   * Toute logique qui présuppose que la mémoire est initialisée à zéro au démarrage doit être revue pour que l'initialisation soit explicite ou que les premières lectures attendent la première passe d'écriture.
-3. **Le Déploiement 100% Spatial** :
+   * **Audit & Résolution** : `StreamDoubleBuffer` et `SramAsicAdapter` n'utilisaient déjà aucun `mem.init`. Le `mem.init` résiduel dans [`LineBuffer2D.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/LineBuffer2D.scala) a été supprimé. L'analyse et la preuve formelle démontrent que les consommateurs (`im2col`, `maxpool2d`) attendent que $K-1$ lignes complètes soient écrites avant d'activer `windowValid`, donc aucune donnée non écrite n'est jamais lue.
+   * **Validation** : Preuve formelle SymbiYosys [`Im2ColFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/ops/Im2ColFormal.scala) validée à 100%.
+3. **Le Déploiement 100% Spatial** [REPORTÉ - PHASE 3] :
    * `Sequential.scala` instancie physiquement chaque couche l'une après l'autre en silicium.
    * Pour un petit réseau de 3 couches (MNIST), cela passe. Pour un modèle de vision type YOLO (60 couches), la surface en ASIC explose.
-   * C'est la justification de la Phase 3 : basculer vers un **Cœur Replié (Folded Core)** réutilisant le même bloc physique pour exécuter séquentiellement les différentes couches du réseau.
+   * C'est la justification de la Phase 3 : basculer vers un **Cœur Replié (Folded Core)** réutilisant le même bloc physique pour exécuter séquentiellement les différentes couches du réseau via des boucles mémoires (`DMAWriter` / `DMAReader`).
 
 ---
 

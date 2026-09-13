@@ -46,10 +46,12 @@ class LineBuffer2DTest extends AnyFunSuite {
         if (inIdx < numInputs) inIdx += 1
       }
 
-      // Since pop.valid asserts 1 cycle after push.valid, exactly (depth - 1)
-      // initial dummy zero beats are observed before the first pushed element.
-      val expected = Seq.fill(depth - 1)(0) ++ testValues.take(numInputs - (depth - 1))
-      assert(received.take(numInputs) == expected, s"Received $received != expected $expected")
+      // The delay is exactly `depth`. Since pop.valid asserts 1 cycle after push.valid,
+      // the first (depth - 1) beats occur during buffer priming (uninitialized memory on ASIC).
+      // Once primed, every pushed element appears at the pop interface with exact delay `depth`.
+      val primedReceived = received.drop(depth - 1).take(numInputs - (depth - 1))
+      val expectedPrimed = testValues.take(numInputs - (depth - 1))
+      assert(primedReceived == expectedPrimed, s"Primed received $primedReceived != expected $expectedPrimed")
     }
   }
 
@@ -92,8 +94,49 @@ class LineBuffer2DTest extends AnyFunSuite {
         }
       }
 
+      val primedReceived = received.drop(depth - 1).take(numInputs - (depth - 1))
+      val expectedPrimed = testValues.take(numInputs - (depth - 1))
+      assert(primedReceived == expectedPrimed, s"Primed received $primedReceived != expected $expectedPrimed under stalls")
+    }
+  }
+
+  test("LineBuffer2D: withMemInit = true initializes memory to zero") {
+    val depth = 4
+    val numInputs = 15
+
+    SimConfig.withVerilator.compile(LineBuffer2D(I8(), depth, withMemInit = true)).doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      dut.io.push.valid #= false
+      dut.io.push.payload #= 0
+      dut.clockDomain.waitSampling()
+
+      val testValues = Seq.tabulate(numInputs)(i => i + 1)
+      val received = scala.collection.mutable.ArrayBuffer[Int]()
+
+      var inIdx = 0
+      var outIdx = 0
+
+      while (outIdx < numInputs) {
+        if (inIdx < numInputs) {
+          dut.io.push.valid #= true
+          dut.io.push.payload #= testValues(inIdx)
+        } else {
+          dut.io.push.valid #= true
+          dut.io.push.payload #= 0
+        }
+
+        dut.clockDomain.waitSampling()
+
+        if (dut.io.pop.valid.toBoolean) {
+          received += dut.io.pop.payload.toInt
+          outIdx += 1
+        }
+        if (inIdx < numInputs) inIdx += 1
+      }
+
       val expected = Seq.fill(depth - 1)(0) ++ testValues.take(numInputs - (depth - 1))
-      assert(received.take(numInputs) == expected, s"Received $received != expected $expected under stalls")
+      assert(received.take(numInputs) == expected, s"Received $received != expected $expected")
     }
   }
 
