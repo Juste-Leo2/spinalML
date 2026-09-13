@@ -174,8 +174,8 @@ Au-delà de la roadmap initiale, trois détails propres au monde FPGA doivent ê
    * **Validation** : Suite de tests [`UartSoCTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/io/UartSoCTest.scala) validant la génération Verilog pour `Target.FPGA` et `Target.ASIC`.
 2. **L'initialisation implicite des mémoires (`mem.init`)** [COMPLÉTÉ] :
    * Les macros SRAM d'un ASIC (générées par OpenRAM) démarrent dans un état **aléatoire et indéterminé**.
-   * **Audit & Résolution** : `StreamDoubleBuffer` et `SramAsicAdapter` n'utilisaient déjà aucun `mem.init`. Le `mem.init` résiduel dans [`LineBuffer2D.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/LineBuffer2D.scala) a été supprimé. L'analyse et la preuve formelle démontrent que les consommateurs (`im2col`, `maxpool2d`) attendent que $K-1$ lignes complètes soient écrites avant d'activer `windowValid`, donc aucune donnée non écrite n'est jamais lue.
-   * **Validation** : Preuve formelle SymbiYosys [`Im2ColFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/ops/Im2ColFormal.scala) validée à 100%.
+   * **Audit & Résolution** : `StreamDoubleBuffer` et `SramAsicAdapter` n'utilisaient déjà aucun `mem.init`. `LineBuffer2D.scala` a été paramétré avec `withMemInit: Boolean = false` par défaut pour l'ASIC. L'analyse et la preuve formelle démontrent que les consommateurs (`im2col`, `maxpool2d`) attendent que $K-1$ lignes complètes soient écrites avant d'activer `windowValid`, donc aucune donnée non écrite n'est jamais lue.
+   * **Validation** : Preuve formelle SymbiYosys [`LineBuffer2DFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/memory/LineBuffer2DFormal.scala) et [`Im2ColFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/ops/Im2ColFormal.scala) validées à 100%, et simulation Verilator [`LineBuffer2DTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/memory/LineBuffer2DTest.scala) validée (**PASS**).
 3. **Le Déploiement 100% Spatial** [REPORTÉ - PHASE 3] :
    * `Sequential.scala` instancie physiquement chaque couche l'une après l'autre en silicium.
    * Pour un petit réseau de 3 couches (MNIST), cela passe. Pour un modèle de vision type YOLO (60 couches), la surface en ASIC explose.
@@ -183,29 +183,21 @@ Au-delà de la roadmap initiale, trois détails propres au monde FPGA doivent ê
 
 ---
 
-## 5. Question Technique : Le Nombre Magique dans `examples/Mnist/Model.scala`
+## 5. Question Technique : Le Nombre Magique dans `examples/Mnist/Model.scala` [COMPLÉTÉ]
 
-### Analyse du problème
-Dans [`examples/Mnist/Model.scala:L46`](file:///e:/spinalML/examples/Mnist/Model.scala#L46), on trouve la ligne suivante :
+### Analyse & Résolution
+Dans [`examples/Mnist/Model.scala:L46`](file:///e:/spinalML/examples/Mnist/Model.scala#L46), la ligne `Cast(FP8_E4M3(), scales = Seq(0.08544921875))` a été remplacée par :
 ```scala
-// 2. Transition from Integer domain to Floating-Point domain (FP8 E4M3)
-Cast(FP8_E4M3(), scales = Seq(0.08544921875)),
+// 2. Transition from Integer domain to Floating-Point domain (FP8 E4M3) with runtime programmable scale
+Cast(FP8_E4M3(), runtimeScale = true),
 ```
 
-* **D'où vient ce nombre ?**  
-  $0.08544921875 = \frac{175}{2048} \approx \frac{175}{2^{11}}$.  
-  C'est le facteur d'échelle de déquantification (dequantization scale) calculé lors de l'entraînement PyTorch en quantification mixte w4a8.  
-  Le début du modèle (Conv2D) tourne en arithmétique entière INT4 / INT16, tandis que la fin du modèle (Linear) tourne en flottant FP8. Le composant `CastOp` doit donc multiplier la valeur entière par ce facteur pour la faire atterrir sur la grille dynamique du FP8 :  
-  $$x_{\text{FP8}} = \text{FloatML}(x_{\text{INT16}}) \times 0.08544921875$$
-
-* **Est-ce que notre plan de refactorisation règle ce problème ?**  
-  **OUI, et voici comment :**
-  1. **Disparition dans les architectures homogènes** :  
-     Les modèles de vision cibles pour l'ASIC (comme YOLOv8n) s'exécutent en **quantification homogène** (tout en INT8 avec `Requantize`, ou tout en FP8/BF16 de bout en bout). Il n'y a donc plus de saut de domaine INT $\to$ Float au milieu du pipeline, et ces coefficients de cast disparaissent purement et simplement.
-  2. **Découplage de la topologie matérielle (Phase 3 & Folded Core)** :  
-     Même dans le cas où un modèle requiert des facteurs de mise à l'échelle (par exemple pour la requantification INT32 $\to$ INT8 ou le scaling de BatchNorm), **ceux-ci ne doivent JAMAIS être codés en dur dans la topologie Scala du réseau**.  
-     Ils doivent faire partie des **poids / métadonnées** stockés en mémoire (DDR / SRAM) ou configurés par le CPU hôte via les registres CSR (`AxiLite4SlaveFactory`).  
-     Le cœur matériel exécute alors l'opération avec un registre de gain programmable, éliminant tout nombre magique dans le code source Scala.
+* **Résolution Matérielle & Logicielle (Option A)** :
+  1. `CastOp` et `Cast` supportent un port d'échelle dynamique `runtimeScale = true`.
+  2. `Accelerator` alloue le **registre CSR `0x30` (`DEQUANT_SCALE`)** configurable via le bus AXI-Lite.
+  3. Au démarrage, [`inference.py`](file:///e:/spinalML/examples/Mnist/inference.py) lit le coefficient `convScale` depuis le fichier de métadonnées [`Mnist_weights.npz`](file:///e:/spinalML/examples/Mnist/Mnist_weights.npz) et l'écrit dynamiquement dans le registre `0x30` via la commande UART `C`.
+  4. Le test universel bit-exact sous Verilator (`python cli/main.py test examples/Mnist/Model.scala`) est validé à 100% avec une déviation de 0.000.
+  5. Aucun nombre magique ne réside plus dans le code Scala du modèle.
 
 ---
 

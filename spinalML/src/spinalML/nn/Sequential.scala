@@ -155,6 +155,9 @@ case class Sequential(
     val axiMaster = master(Axi4ReadOnly(axiConfig))
     val outStream = master(Tensor(finalType, finalShape, lanes = finalLanes))
 
+    // Runtime dequantization scale input for Cast layers with runtimeScale = true
+    val dequantScale = if (layers.exists { case c: Cast => c.runtimeScale; case _ => false }) Some(in Bits(32 bits)) else None
+
     // ---- Continuous-run frame signals (Phase 3, S1) ----------------------
     // One inference = one output frame = exactly `finalShape.product` beats.
     // These two outputs let the Accelerator auto-advance RUN mode safely:
@@ -594,8 +597,9 @@ case class Sequential(
       case _: Tanh =>
         tanh(inTensor)
 
-      case _: Cast =>
-        cast(inTensor, lType, layers(i).asInstanceOf[Cast].scales)
+      case c: Cast =>
+        val scalePort = if (c.runtimeScale) io.dequantScale else None
+        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort)
 
       case _: Flatten =>
         reshape(flatten(inTensor), Seq(1, inTensor.shape.product))

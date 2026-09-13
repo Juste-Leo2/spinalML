@@ -85,6 +85,22 @@ class Accelerator[T <: Data](
   ctrlFactory.read(dmaWriter.io.busy, 0x28, 0)
   ctrlFactory.read(dmaWriter.io.done, 0x28, 1)
 
+  // Register 0x30: Runtime Dequantization Scale (for Cast layers with runtimeScale = true)
+  val initialScaleBits: BigInt = {
+    val castLayerOpt = modelSpec.collectFirst { case c: Cast if c.runtimeScale => c }
+    castLayerOpt match {
+      case Some(c) =>
+        c.targetType() match {
+          case f: spinalML.dtypes.FloatML =>
+            spinalML.utils.MathLUTs.floatEncodeFn(f.expBits, f.mantBits)(c.scales.headOption.getOrElse(1.0))
+          case _ => BigInt(1)
+        }
+      case None => BigInt(0)
+    }
+  }
+  val dequantScaleReg = ctrlFactory.createReadAndWrite(Bits(32 bits), 0x30, 0) init(B(initialScaleBits, 32 bits))
+  model.io.dequantScale.foreach(_ := dequantScaleReg)
+
   // 2. Map the AXI4 Master
   // Read channels: connected to Sequential model
   io.axiMaster.ar << model.io.axiMaster.ar

@@ -206,11 +206,19 @@ case class Tanh() extends LayerSpec {
  * W_float = FloatML(W_int) * scale (per-tensor, length 1). Default Seq(1.0)
  * keeps the pure cast behavior.
  */
-case class Cast(targetType: HardType[Data], scales: Seq[Double] = Seq(1.0)) extends LayerSpec {
+case class Cast(
+  targetType: HardType[Data],
+  scales: Seq[Double] = Seq(1.0),
+  runtimeScale: Boolean = false
+) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
   override def outType(default: HardType[Data]) = targetType
+}
+
+object Cast {
+  def runtime(targetType: HardType[Data]): Cast = Cast(targetType, runtimeScale = true)
 }
 
 case class Flatten() extends LayerSpec {
