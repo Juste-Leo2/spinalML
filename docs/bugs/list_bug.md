@@ -365,6 +365,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-03 : Écriture mémoire non alignée et écrasement par strobes pleins dans `DMAWriter`
+- **Statut** : corrigé (2026-09-15) — `io.axiMaster.w.strb` n'est plus `setAll()` : le dernier beat du transfert (`remaining === 0 && burstRemain === 1`, le transfert étant contigu le beat partiel est toujours le dernier) reçoit le masque des `(totalElements - (totalAxiBeats-1)*axiLanes) * (elemWidth/8)` octets valides, les beats pleins gardent tout-1. Test rouge : `tests/python/test_dma_writer.py::test_dma_writer_partial_last_beat` (3 SInt16 = 6 octets sur bus 64 b, sentinelle 0xBEEF dans les octets 6-7 : avant fix `strb=0xFF` et sentinelle écrasée ; après fix `strb=0x3F` et sentinelle intacte). Le banc `AxiWriteSlave` applique désormais `w.strb` octet par octet (il ignorait le strobe, d'où l'angle mort). Non-régression : `test_dma_writer.py` 4/4, `test-all -k DMAWriterTest`, `test-all-formal -k DMAWriterFormal`, `test-all-python -k accelerator` (write-back).
 - **Fichier** : `spinalML/src/spinalML/memory/DMAWriter.scala` (ligne 96)
 - **Code concerné** :
   ```scala

@@ -45,6 +45,42 @@ case class DMAWriterTestWrapper(maxBurstBeats: Int = 4) extends Component {
   io.axiMaster.r.ready := False
 }
 
+// Partial-transfer wrapper: 3 SInt16 elements = 6 valid bytes on a 64-bit AXI
+// bus, so the single W beat carries 2 padding bytes that must not be strobed.
+case class DMAWriterPartialTestWrapper() extends Component {
+  val axiDataWidth = 64
+  val inLanes = 2
+  val axiConfig = Axi4Config(
+    addressWidth = 32,
+    dataWidth = axiDataWidth,
+    idWidth = 4
+  )
+
+  val dataType = SInt(16 bits)
+  val io = new Bundle {
+    val cmd       = slave(Stream(WriteRequest(32)))
+    val inStream  = slave(Tensor(dataType, Seq(3), inLanes))
+    val axiMaster = master(Axi4(axiConfig))
+    val busy      = out Bool()
+    val done      = out Bool()
+  }
+
+  val writer = DMAWriter(dataType, Seq(3), inLanes, axiConfig, maxBurstBeats = 4)
+  writer.io.cmd << io.cmd
+  writer.io.inStream <> io.inStream
+  io.busy := writer.io.busy
+  io.done := writer.io.done
+
+  io.axiMaster.aw << writer.io.axiMaster.aw
+  io.axiMaster.w  << writer.io.axiMaster.w
+  writer.io.axiMaster.b << io.axiMaster.b
+
+  // Read channels tied off
+  io.axiMaster.ar.valid := False
+  io.axiMaster.ar.payload.assignDontCare()
+  io.axiMaster.r.ready := False
+}
+
 class DMAWriterTest extends AnyFunSuite {
 
   test("DMAWriter Hardware Sim - Basic Burst Write") {
@@ -184,6 +220,14 @@ class DMAWriterTest extends AnyFunSuite {
     SpinalConfig().generateVerilog {
       val dut = DMAWriterTestWrapper()
       dut.setDefinitionName("DMAWriterTestComp")
+      dut
+    }
+  }
+
+  test("Generate Verilog for DMAWriterPartialTestWrapper") {
+    SpinalConfig().generateVerilog {
+      val dut = DMAWriterPartialTestWrapper()
+      dut.setDefinitionName("DMAWriterPartialTestComp")
       dut
     }
   }
