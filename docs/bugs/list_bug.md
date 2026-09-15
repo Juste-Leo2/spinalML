@@ -379,6 +379,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-04 : Deadlock systématique en écriture sur `BramAdapter`, `SramAsicAdapter` et `DdrAdapter`
+- **Statut** : corrigé pour `BramAdapter`/`SramAsicAdapter` (2026-09-15) — les deux adapters implémentent un esclave AXI4 write single-outstanding (AW accepté en priorité, beats W commités avec leurs strobes via `Mem.write(mask=...)`, une réponse B), et `UartSoC` connecte désormais les canaux `aw`/`w`/`b` complets de l'accélérateur à la mémoire (avant : seuls les handshakes, payloads non pilotés). Test rouge : `test_memory_adapter.py::test_bram_adapter_write_burst` / `test_sram_adapter_write_burst` (avant : `aw.ready` bloqué bas → timeout ; après : burst AXI écrit puis relu bit-exact) + `test_bram_adapter_write_strobes` (w.strb préserve les octets non écrits). Formel `AxiReadMemFormal` : le write path est neutralisé en constantes pour l'élaguer, et le solveur passe de cvc4 à **boolector** (150 s+ / TIMEOUT → 10 s). Non-régression : `test-all-python -k memory_adapter`, `test-all -k MemoryAdapterTest`, `-k UartSoCTest`. Reste `DdrAdapter` (arbitrage hôte/accélérateur) → item suivant.
 - **Fichier** : `spinalML/src/spinalML/memory/BramAdapter.scala`, `SramAsicAdapter.scala`, `DdrAdapter.scala`
 - **Code concerné** :
   ```scala

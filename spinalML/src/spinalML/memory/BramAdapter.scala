@@ -95,10 +95,48 @@ class BramAdapter(
   io.axi.r.payload.last := rlastR
   io.axi.r.payload.resp := B"00"
 
-  // Write channels tie-off (read-only memory from accelerator perspective)
-  io.axi.aw.ready := False
-  io.axi.w.ready := False
-  io.axi.b.valid := False
-  io.axi.b.payload.id := 0
-  io.axi.b.payload.resp := 0
+  // ------------------------------------------------------------------
+  // AXI4 write slave (accelerator write-back, e.g. DMAWriter): single
+  // outstanding burst, AW accepted first (the master serializes AW/W/B),
+  // every W beat committed with its byte strobes, then one B response.
+  // ------------------------------------------------------------------
+  val beatCountW = log2Up((1 << axiConfig.lenWidth) + 1)
+  val awPending  = RegInit(False)
+  val bValidR    = RegInit(False)
+  val wRemaining = Reg(UInt(beatCountW bits)) init (0)
+  val wAddrR     = Reg(UInt(axiConfig.addressWidth bits)) init (0)
+
+  io.axi.aw.ready := !awPending && !bValidR
+  when(io.axi.aw.valid && io.axi.aw.ready) {
+    awPending  := True
+    wRemaining := (io.axi.aw.payload.len +^ 1).resize(beatCountW bits)
+    wAddrR     := io.axi.aw.payload.addr
+  }
+
+  io.axi.w.ready := awPending && !bValidR
+
+  val wBeatMask = Bits(axiConfig.dataWidth bits)
+  wBeatMask := 0
+  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
+    wBeatMask(byte * 8 + bit) := io.axi.w.payload.strb(byte)
+  }
+
+  when(io.axi.w.valid && io.axi.w.ready) {
+    mem.write(mapIndex(wAddrR), io.axi.w.payload.data, mask = wBeatMask)
+    wAddrR := wAddrR + bytePerBeat
+    when(wRemaining === 1) {
+      awPending := False
+      bValidR   := True
+    } otherwise {
+      wRemaining := wRemaining - 1
+    }
+  }
+
+  when(bValidR && io.axi.b.ready) {
+    bValidR := False
+  }
+
+  io.axi.b.valid        := bValidR
+  io.axi.b.payload.id   := 0
+  io.axi.b.payload.resp := B"00"
 }

@@ -58,6 +58,63 @@ async def host_write(dut, addr, data, strb=0xFF):
     await RisingEdge(dut.clk)
 
 
+async def axi_write_burst(dut, addr, words, strbs=None, timeout=500):
+    """Drive one AXI4 INCR write burst (test = AXI master), one beat per word."""
+    # An idle slave must be able to accept AW at any time (read-only
+    # implementations tie aw.ready low: this probe fails loudly there).
+    aw_ready_seen = False
+    for _ in range(100):
+        await ReadOnly()
+        aw_ready_seen = int(dut.io_axi_aw_ready.value) == 1
+        await RisingEdge(dut.clk)
+        if aw_ready_seen:
+            break
+    assert aw_ready_seen, "Adapter never accepts accelerator writes (aw.ready stuck low)"
+
+    dut.io_axi_aw_valid.value = 1
+    dut.io_axi_aw_payload_addr.value = addr
+    dut.io_axi_aw_payload_len.value = len(words) - 1
+    aw_accepted = False
+    for _ in range(timeout):
+        await ReadOnly()
+        if int(dut.io_axi_aw_ready.value) == 1:
+            aw_accepted = True
+        await RisingEdge(dut.clk)
+        if aw_accepted:
+            break
+    assert aw_accepted, f"AW never accepted for write burst at 0x{addr:X}"
+    dut.io_axi_aw_valid.value = 0
+
+    dut.io_axi_b_ready.value = 1
+    for i, word in enumerate(words):
+        dut.io_axi_w_valid.value = 1
+        dut.io_axi_w_payload_data.value = word
+        dut.io_axi_w_payload_strb.value = 0xFF if strbs is None else strbs[i]
+        dut.io_axi_w_payload_last.value = 1 if i == len(words) - 1 else 0
+        w_accepted = False
+        for _ in range(timeout):
+            await ReadOnly()
+            if int(dut.io_axi_w_ready.value) == 1:
+                w_accepted = True
+            await RisingEdge(dut.clk)
+            if w_accepted:
+                break
+        assert w_accepted, f"W beat {i} never accepted"
+    dut.io_axi_w_valid.value = 0
+
+    b_seen = False
+    for _ in range(timeout):
+        await ReadOnly()
+        if int(dut.io_axi_b_valid.value) == 1:
+            b_seen = True
+        await RisingEdge(dut.clk)
+        if b_seen:
+            break
+    assert b_seen, "B response never received"
+    dut.io_axi_b_ready.value = 0
+    await RisingEdge(dut.clk)
+
+
 async def axi_read_burst(dut, addr, beats, id_val=0, stall_cycles=0, timeout=2000):
     """Drive one AR burst (test = AXI master) and collect the R beats.
 
@@ -111,17 +168,17 @@ def check_single_read(data, lasts, ids, expected, id_val):
     assert ids == [id_val], f"RID echo mismatch: {ids} != [{id_val}]"
 
 
-async def check_tie_offs(dut):
+async def check_write_idle(dut):
     await ReadOnly()
-    assert int(dut.io_axi_aw_ready.value) == 0, "Read-only adapter must not accept AW"
-    assert int(dut.io_axi_w_ready.value) == 0, "Read-only adapter must not accept W"
-    assert int(dut.io_axi_b_valid.value) == 0, "Read-only adapter must not emit B"
+    assert int(dut.io_axi_aw_ready.value) == 1, "Adapter must accept AW when idle"
+    assert int(dut.io_axi_w_ready.value) == 0, "W must wait for an accepted AW"
+    assert int(dut.io_axi_b_valid.value) == 0, "No B response before any write"
     await RisingEdge(dut.clk)
 
 
 async def bram_like_readback(dut):
     await reset_adapter(dut)
-    await check_tie_offs(dut)
+    await check_write_idle(dut)
 
     img_word = 0x1122334455667788
     weight_word = 0xAABBCCDDEEFF0011
@@ -219,6 +276,43 @@ async def cocotb_bram_adapter_backpressure(dut):
     assert lasts == [0, 0, 0, 1], f"RLAST corrupted under stalls: {lasts}"
     assert ids == [5, 5, 5, 5], f"RID corrupted under stalls: {ids}"
     print("BramAdapter burst preserved under r_ready backpressure")
+
+
+@cocotb.test()
+async def cocotb_bram_adapter_write_burst(dut):
+    """Accelerator-side AXI4 write burst (AW/W/B) must land in the same memory
+    the accelerator reads back (DMAWriter write-back path)."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    words = [0x0102030405060708 * (i + 1) & ((1 << 64) - 1) for i in range(4)]
+    await axi_write_burst(dut, IMG_BASE, words)
+
+    data, lasts, ids = await axi_read_burst(dut, IMG_BASE, beats=4, id_val=2)
+    assert data == words, f"Write-back mismatch: {[hex(w) for w in data]} != {[hex(w) for w in words]}"
+    assert lasts == [0, 0, 0, 1], f"RLAST corrupted after write-back: {lasts}"
+    assert ids == [2, 2, 2, 2], f"RID corrupted after write-back: {ids}"
+    print("BramAdapter accelerator AXI4 write-back burst round-trips bit-exact")
+
+
+@cocotb.test()
+async def cocotb_bram_adapter_write_strobes(dut):
+    """AXI w.strb must preserve the untouched bytes of a word."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    sentinel = 0x1122334455667788
+    await host_write(dut, IMG_BASE, sentinel)
+    await axi_write_burst(dut, IMG_BASE, [0x000000000000BEEF], strbs=[0x03])
+
+    data, _, _ = await axi_read_burst(dut, IMG_BASE, beats=1, id_val=3)
+    expected = (sentinel & ~0xFFFF) | 0xBEEF
+    assert data == [expected], (
+        f"AXI strobe mismatch: 0x{data[0]:016X} != 0x{expected:016X}"
+    )
+    print("BramAdapter AXI w.strb preserves untouched bytes")
 
 
 @cocotb.test()
@@ -383,6 +477,18 @@ def test_bram_adapter_backpressure(request):
 
 def test_bram_adapter_partial_write(request):
     _run_sim("cocotb_bram_adapter_partial_write", "BramAdapterTestComp", "sim_build/py_bram_partial_write", request)
+
+
+def test_bram_adapter_write_burst(request):
+    _run_sim("cocotb_bram_adapter_write_burst", "BramAdapterTestComp", "sim_build/py_bram_write_burst", request)
+
+
+def test_sram_adapter_write_burst(request):
+    _run_sim("cocotb_bram_adapter_write_burst", "SramAsicAdapterTestComp", "sim_build/py_sram_write_burst", request)
+
+
+def test_bram_adapter_write_strobes(request):
+    _run_sim("cocotb_bram_adapter_write_strobes", "BramAdapterTestComp", "sim_build/py_bram_write_strobes", request)
 
 
 def test_ddr_adapter_write(request):

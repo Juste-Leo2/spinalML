@@ -79,13 +79,12 @@ class UartSoC[T <: Data](
       version = version
     )
 
-    // AXI master (read only): accelerator <-> internal BRAM
+    // AXI master: accelerator <-> internal memory (read path + write-back)
     mem.io.axi.ar <> acc.io.axiMaster.ar
     mem.io.axi.r  <> acc.io.axiMaster.r
-    acc.io.axiMaster.aw.ready := mem.io.axi.aw.ready
-    acc.io.axiMaster.w.ready  := mem.io.axi.w.ready
-    acc.io.axiMaster.b.valid  := mem.io.axi.b.valid
-    acc.io.axiMaster.b.payload := mem.io.axi.b.payload
+    mem.io.axi.aw <> acc.io.axiMaster.aw
+    mem.io.axi.w  <> acc.io.axiMaster.w
+    mem.io.axi.b  <> acc.io.axiMaster.b
 
     // Control bus: bridge (master) <-> accelerator AXI-lite slave
     bridge.io.csr <> acc.io.ctrlBus
