@@ -50,6 +50,7 @@ class AxiReadMemFormal extends Component {
   anyseq(dut.io.wrEnable)
   anyseq(dut.io.wrAddr)
   anyseq(dut.io.wrData)
+  anyseq(dut.io.wrStrb)
 
   assumeInitial(clockDomain.isResetActive)
 

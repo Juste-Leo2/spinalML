@@ -42,9 +42,16 @@ class SramAsicAdapter(
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))
   }
 
-  // Write port (Host loader -> SRAM)
+  // Write port (Host loader -> SRAM). Byte strobes expanded to the bit-level
+  // mask of Mem.write so partial-word writes preserve the untouched bytes.
+  val wrBitMask = Bits(axiConfig.dataWidth bits)
+  wrBitMask := 0
+  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
+    wrBitMask(byte * 8 + bit) := io.wrStrb(byte)
+  }
+
   when(io.wrEnable) {
-    sramCore.write(mapIndex(io.wrAddr), io.wrData)
+    sramCore.write(mapIndex(io.wrAddr), io.wrData, mask = wrBitMask)
   }
 
   // ------------------------------------------------------------------

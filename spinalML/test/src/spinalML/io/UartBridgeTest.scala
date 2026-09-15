@@ -129,6 +129,7 @@ case class UartBridgeTestComp(
   mem.io.wrEnable := bridge.io.wrEnable
   mem.io.wrAddr := bridge.io.wrAddr
   mem.io.wrData := bridge.io.wrData
+  mem.io.wrStrb := bridge.io.wrStrb
   mem.io.axi.ar <> io.bram.ar
   mem.io.axi.r <> io.bram.r
   mem.io.axi.aw.valid := io.bram.aw.valid

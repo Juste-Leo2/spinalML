@@ -43,12 +43,14 @@ class DdrAdapter(
   val wPending  = RegInit(False)
   val wrAddrReg = Reg(UInt(32 bits)) init(0)
   val wrDataReg = Reg(Bits(axiConfig.dataWidth bits)) init(0)
+  val wrStrbReg = Reg(Bits(axiConfig.dataWidth / 8 bits)) init(0)
 
   when(io.wrEnable) {
     awPending := True
     wPending  := True
     wrAddrReg := io.wrAddr
     wrDataReg := io.wrData
+    wrStrbReg := io.wrStrb
   }
 
   when(extIo.ddrMaster.aw.fire) {
@@ -74,7 +76,7 @@ class DdrAdapter(
   extIo.ddrMaster.w.valid := wPending
 
   extIo.ddrMaster.w.payload.data := wrDataReg
-  extIo.ddrMaster.w.payload.strb := B((1 << (axiConfig.dataWidth / 8)) - 1, (axiConfig.dataWidth / 8) bits)
+  extIo.ddrMaster.w.payload.strb := wrStrbReg
   extIo.ddrMaster.w.payload.last := True
 
   extIo.ddrMaster.b.ready := True

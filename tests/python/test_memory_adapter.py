@@ -31,6 +31,7 @@ async def reset_adapter(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_aw_valid.value = 0
     dut.io_axi_w_valid.value = 0
     dut.io_axi_b_ready.value = 0
@@ -46,11 +47,12 @@ async def reset_adapter(dut):
     await RisingEdge(dut.clk)
 
 
-async def host_write(dut, addr, data):
+async def host_write(dut, addr, data, strb=0xFF):
     await RisingEdge(dut.clk)
     dut.io_wrEnable.value = 1
     dut.io_wrAddr.value = addr
     dut.io_wrData.value = data
+    dut.io_wrStrb.value = strb
     await RisingEdge(dut.clk)
     dut.io_wrEnable.value = 0
     await RisingEdge(dut.clk)
@@ -185,6 +187,24 @@ async def cocotb_bram_adapter_clamp(dut):
 
 
 @cocotb.test()
+async def cocotb_bram_adapter_partial_write(dut):
+    """Host byte strobes must preserve the untouched bytes of a word."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    sentinel = 0xAABBCCDDEEFF0011
+    await host_write(dut, IMG_BASE, sentinel)
+    # Overwrite the 3 low bytes only (0x332211 -> bytes 0..2).
+    await host_write(dut, IMG_BASE, 0x0000000000332211, strb=0x07)
+
+    data, lasts, ids = await axi_read_burst(dut, IMG_BASE, beats=1, id_val=1)
+    expected = (sentinel & ~0xFFFFFF) | 0x332211
+    check_single_read(data, lasts, ids, expected, 1)
+    print("BramAdapter partial host write honours byte strobes")
+
+
+@cocotb.test()
 async def cocotb_bram_adapter_backpressure(dut):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -209,6 +229,7 @@ async def cocotb_ddr_adapter_write(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_ar_valid.value = 0
     dut.io_axi_r_ready.value = 1
     dut.extIo_ddrMaster_aw_ready.value = 0
@@ -259,6 +280,7 @@ async def cocotb_ddr_adapter_read(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_ar_valid.value = 0
     dut.io_axi_ar_payload_addr.value = 0
     dut.io_axi_ar_payload_len.value = 0
@@ -357,6 +379,10 @@ def test_bram_adapter_clamp(request):
 
 def test_bram_adapter_backpressure(request):
     _run_sim("cocotb_bram_adapter_backpressure", "BramAdapterTestComp", "sim_build/py_bram_backpressure", request)
+
+
+def test_bram_adapter_partial_write(request):
+    _run_sim("cocotb_bram_adapter_partial_write", "BramAdapterTestComp", "sim_build/py_bram_partial_write", request)
 
 
 def test_ddr_adapter_write(request):

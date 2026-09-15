@@ -94,6 +94,7 @@ class UartSoC[T <: Data](
     mem.io.wrEnable := bridge.io.wrEnable
     mem.io.wrAddr   := bridge.io.wrAddr
     mem.io.wrData   := bridge.io.wrData
+    mem.io.wrStrb   := bridge.io.wrStrb
 
     // UART wiring (1-cycle pulse handshake, mirror of top.v)
     rx.io.rx := io.uartRx

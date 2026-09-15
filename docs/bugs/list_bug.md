@@ -654,6 +654,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-02 : Corruption de données lors d'écritures BRAM partielles dans `UartBridge`
+- **Statut** : corrigé (2026-09-15) — `UartBridge` expose désormais un masque d'octets `wrStrb` (bit i = octet i valide) laté par mot : tout-1 pour un mot complet, seuls les octets reçus pour le dernier mot partiel. `MemoryAdapter.io` (donc `BramAdapter`/`AxiReadMem`/`SramAsicAdapter`) reçoit `wrStrb` et le convertit en masque bit-à-bit pour `Mem.write(mask=...)` ; `DdrAdapter` le recopie dans `w.strb` AXI. Test rouge : `test_uart_bridge.py::test_uart_bridge_partial_write` (mot complet 0xAA puis 3 octets au mot suivant : avant fix la queue valait `0xAA…`, après fix elle reste à zéro) et `test_memory_adapter.py::test_bram_adapter_partial_write` (strobes 0x07, octets hauts préservés). Non-régression : `test-all-python -k uart` 3/3, `-k memory_adapter`, `test-all -k MemoryAdapterTest/UartBridgeTest/UartSoCTest`, formels `AxiReadMemFormal` (+ `anyseq(wrStrb)`) et `UartBridgeFormal`.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 226-240)
 - **Code concerné** :
   ```scala

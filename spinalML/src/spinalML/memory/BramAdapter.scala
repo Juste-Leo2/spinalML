@@ -39,9 +39,17 @@ class BramAdapter(
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))
   }
 
-  // Write port (Host/UART -> BRAM)
+  // Write port (Host/UART -> BRAM). The byte strobes are expanded to the
+  // bit-level mask expected by Mem.write, so a partial-word host write only
+  // touches the enabled bytes.
+  val wrBitMask = Bits(axiConfig.dataWidth bits)
+  wrBitMask := 0
+  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
+    wrBitMask(byte * 8 + bit) := io.wrStrb(byte)
+  }
+
   when(io.wrEnable) {
-    mem.write(mapIndex(io.wrAddr), io.wrData)
+    mem.write(mapIndex(io.wrAddr), io.wrData, mask = wrBitMask)
   }
 
   // ------------------------------------------------------------------

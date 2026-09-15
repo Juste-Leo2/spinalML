@@ -308,6 +308,59 @@ async def cocotb_uart_bridge_wide_word(dut):
         f"expected {hex(expected)}")
 
 
+@cocotb.test()
+async def cocotb_uart_bridge_partial_write(dut):
+    """A 'W' whose length is not a multiple of the 64-bit word must not write
+    stale bytes from the previous command into the untouched tail."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+    dut.io_rxIn.value = 1
+    dut.io_bram_ar_valid.value = 0
+    dut.io_bram_r_ready.value = 0
+    await RisingEdge(dut.clk)
+
+    # Seed the bridge word buffer with 0xAA via a full 8-byte write.
+    await script(dut,
+                 b"W" + (0x00010000).to_bytes(4, "little")
+                 + (8).to_bytes(4, "little") + bytes([0xAA] * 8),
+                 capture_symbols=2, n_frames=0)
+    for _ in range(30):
+        await RisingEdge(dut.clk)
+
+    # 3 bytes at the next word: bytes 3..7 must keep their previous value (0).
+    payload = bytes([0x11, 0x22, 0x33])
+    await script(dut,
+                 b"W" + (0x00010008).to_bytes(4, "little")
+                 + (3).to_bytes(4, "little") + payload,
+                 capture_symbols=2, n_frames=0)
+    for _ in range(30):
+        await RisingEdge(dut.clk)
+
+    words = await bram_read(dut, 0x10008, n_beats=1)
+    assert words[0] & 0xFFFFFF == 0x332211, f"payload mismatch: 0x{words[0]:016X}"
+    assert words[0] >> 24 == 0, (
+        f"Stale bytes leaked into the untouched tail: 0x{words[0]:016X}")
+
+
+def test_uart_bridge_partial_write():
+    v_file = run_mill("spinalML.io.UartBridgeTest", "uart_bridge_toplevel", "UartBridgeTestComp")
+    run(
+        simulator="verilator",
+        verilog_sources=[v_file],
+        toplevel="UartBridgeTestComp",
+        module="test_uart_bridge",
+        sim_build="sim_build/py_uart_bridge_partial",
+        testcase="cocotb_uart_bridge_partial_write",
+        timescale="1ns/1ps",
+        extra_args=["-Wno-fatal"],
+    )
+
+
 def test_uart_bridge_wide_word():
     v_file = run_mill("spinalML.io.UartBridgeTest", "WideWord", "UartBridgeWideWordTestComp")
     run(
