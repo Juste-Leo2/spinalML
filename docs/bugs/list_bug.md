@@ -342,6 +342,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 3. Mémoire, Buffers, DMA & Adaptateurs
 
 ### BUG-MEM-01 : Décalage d'unités (battements vs éléments) dans le rognage spatial de `DMAReader2D`
+- **Statut** : corrigé (2026-09-15) — `rowSkip`/`rowKeepEnd` sont désormais latés **en battements de sortie** (`headSkipElems / outLanes` et `(headSkipElems + rowWidth) / outLanes - 1`, division exacte sous le contrat « lignes alignées au groupe ») au lieu d'éléments comparés à `elemCnt` (battements). Test rouge : `DMAReader2DTest` « DMAReader2D outLanes=4 with unaligned row starts » (base 0x1004, stride 12, I8, outLanes=4 → 16/32 éléments avant fix, timeout ; 32/32 après). Formel renforcé : `DMAReader2DFormal` exprime `rowSkip`/`rowKeepEnd`/comptage en battements et une variante `Lanes2Aligned` (base/stride 2 octets alignés, skip non nul couvert) a été ajoutée ; `test-all-formal -k DMAReader2DFormal` passe. Non-régression : `DMAReader2DTest` 3/3, `test_dma_reader2d.py`, `SequentialTest`.
 - **Fichier** : `spinalML/src/spinalML/memory/DMAReader2D.scala` (lignes 152-156)
 - **Code concerné** :
   ```scala
