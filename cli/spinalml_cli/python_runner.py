@@ -87,6 +87,16 @@ def run_all_python_tests(
         log_dir = project_root / "out" / "python_reports"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # DEBUG_MATH: a full CLI run starts from a fresh math log. Each test file
+    # is then launched as its own pytest process and appends to it, so lines
+    # from previous files must never be truncated mid-run.
+    if debug_math:
+        math_log = project_root / "tests" / "true_math_errors.log"
+        try:
+            math_log.unlink()
+        except OSError:
+            pass
+
     # Prevent VPATH ../verilator.o pollution: ensure no orphan object files exist at sim_build root
     sim_build_root = project_root / "sim_build"
     if sim_build_root.exists():

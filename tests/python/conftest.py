@@ -7,7 +7,6 @@ import time
 
 import pytest
 
-from utils.math_metrics import clear_math_log
 
 # Ensure cli/ is on sys.path for spinalml_cli imports
 cli_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "cli"))
@@ -43,7 +42,6 @@ def pytest_sessionstart(session):
     random.seed(seed)
     if session.config.getoption("--debug-math"):
         os.environ["DEBUG_MATH"] = "1"
-        clear_math_log()
 
     if sys.platform == "win32":
         import warnings
