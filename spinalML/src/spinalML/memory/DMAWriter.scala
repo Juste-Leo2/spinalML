@@ -188,11 +188,11 @@ case class DMAWriter[T <: Data](
   io.axiMaster.aw.qos    := 0
   io.axiMaster.aw.region := 0
 
-  when(io.axiMaster.aw.fire) {
+  val awFire = io.axiMaster.aw.fire
+  when(awFire) {
     addrReg     := addrReg + (burstLen << log2Up(bytesPerBeat)).resize(axiConfig.addressWidth)
     remaining   := remaining - burstLen
     burstRemain := burstLen.resized
-    pendingB    := pendingB + 1
   }
 
   // =========================================================================
@@ -216,7 +216,12 @@ case class DMAWriter[T <: Data](
   io.axiMaster.b.ready := True
 
   val bFire = io.axiMaster.b.fire
-  when(bFire) {
+  // AW and B may fire in the same cycle (a new burst issued while the previous
+  // response arrives); the two effects must cancel instead of clobbering each
+  // other, otherwise pendingB underflows on the following response.
+  when(awFire && !bFire) {
+    pendingB := pendingB + 1
+  } elsewhen (bFire && !awFire) {
     pendingB := pendingB - 1
   }
 

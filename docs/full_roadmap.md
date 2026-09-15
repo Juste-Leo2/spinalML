@@ -195,11 +195,11 @@ Mandatory structural refactoring of existing modules before adding any new visio
   - **Action**: Propagate SIMD parallelism (`lanes: Int`) across the entire datapath, automatically inserting `Repack` (gearbox) modules wherever bus widths differ between consecutive stages.
   - **Success Criteria**: Bit-exact execution verified for `lanes = 1, 2, 4, 8` across all universal test suites.
 
-- [ ] **Refactoring 1.5: Enable AXI Master Write Channels (`DMAWriter`)**
+- [x] **Refactoring 1.5: Enable AXI Master Write Channels (`DMAWriter`)**
   - **Impacted file**: [`spinalML/src/spinalML/Accelerator.scala:L60-65`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala#L60-L65)
   - **Problem**: The current accelerator hardwires its write channels inactive (`aw.valid := False`, `w.valid := False`). It operates exclusively as a read-only master, making it impossible to spill intermediate activation maps to external RAM.
   - **Action**: Develop the counterpart `DMAWriter` module, aggregating outgoing tensor streams into standard AXI4 bursts (up to 256 beats) directed to external RAM.
-  - **Success Criteria**: Cocotb / Verilator co-simulation test validating bit-exact, full-tensor write-back to external memory.
+  - **Success Criteria**: Cocotb / Verilator co-simulation test validating bit-exact, full-tensor write-back to external memory. **DONE (Sep 2026)**: [`tests/python/test_dma_writer.py`](../tests/python/test_dma_writer.py) covers a plain burst, a 4 KiB boundary split and random AW/W/B backpressure, on top of the Scala `DMAWriterTest` / `AcceleratorTest` benches and the `DMAWriterFormal` proof.
 
 ---
 
