@@ -237,6 +237,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-08 : Corruption des canaux dans `CumSumOp` lorsque la dimension $C$ n'est pas multiple de `lanes`
+- **Statut** : faux positif (vérifié le 2026-09-15) — le contrat de streaming du projet rembourre **chaque ligne** à `ceil(C/lanes)` battements (même contrat que `MatmulDynPad`, `test_matmul.py`), et `CumSumOp` compte précisément `chunks` battements par ligne avec un `Delay(chunks)` : l'alignement de voie est donc préservé pour `C % lanes != 0`. Test ajouté : `CumsumTest.scala` (« CumSum with C=5, lanes=4 on per-row padded beats », valeurs par ligne vérifiées, passe). Un `require(C % lanes == 0)` casserait ce contrat légitime.
 - **Fichier** : `spinalML/src/spinalML/ops/cumsum.scala` (lignes 21, 47-58)
 - **Code concerné** :
   ```scala
@@ -254,6 +255,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-09 : Désynchronisation inter-lignes dans `MatMulOp` (mode séquentiel) lorsque $K \pmod{lanes} \ne 0$
+- **Statut** : faux positif (vérifié le 2026-09-15) — le rembourrage par ligne est le contrat d'entrée : le driver de `test_matmul.py` zéro-remplit chaque ligne (`k_idx >= K -> 0.0`) et le test `test_matmul_dyn_pad_*` (K=3, lanes=2) passe déjà ; le RTL masque explicitement les lanes de padding (`matmul.scala:248`). Ajouter `require(K % lanes == 0)` casserait ce test valide.
 - **Fichier** : `spinalML/src/spinalML/ops/matmul.scala` (lignes 232-249, 321-328)
 - **Code concerné** :
   ```scala
@@ -288,6 +290,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-11 : Interprétation signée erronée de l'exposant (`intoSInt`) provoquant un faux débordement dans `ReciprocalOp`
+- **Statut** : faux positif (vérifié le 2026-09-15) — dans SpinalHDL 1.15.0, `UInt.intoSInt = this.expand.asSInt` et `expand` **préfixe un 0** (`core/UInt.scala:397/399`) : l'exposant biaisé est donc zéro-étendu, ce qui est le comportement correct. Les tests BF16 `1/2.0`, `1/50.0` passent. Ne pas « corriger » en `asSInt` (ce serait le bug). Preuve du piège inverse : BUG-OPS-01, où `intoSInt` est appliqué à une valeur déjà en complément à 2.
 - **Fichier** : `spinalML/src/spinalML/ops/reciprocal.scala` (lignes 66-74)
 - **Code concerné** :
   ```scala
@@ -568,6 +571,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-04 : Absence de garde-fou sur `dmaCmd.length` dans `Accelerator.scala` (risque de troncature 16 bits)
+- **Statut** : faux positif (vérifié le 2026-09-15) — `U(valeur, width)` **lève une exception** si la valeur ne tient pas dans la largeur (`core/internals/Expression.scala:2457`, « literal ... can't fit in UInt(...) ») : il n'y a pas de troncature silencieuse. Un `require(totalOutBeats <= 65536 && > 0)` reste une amélioration de message d'erreur possible (non appliquée).
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (ligne 164)
 - **Code concerné** :
   ```scala
@@ -736,6 +740,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 8. Utilitaires & DSL
 
 ### BUG-DSL-01 : Indexation erronée des connexions résiduelles dans `DagDSL.residual`
+- **Statut** : faux positif (vérifié le 2026-09-15) — le contrat documenté (`DagDSL.scala:8-18`) exige `base` = nœud d'entrée = fin courante au moment de l'appel, et l'unique usage (`tests/universal/UniversalTransformerDemo.scala:26,31`) le respecte. La formule `base + branch.length` est correcte sous ce contrat ; le risque n'existe que si un appelant passe un `base` antérieur à la fin courante (usage hors contrat).
 - **Fichier** : `spinalML/src/spinalML/nn/DagDSL.scala` (ligne 31)
 - **Code concerné** :
   ```scala

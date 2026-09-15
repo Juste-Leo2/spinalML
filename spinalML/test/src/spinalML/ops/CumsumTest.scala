@@ -21,6 +21,17 @@ case class CumsumTestComp[T <: Data](dataType: HardType[T]) extends Component {
   io.out <> spinalML.ops.cumsum(io.in)
 }
 
+// C = 5 with lanes = 4: each row occupies ceil(C/lanes) = 2 padded beats
+// (project-wide per-row padded stream contract, same as MatmulDynPad).
+case class CumsumUnalignedTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val in = slave(Tensor(dataType, Seq(2, 5), lanes = 4))
+    val out = master(Tensor(dataType, Seq(2, 5), lanes = 4))
+  }
+
+  io.out <> spinalML.ops.cumsum(io.in)
+}
+
 class CumsumTest extends AnyFunSuite {
   test("Test streaming CumSum operation on I8 tensors") {
     SimConfig.withWave.compile(CumsumTestComp(I8())).doSim { dut =>
@@ -64,6 +75,47 @@ class CumsumTest extends AnyFunSuite {
   for ((name, dt) <- compileTypes) {
     test(s"Test CumSum compilation on $name") {
       SpinalConfig().generateVerilog(CumsumTestComp(dt()))
+    }
+  }
+
+  test("CumSum with C=5, lanes=4 on per-row padded beats") {
+    SimConfig.withWave.compile(CumsumUnalignedTestComp(I8())).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.in.stream.valid #= false
+      dut.io.out.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      val inBeats = Seq(
+        Seq(1, 2, 3, 4),
+        Seq(5, 0, 0, 0),
+        Seq(10, 20, 30, 40),
+        Seq(50, 0, 0, 0)
+      )
+      val expected = Seq(
+        Seq(1, 2, 3, 4),
+        Seq(5, 0, 0, 0),
+        Seq(11, 22, 33, 44),
+        Seq(55, 0, 0, 0)
+      )
+
+      fork {
+        for (b <- inBeats) {
+          dut.io.in.stream.valid #= true
+          for (i <- 0 until 4) dut.io.in.stream.payload(i) #= b(i)
+          dut.clockDomain.waitSamplingWhere(dut.io.in.stream.ready.toBoolean)
+        }
+        dut.io.in.stream.valid #= false
+      }
+
+      for (b <- expected) {
+        dut.clockDomain.waitSamplingWhere(dut.io.out.stream.valid.toBoolean)
+        for (i <- 0 until 4) {
+          assert(dut.io.out.stream.payload(i).toInt == b(i),
+            s"lane $i: got ${dut.io.out.stream.payload(i).toInt}, expected ${b(i)}")
+        }
+      }
+      dut.clockDomain.waitSampling(2)
     }
   }
 }
