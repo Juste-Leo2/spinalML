@@ -120,6 +120,23 @@ class DMAWriterFormal extends Component {
   // ==========================================
   // 5. RESPONSE ACCOUNTING
   // ==========================================
+  // Independent B counter: pendingB must always equal (accepted AWs - received
+  // Bs) for the current command. This catches the simultaneous AW/B collision
+  // class of bug that the response assumption above would otherwise mask (a
+  // lost increment makes pendingB underflow on the next response).
+  val bCnt = Reg(UInt(8 bits)) init (0)
+  when(dut.io.cmd.fire) {
+    bCnt := 0
+  } elsewhen (dut.io.axiMaster.b.fire) {
+    bCnt := bCnt + 1
+  }
+
+  when(pastValid()) {
+    assert(pendingB.resize(9 bits) + bCnt.resize(9 bits) === awIdx.resize(9 bits))
+  }
+
+  cover(dut.io.axiMaster.aw.fire && dut.io.axiMaster.b.fire)
+
   when(dut.io.done) {
     assert(remaining === 0)
     assert(burstRemain === 0)

@@ -161,6 +161,7 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
   * Preuve formelle SymbiYosys / BMC validée ([`DMAWriterFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/memory/DMAWriterFormal.scala) & [`AcceleratorFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/nn/AcceleratorFormal.scala)).
   * Banc de test Verilator unitaire validé ([`DMAWriterTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/memory/DMAWriterTest.scala)).
   * Banc d'intégration SoC validé avec vérification mémoire bit-exacte sous Verilator ([`AcceleratorTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/nn/AcceleratorTest.scala)).
+  * Co-simulation Python/Cocotb validée ([`test_dma_writer.py`](file:///e:/spinalML/tests/python/test_dma_writer.py)) — burst simple, découpage à la frontière 4 Ko, backpressure AW/W/B — c'est le critère de succès explicite de la roadmap. Elle a mis en évidence un bug RTL subtil : quand un nouveau `AW` et une réponse `B` tombent le même cycle, l'incrément de `pendingB` était écrasé par le décrément (dernière affectation Verilog gagnante), puis le compteur sous-débordait à `0xFF` à la réponse suivante, bloquant `busy`/`done`. Corrigé dans [`DMAWriter.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/DMAWriter.scala) (cas mutuellement exclusifs, effets simultanés qui s'annulent).
 
 ---
 
@@ -198,6 +199,7 @@ Cast(FP8_E4M3(), runtimeScale = true),
   3. Au démarrage, [`inference.py`](file:///e:/spinalML/examples/Mnist/inference.py) lit le coefficient `convScale` depuis le fichier de métadonnées [`Mnist_weights.npz`](file:///e:/spinalML/examples/Mnist/Mnist_weights.npz) et l'écrit dynamiquement dans le registre `0x30` via la commande UART `C`.
   4. Le test universel bit-exact sous Verilator (`python cli/main.py test examples/Mnist/Model.scala`) est validé à 100% avec une déviation de 0.000.
   5. Aucun nombre magique ne réside plus dans le code Scala du modèle.
+  6. Le port `runtimeScalePort` est validé dynamiquement par co-simulation Python/Cocotb ([`test_cast_runtime.py`](file:///e:/spinalML/tests/python/test_cast_runtime.py)) : scales statiques (1.0, 0.5, 2.0, −1.0, 0.0…), changements de scale en cours de flux, et vérification que seuls les bits bas `expBits+mantBits+1` de `io_scale` sont décodés.
 
 ---
 
