@@ -77,6 +77,7 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
 * **Critère de succès** :
   * Réduction drastique des FFs en synthèse Yosys (inférence de BRAM words).
   * Exécution bit-exacte des tests : `.venv/Scripts/python.exe cli/main.py mill spinalML.test.testOnly spinalML.ops.Im2ColTest`.
+  * Co-simulation Python/Cocotb du primitif extrait ([`test_line_buffer2d.py`](file:///e:/spinalML/tests/python/test_line_buffer2d.py)) : délai exact de `depth`, gaps de `valid` aléatoires, I8/I16, chemin registre `depth = 1`, et variant `withMemInit = true` (priming à zéro). Le test direct complète la preuve formelle [`LineBuffer2DFormal.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/symbolicTest/memory/LineBuffer2DFormal.scala) et le banc [`LineBuffer2DTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/memory/LineBuffer2DTest.scala) (qui expose désormais les tops Verilog pour la co-simulation).
 
 ---
 

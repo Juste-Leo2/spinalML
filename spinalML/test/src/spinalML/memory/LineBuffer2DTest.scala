@@ -170,4 +170,19 @@ class LineBuffer2DTest extends AnyFunSuite {
       assert(received.take(5) == expected)
     }
   }
+
+  test("Generate Verilog for Python co-simulation") {
+    def emit[T <: Data](dataType: HardType[T], depth: Int, withMemInit: Boolean, name: String): Unit = {
+      SpinalConfig().generateVerilog {
+        val dut = LineBuffer2D(dataType, depth, withMemInit)
+        dut.setDefinitionName(name)
+        dut
+      }
+    }
+
+    emit(I8(), 4, withMemInit = false, "LineBuffer2DTestComp")
+    emit(I16(), 4, withMemInit = false, "LineBuffer2DI16TestComp")
+    emit(I8(), 1, withMemInit = false, "LineBuffer2DDepth1TestComp")
+    emit(I8(), 4, withMemInit = true, "LineBuffer2DInitTestComp")
+  }
 }
