@@ -16,7 +16,7 @@ Covers, in one long session (reference protocol, see docs/uart_bridge.md):
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb_test.simulator import run
 
 from utils.tb_utils import run_mill
@@ -213,6 +213,58 @@ def test_uart_bridge_scenario():
         module="test_uart_bridge",
         sim_build="sim_build/py_uart_bridge",
         testcase="cocotb_uart_bridge",
+        timescale="1ns/1ps",
+        extra_args=["-Wno-fatal"],
+    )
+
+
+@cocotb.test()
+async def cocotb_uart_bridge_wide_csr(dut):
+    """A C-command address wider than 8 bits must reach the CSR slave intact
+    (csrAddrWidth generic), instead of being truncated to addr[7:0]."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+    dut.io_rxIn.value = 1
+    dut.io_bram_ar_valid.value = 0
+    dut.io_bram_r_ready.value = 0
+    await RisingEdge(dut.clk)
+
+    aw_addrs = []
+
+    async def csr_aw_monitor():
+        while True:
+            await ReadOnly()
+            if int(dut.io_csrAwValidO.value):
+                aw_addrs.append(int(dut.io_csrAwAddrO.value))
+            await RisingEdge(dut.clk)
+
+    monitor = cocotb.start_soon(csr_aw_monitor())
+
+    wide_addr = 0x123
+    await script(dut,
+                 b"C" + wide_addr.to_bytes(4, "little") + (0x00000001).to_bytes(4, "little"),
+                 capture_symbols=2, n_frames=0)
+
+    monitor.kill()
+    assert wide_addr in aw_addrs, (
+        f"CSR AW address truncated: saw {[hex(a) for a in aw_addrs]}, "
+        f"expected 0x{wide_addr:X}")
+
+
+def test_uart_bridge_wide_csr():
+    v_file = run_mill("spinalML.io.UartBridgeTest", "WideCsr", "UartBridgeWideCsrTestComp")
+    run(
+        simulator="verilator",
+        verilog_sources=[v_file],
+        toplevel="UartBridgeWideCsrTestComp",
+        module="test_uart_bridge",
+        sim_build="sim_build/py_uart_bridge_wide_csr",
+        testcase="cocotb_uart_bridge_wide_csr",
         timescale="1ns/1ps",
         extra_args=["-Wno-fatal"],
     )

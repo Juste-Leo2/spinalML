@@ -166,7 +166,7 @@ class UartBridge(
       when(io.rx.valid) {
         valReg := shiftIn(io.rx.payload, valReg)
         when(byteCnt === 3) {
-          csrAwAddrR := addrReg(7 downto 0)
+          csrAwAddrR := addrReg.resize(csrAddrWidth)
           csrWDataR  := shiftIn(io.rx.payload, valReg)
           csrAwValidR := True
           csrWValidR  := True

@@ -681,6 +681,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-04 : Tronquage statique d'adresse CSR dans `UartBridge`
+- **Statut** : corrigé — le mode de défaillance réel n'est pas une troncature silencieuse mais une **erreur d'élaboration** (`WIDTH MISMATCH`) dès que `csrAddrWidth != 8` : `addrReg(7 downto 0)` (8 bits) est assigné à `csrAwAddrR` de largeur `csrAddrWidth`. Fix : `csrAwAddrR := addrReg.resize(csrAddrWidth)`. Tests : nouveau top `UartBridgeWideCsrTestComp` (csrAddrWidth = 12, généré par `UartBridgeTest.scala`) + `tests/python/test_uart_bridge.py::test_uart_bridge_wide_csr` (C-commande vers 0x123, moniteur AW ; rouge avant par échec d'élaboration) ; non-régression `test_uart_bridge.py` 2/2 et Scala `UartSoCTest` 2/2.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (ligne 169)
 - **Code concerné** :
   ```scala
