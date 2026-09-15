@@ -260,6 +260,13 @@ def infer_on_hardware(raw_bytes: bytes, port: str = DEFAULT_PORT, baud: int = DE
         ser.flush()
         time.sleep(0.002)
 
+        # CSR 0x30: Runtime Dequantization Scale (FP8 E4M3 encoded)
+        if MODEL_DATA and "convScale" in MODEL_DATA:
+            scale_code = encode_e4m3(MODEL_DATA["convScale"])
+            ser.write(bytes([CMD_CSR_WRITE]) + struct.pack("<II", 0x30, scale_code))
+            ser.flush()
+            time.sleep(0.002)
+
         # CSR 0x00: Trigger Inference (start pulse)
         ser.write(bytes([CMD_CSR_WRITE]) + struct.pack("<II", 0x00, 0x01))
         ser.flush()

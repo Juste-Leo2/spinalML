@@ -97,12 +97,15 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
 }
 
 object transpose {
-  def apply[T <: Data](a: Tensor[T]): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], outLanes: Int = -1): Tensor[T] = {
     require(a.shape.length == 2, "Transpose currently only supports 2D tensors")
     val M = a.shape(0)
     val N = a.shape(1)
-    val comp = TransposeOp(a.dataType, M, N, a.lanes)
-    comp.io.a <> a
-    comp.io.c
+    val in = if (a.lanes != 1) repack(a, 1) else a
+    val comp = TransposeOp(in.dataType, M, N, 1)
+    comp.io.a <> in
+    val rawC = comp.io.c
+    val finalLanes = if (outLanes > 0) outLanes else in.lanes
+    if (rawC.lanes != finalLanes) repack(rawC, finalLanes) else rawC
   }
 }

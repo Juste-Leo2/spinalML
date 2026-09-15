@@ -11,16 +11,30 @@ import spinalML.ops._
  * Conv2DLayer: A 2D Convolutional Layer (Single Input/Output Channel).
  * Formula: Y = Conv2D(X, W) + b
  */
-case class Conv2DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc], H: Int, W_in: Int, inChannels: Int, outChannels: Int, K: Int, outLanes: Int, tileSize: Int = 1024, parallelN: Boolean = false, temporal: Int = 0) extends Component {
+case class Conv2DLayer[T <: Data, TAcc <: Data](
+  dataType: HardType[T],
+  accType: HardType[TAcc],
+  H: Int,
+  W_in: Int,
+  inChannels: Int,
+  outChannels: Int,
+  K: Int,
+  outLanes: Int,
+  tileSize: Int = 1024,
+  parallelN: Boolean = false,
+  temporal: Int = 0,
+  inLanes: Int = 1,
+  convOutLanes: Int = 1
+) extends Component {
   val H_out = H - K + 1
   val W_out = W_in - K + 1
   val totalWindows = H_out * W_out
 
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(H, W_in, inChannels), lanes = 1)) // Input Image [H, W, C]
+    val x = slave(Tensor(dataType, Seq(H, W_in, inChannels), lanes = inLanes)) // Input Image [H, W, C]
     val w = slave(Tensor(dataType, Seq(K * K * inChannels, outChannels), lanes = outLanes)) // Kernel Weights
     val b = slave(Tensor(accType, Seq(1, outChannels), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(H_out, W_out, outChannels), lanes = 1)) // Output Image
+    val y = master(Tensor(accType, Seq(H_out, W_out, outChannels), lanes = convOutLanes)) // Output Image
     // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
     val reArm = in Bool()
   }
@@ -37,11 +51,25 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](dataType: HardType[T], accType: 
   val biasAdded = bias_add(matmulResult, io.b)
 
   // 4. Reshape to 3D [H_out, W_out, outChannels]
-  io.y <> reshape(biasAdded, Seq(H_out, W_out, outChannels))
+  val reshaped = reshape(biasAdded, Seq(H_out, W_out, outChannels))
+  if (convOutLanes == reshaped.lanes) {
+    io.y <> reshaped
+  } else {
+    io.y <> repack(reshaped, convOutLanes)
+  }
 }
 
 object Conv2D {
-  def apply[T <: Data, TAcc <: Data](x: Tensor[T], w: Tensor[T], b: Tensor[TAcc], accType: HardType[TAcc], parallelN: Boolean = false, reArm: Option[Bool] = None, temporal: Int = 0): Tensor[TAcc] = {
+  def apply[T <: Data, TAcc <: Data](
+    x: Tensor[T],
+    w: Tensor[T],
+    b: Tensor[TAcc],
+    accType: HardType[TAcc],
+    parallelN: Boolean = false,
+    reArm: Option[Bool] = None,
+    temporal: Int = 0,
+    outLanes: Int = 1
+  ): Tensor[TAcc] = {
     val inChannels = if (x.shape.length == 3) x.shape(2) else 1
     val outChannels = w.shape(1)
 
@@ -50,7 +78,11 @@ object Conv2D {
     val K = Math.sqrt(K2).toInt
     require(K * K * inChannels == K2C, "Kernel weights shape must be K*K*inChannels")
 
-    val comp = Conv2DLayer(x.dataType, accType, x.shape(0), x.shape(1), inChannels, outChannels, K, outLanes = w.lanes, tileSize = K2C, parallelN = parallelN, temporal = temporal)
+    val comp = Conv2DLayer(
+      x.dataType, accType, x.shape(0), x.shape(1), inChannels, outChannels, K,
+      outLanes = w.lanes, tileSize = K2C, parallelN = parallelN, temporal = temporal,
+      inLanes = x.lanes, convOutLanes = outLanes
+    )
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.x <> x
     comp.io.w <> w

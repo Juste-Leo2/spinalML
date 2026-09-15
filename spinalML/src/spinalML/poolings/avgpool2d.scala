@@ -6,6 +6,8 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
+import spinalML.ops.repack
+import spinalML.memory.LineBuffer2D
 
 /**
  * AvgPool2DOp: 2D Average Pooling with multi-channel support.
@@ -31,11 +33,15 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
   }
 
   // Line buffers: buffer i delays its input by (i+1) full rows (depth beats each)
-  val lineBuffers: Seq[LineBuffer2D[T]] = Seq.tabulate(K - 1) { i =>
-    val lb = LineBuffer2D(dataType, depth)
-    lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else lineBuffers(i - 1).io.pop.payload)
-    lb.io.push.valid := io.a.stream.fire
-    lb
+  val lineBuffers: Seq[LineBuffer2D[T]] = {
+    val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
+    for (i <- 0 until K - 1) {
+      val lb = LineBuffer2D(dataType, depth)
+      lb.io.push.payload := (if (i == 0) io.a.stream.payload(0) else bufs(i - 1).io.pop.payload)
+      lb.io.push.valid := io.a.stream.fire
+      bufs += lb
+    }
+    bufs.toSeq
   }
 
   // Column assembly: partial latches per beat (channel index fastest)
@@ -187,10 +193,10 @@ object avgpool2d {
   def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
     require(a.shape.length >= 2 && a.shape.length <= 3, "AvgPool2D expects a 2D [H, W] or 3D [H, W, channels] tensor")
     val C = if (a.shape.length == 3) a.shape(2) else 1
-    require(a.lanes == 1, s"AvgPool2D input must have lanes = 1")
+    val in = if (a.lanes != 1) repack(a, 1) else a
 
-    val comp = AvgPool2DOp(a.dataType, a.shape(0), a.shape(1), C, poolSize, stride)
-    comp.io.a <> a
+    val comp = AvgPool2DOp(in.dataType, in.shape(0), in.shape(1), C, poolSize, stride)
+    comp.io.a <> in
     comp.io.c
   }
 }

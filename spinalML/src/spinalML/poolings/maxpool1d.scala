@@ -6,6 +6,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
+import spinalML.ops.repack
 
 case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, poolSize: Int, stride: Int) extends Component {
   require(L >= poolSize, "Sequence length L must be >= poolSize")
@@ -118,13 +119,15 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
 }
 
 object maxpool1d {
-  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int, outLanes: Int = -1): Tensor[T] = {
     require(a.shape.length == 2, "MaxPool1D expects a 2D tensor [L, channels]")
     val channels = a.shape(1)
-    require(a.lanes == channels, s"MaxPool1D input must have lanes = channels ($channels)")
+    val in = if (a.lanes != channels) repack(a, channels) else a
     
-    val comp = MaxPool1DOp(a.dataType, a.shape(0), channels, poolSize, stride)
-    comp.io.a <> a
-    comp.io.c
+    val comp = MaxPool1DOp(in.dataType, in.shape(0), channels, poolSize, stride)
+    comp.io.a <> in
+    val rawC = comp.io.c
+    val finalLanes = if (outLanes > 0) outLanes else channels
+    if (rawC.lanes != finalLanes) repack(rawC, finalLanes) else rawC
   }
 }

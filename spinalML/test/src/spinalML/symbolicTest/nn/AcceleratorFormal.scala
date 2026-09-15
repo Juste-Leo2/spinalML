@@ -46,6 +46,11 @@ class AcceleratorFormal extends Component {
   dut.io.axiMaster.r.payload.resp := 0
   dut.io.axiMaster.r.payload.id := 0
 
+  dut.io.axiMaster.aw.ready := False
+  dut.io.axiMaster.w.ready := False
+  dut.io.axiMaster.b.valid := False
+  dut.io.axiMaster.b.payload.assignDontCare()
+
   anyseq(dut.io.outStream.stream.ready)
 
   assumeInitial(clockDomain.isResetActive)
@@ -67,15 +72,21 @@ class AcceleratorFormal extends Component {
   val imgBaseOffset  = dut.imgBaseOffset.pull()
   val frameDone      = dut.frameDone.pull()
   val startEventFire = dut.startEvent.fire.pull()
+  val writeToDdr     = dut.writeToDdr.pull()
+
+  // AcceleratorFormal verifies the standard read-only inference control plane
+  assume(!writeToDdr)
 
   // ==========================================
   // SAFETY PROPERTIES (SoC Control Contracts)
   // ==========================================
 
-  // 1. DDR Read-Only Invariant: AW and W channels must NEVER be active
-  assert(dut.io.axiMaster.aw.valid === False, "Accelerator illegally attempted DDR write address")
-  assert(dut.io.axiMaster.w.valid === False, "Accelerator illegally attempted DDR write data")
-  assert(dut.io.axiMaster.b.ready === False, "Accelerator illegally asserted write response ready")
+  // 1. DDR Read-Only Invariant: AW and W channels must NEVER be active in read-only mode
+  when(!writeToDdr) {
+    assert(dut.io.axiMaster.aw.valid === False, "Accelerator illegally attempted DDR write address")
+    assert(dut.io.axiMaster.w.valid === False, "Accelerator illegally attempted DDR write data")
+    assert(dut.io.axiMaster.b.ready === False, "Accelerator illegally asserted write response ready")
+  }
 
   // 2. Start Handshake: Once startEvent fires into the datapath, startPending must clear
   when(pastValid() && past(startEventFire)) {

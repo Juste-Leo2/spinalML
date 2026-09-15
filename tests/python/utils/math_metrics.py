@@ -79,14 +79,14 @@ def format_metrics_line(op_name, dtype_name, metrics, is_floatml, label="Test", 
     return line
 
 def log_math_line(line):
-    """Write a line to the centralized math log (only when DEBUG_MATH=1)."""
+    """Append a line to the centralized math log (only when DEBUG_MATH=1).
+
+    Append mode is mandatory: the Python runner launches pytest file-by-file,
+    so every test file must preserve the lines written by the previous ones.
+    The log is truncated once per full `test-all-python --debug-math` run by
+    the CLI runner (see cli/spinalml_cli/python_runner.py).
+    """
     if os.environ.get("DEBUG_MATH") == "1":
         with open(_MATH_LOG_PATH, "a") as f:
             f.write(line + "\n")
     return line
-
-def clear_math_log():
-    """Truncate the centralized math log (only when DEBUG_MATH=1)."""
-    if os.environ.get("DEBUG_MATH") == "1":
-        with open(_MATH_LOG_PATH, "w"):
-            pass

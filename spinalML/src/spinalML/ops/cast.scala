@@ -25,12 +25,14 @@ case class CastOp[TIn <: Data, TOut <: Data](
   dataTypeOut: HardType[TOut],
   shape: Seq[Int],
   lanes: Int,
-  scales: Seq[Double] = Seq(1.0)
+  scales: Seq[Double] = Seq(1.0),
+  runtimeScale: Boolean = false
 ) extends Component {
 
   val io = new Bundle {
     val a = slave(Tensor(dataTypeIn, shape, lanes))
     val c = master(Tensor(dataTypeOut, shape, lanes))
+    val runtimeScaleVal = if (runtimeScale) in Bits(32 bits) else null
   }
 
   // Pass through the stream control signals
@@ -38,31 +40,38 @@ case class CastOp[TIn <: Data, TOut <: Data](
 
   val totalBeats = (shape.product + lanes - 1) / lanes
   require(
-    scales.length == 1 || scales.length == totalBeats,
+    runtimeScale || scales.length == 1 || scales.length == totalBeats,
     s"scales must have length 1 (per-tensor) or $totalBeats (per-channel), got ${scales.length}"
   )
 
-  val useScale = !(scales.length == 1 && scales(0) == 1.0)
+  val useScale = runtimeScale || !(scales.length == 1 && scales(0) == 1.0)
 
   // Beat counter to select the per-channel scale (stream beat order)
-  val beatCounter = if (useScale && scales.length > 1) Some(Counter(totalBeats)) else None
+  val beatCounter = if (!runtimeScale && useScale && scales.length > 1) Some(Counter(totalBeats)) else None
 
-  // Elaboration-time scale constants (selected once, shared by all lanes).
+  // Elaboration-time or runtime scale constants.
   // Only built when a scale is actually requested; SInt -> SInt casts skip it.
   val scaleHw: Option[FloatML] = if (!useScale) None else Some {
     val (expBitsOut, mantBitsOut) = dataTypeOut() match {
       case f: FloatML => (f.expBits, f.mantBits)
       case _ => throw new Exception("CastOp with scales requires a FloatML output type")
     }
-    val scaleLits = scales.map(s => spinalML.utils.Float.fromDouble(s, expBitsOut, mantBitsOut))
-    beatCounter match {
-      case Some(cnt) =>
-        var acc: FloatML = scaleLits.head
-        scaleLits.zipWithIndex.tail.foreach { case (lit, idx) =>
-          acc = Mux(cnt.value === U(idx), lit, acc)
-        }
-        acc
-      case None => scaleLits.head
+    if (runtimeScale) {
+      val fl = FloatML(expBitsOut, mantBitsOut)
+      val totalBits = expBitsOut + mantBitsOut + 1
+      fl.assignFromBits(io.runtimeScaleVal(totalBits - 1 downto 0))
+      fl
+    } else {
+      val scaleLits = scales.map(s => spinalML.utils.Float.fromDouble(s, expBitsOut, mantBitsOut))
+      beatCounter match {
+        case Some(cnt) =>
+          var acc: FloatML = scaleLits.head
+          scaleLits.zipWithIndex.tail.foreach { case (lit, idx) =>
+            acc = Mux(cnt.value === U(idx), lit, acc)
+          }
+          acc
+        case None => scaleLits.head
+      }
     }
   }
 
@@ -93,9 +102,18 @@ case class CastOp[TIn <: Data, TOut <: Data](
 }
 
 object cast {
-  def apply[TIn <: Data, TOut <: Data](a: Tensor[TIn], dataTypeOut: HardType[TOut], scales: Seq[Double] = Seq(1.0)): Tensor[TOut] = {
-    val castComp = CastOp(a.dataType, dataTypeOut, a.shape, a.lanes, scales)
+  def apply[TIn <: Data, TOut <: Data](
+    a: Tensor[TIn],
+    dataTypeOut: HardType[TOut],
+    scales: Seq[Double] = Seq(1.0),
+    runtimeScalePort: Option[Bits] = None
+  ): Tensor[TOut] = {
+    val useRuntime = runtimeScalePort.isDefined
+    val castComp = CastOp(a.dataType, dataTypeOut, a.shape, a.lanes, scales, runtimeScale = useRuntime)
     castComp.io.a <> a
+    if (useRuntime) {
+      castComp.io.runtimeScaleVal := runtimeScalePort.get
+    }
     castComp.io.c
   }
 }

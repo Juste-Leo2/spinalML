@@ -1,12 +1,13 @@
 // Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
-package spinalML.dsp
+package spinalML.primitives.gowin
 
 import spinal.core._
 
 /**
  * SpinalHDL BlackBox wrapper for Gowin GW1N/GW2A/GW5A hard DSP macro (MULT18X18).
  *
+ * Layer 3 Physical Silicon Primitive.
  * Provides physical hardware mapping for signed/unsigned 18x18 multiplication.
  * To avoid the physical Gowin silicon signedness bug identified in open-source
  * bitstream flows, OUT_REG is configured to 1 (clocked mode).

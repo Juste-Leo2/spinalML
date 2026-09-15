@@ -38,7 +38,8 @@ case class Sequential(
   // > 0 = each row is drained as soon as it completes and the table shrinks
   // to <= min(temporal, M) x N slots. Bit-exactness is preserved by
   // construction (the fadd sum order is unchanged).
-  val temporal: Int = 0
+  val temporal: Int = 0,
+  val inLanes: Int = 1
 ) extends Component {
   require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
 
@@ -82,6 +83,7 @@ case class Sequential(
 
   val nodeShapes = scala.collection.mutable.ArrayBuffer[Seq[Int]](inputShape)
   val nodeTypes = scala.collection.mutable.ArrayBuffer[HardType[Data]](globalDataType)
+  val nodeLanes = scala.collection.mutable.ArrayBuffer[Int](inLanes)
 
   // SimLog audit record: per-layer weight footprint, filled by the build loop.
   private val auditWeightLanes = scala.collection.mutable.ArrayBuffer[Int]()
@@ -114,12 +116,30 @@ case class Sequential(
         nodeTypes(cc.a)
       case _ => l.outType(nodeTypes(i))
     }
+    val outLane = l match {
+      case c: Conv2D => c.lanes
+      case l: Linear => l.lanes
+      case c: Conv1D => c.lanes
+      case mp: MaxPool1D => if (mp.lanes > 0) mp.lanes else (if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1)
+      case ap: AvgPool1D => if (ap.lanes > 0) ap.lanes else (if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1)
+      case mp2: MaxPool2D => mp2.lanes
+      case ap2: AvgPool2D => ap2.lanes
+      case bn: BatchNorm1D => if (bn.lanes > 0) bn.lanes else bn.features
+      case ln: LayerNorm1D => if (ln.lanes > 0) ln.lanes else ln.features
+      case a: ClassicalAttention => a.lanes
+      case sm: Softmax => sm.lanes
+      case rp: Repack => rp.newLanes
+      case ad: Add => nodeLanes(ad.a)
+      case cc: Concat => cc.lanes
+      case _ => nodeLanes(i)
+    }
     nodeShapes += outShape
     nodeTypes += outType
+    nodeLanes += outLane
   }
 
-  def computeFinalShape(): (Seq[Int], HardType[Data]) = (nodeShapes.last, nodeTypes.last)
-  val (finalShape, finalType) = computeFinalShape()
+  def computeFinalShape(): (Seq[Int], HardType[Data], Int) = (nodeShapes.last, nodeTypes.last, nodeLanes.last)
+  val (finalShape, finalType, finalLanes) = computeFinalShape()
 
   val io = new Bundle {
     val start = slave(Event)
@@ -133,7 +153,10 @@ case class Sequential(
     val weightPrefetch = if (weightResidency) Some(in Bool()) else None
 
     val axiMaster = master(Axi4ReadOnly(axiConfig))
-    val outStream = master(Tensor(finalType, finalShape, lanes = 1)) // Default to 1 lane output for now
+    val outStream = master(Tensor(finalType, finalShape, lanes = finalLanes))
+
+    // Runtime dequantization scale input for Cast layers with runtimeScale = true
+    val dequantScale = if (layers.exists { case c: Cast => c.runtimeScale; case _ => false }) Some(in Bits(32 bits)) else None
 
     // ---- Continuous-run frame signals (Phase 3, S1) ----------------------
     // One inference = one output frame = exactly `finalShape.product` beats.
@@ -197,7 +220,7 @@ case class Sequential(
   // previous patch's output fully crossed the trim stage — i.e. exactly when
   // the current band has landed in a bank).
   val inputDataType = globalDataType
-  val dmaImg = DMAReader2D(inputDataType, inputShape, outLanes = 1, dmaAxiConfig)
+  val dmaImg = DMAReader2D(inputDataType, inputShape, outLanes = inLanes, dmaAxiConfig)
 
   val elemsPerRowImg = inputShape.product / inputShape.head
   val bandRows = if (tileHeight > 0) inputShape.head.min(tileHeight) else inputShape.head
@@ -247,7 +270,7 @@ case class Sequential(
   // banding the "tile" is one band; with tileHeight <= 0 it is the whole
   // tensor (legacy).
   val imgBufferSize = bandElements
-  val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = 1)
+  val imgDoubleBuffer = StreamDoubleBuffer(inputDataType, imgBufferSize, lanes = inLanes)
   // Re-arm boundary: rising edge of io.start.valid. Neither io.start.fire nor
   // dmaImg.io.cmd.fire is usable here — the synchronous fork only completes
   // its handshake when EVERY sink accepted, and the 2D image DMA accepts its
@@ -261,14 +284,14 @@ case class Sequential(
   imgDoubleBuffer.io.reArm := io.start.valid && !prevStartValid
   imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream
 
-  val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = 1)
+  val imgStreamer = DoubleBufferStreamer(inputDataType, imgBufferSize, lanes = inLanes)
   imgStreamer.io.readData := imgDoubleBuffer.io.readData
   imgStreamer.io.reArm := io.start.valid && !prevStartValid
   imgStreamer.io.tileReady := imgDoubleBuffer.io.tileReady
   imgDoubleBuffer.io.readAddr := imgStreamer.io.readAddr
   imgDoubleBuffer.io.nextTile := imgStreamer.io.nextTile
 
-  val imgQueue = Tensor(inputDataType, inputShape, 1)
+  val imgQueue = Tensor(inputDataType, inputShape, inLanes)
   imgQueue.stream << imgStreamer.io.streamOut
 
   // --- 2. Node production ---
@@ -493,7 +516,7 @@ case class Sequential(
 
     val nextTensor: Tensor[Data] = layer match {
       case c: Conv1D =>
-        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
+        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
 
       case c: Conv2D =>
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
@@ -513,7 +536,7 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
-        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal)
+        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
 
       case _: ReLU =>
         relu(inTensor)
@@ -521,49 +544,52 @@ case class Sequential(
       case lr: LeakyReLU =>
         leaky_relu(inTensor, lr.shift)
 
-      case _: Softmax =>
+      case sm: Softmax =>
         val seqLen = nodeShapes(i)(0)
         val channels = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
         val comp = spinalML.activations.Softmax1D(nodeTypes(i), channels, seqLen)
-        // Softmax1D consumes and produces lanes = channels; keep the lanes=1
-        // invariant on both sides like the pooling 2D layers.
-        comp.io.x <> repack(inTensor, channels)
+        comp.io.x <> (if (inTensor.lanes != channels) repack(inTensor, channels) else inTensor)
         val smOut = comp.io.y
-        if (smOut.lanes != 1) repack(smOut, 1) else smOut
+        if (smOut.lanes != sm.lanes) repack(smOut, sm.lanes) else smOut
 
       case bn: BatchNorm1D =>
-        batchnorm(inTensor, layerWeights, layerBias)
+        val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
+        val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias)
+        if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
         val seqLen = nodeShapes(i)(0)
-        val channels = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
-        val comp = spinalML.layers.LayerNorm1D(nodeTypes(i), channels, seqLen)
-        comp.io.x <> inTensor
+        val targetLanes = if (ln.lanes > 0) ln.lanes else ln.features
+        val inRepacked = if (inTensor.lanes != ln.features) repack(inTensor, ln.features) else inTensor
+        val comp = spinalML.layers.LayerNorm1D(nodeTypes(i), ln.features, seqLen)
+        comp.io.x <> inRepacked
         comp.io.gamma <> layerWeights
         comp.io.beta <> layerBias
-        comp.io.y
+        val lnOut = comp.io.y
+        if (lnOut.lanes != targetLanes) repack(lnOut, targetLanes) else lnOut
 
       case mp: MaxPool1D =>
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
+        val targetLanes = if (mp.lanes > 0) mp.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        maxpool1d(repacked, mp.poolSize, mp.stride)
+        val pooled = maxpool1d(repacked, mp.poolSize, mp.stride)
+        if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case ap: AvgPool1D =>
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
+        val targetLanes = if (ap.lanes > 0) ap.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        avgpool1d(repacked, ap.poolSize, ap.stride)
+        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride)
+        if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case mp2: MaxPool2D =>
-        // Pooling 2D consumes one element per beat (lanes = 1) and emits C lanes per beat.
-        // Repack on both sides to preserve the lanes = 1 invariant between layers.
-        val in = if (inTensor.lanes != 1) repack(inTensor, 1) else inTensor
-        val pooled = maxpool2d(in, mp2.poolSize, mp2.stride)
-        if (pooled.lanes != 1) repack(pooled, 1) else pooled
+        val pooled = maxpool2d(inTensor, mp2.poolSize, mp2.stride)
+        if (pooled.lanes != mp2.lanes) repack(pooled, mp2.lanes) else pooled
 
       case ap2: AvgPool2D =>
-        val in = if (inTensor.lanes != 1) repack(inTensor, 1) else inTensor
-        val pooled = avgpool2d(in, ap2.poolSize, ap2.stride)
-        if (pooled.lanes != 1) repack(pooled, 1) else pooled
+        val pooled = avgpool2d(inTensor, ap2.poolSize, ap2.stride)
+        if (pooled.lanes != ap2.lanes) repack(pooled, ap2.lanes) else pooled
 
       case _: Sigmoid =>
         sigmoid(inTensor)
@@ -571,8 +597,9 @@ case class Sequential(
       case _: Tanh =>
         tanh(inTensor)
 
-      case _: Cast =>
-        cast(inTensor, lType, layers(i).asInstanceOf[Cast].scales)
+      case c: Cast =>
+        val scalePort = if (c.runtimeScale) io.dequantScale else None
+        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort)
 
       case _: Flatten =>
         reshape(flatten(inTensor), Seq(1, inTensor.shape.product))
@@ -593,13 +620,14 @@ case class Sequential(
         val repackedTensor = repack(reshaped, l.effLanes)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.
-        layerWeights.dataType() match {
+        val linOut = layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
               false, 1024, Option(weightDmaFire), Option(biasDmaFire), temporal)
           case _ =>
             LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire), temporal)
         }
+        if (linOut.lanes != l.lanes) repack(linOut, l.lanes) else linOut
 
       case rq: Requantize =>
         spinalML.ops.requantize(inTensor, rq.targetType, rq.shift)
@@ -623,7 +651,8 @@ case class Sequential(
         val rowLanes = ta0.shape.drop(1).product
         val ta = if (ta0.lanes != rowLanes) repack(ta0, rowLanes) else ta0
         val tb = if (tb0.lanes != rowLanes) repack(tb0, rowLanes) else tb0
-        repack(spinalML.ops.concatenate(ta, tb, 0), 1)
+        val catOut = spinalML.ops.concatenate(ta, tb, 0)
+        if (catOut.lanes != cc.lanes) repack(catOut, cc.lanes) else catOut
 
       case a: ClassicalAttention =>
         val seqLen = nodeShapes(i)(0)
@@ -648,8 +677,8 @@ case class Sequential(
         comp.io.wk <> spinalML.ops.slice(w1, a.embedDim, 2 * a.embedDim, axis = 0)
         comp.io.wv <> spinalML.ops.slice(w2, 2 * a.embedDim, 3 * a.embedDim, axis = 0)
         comp.io.wo <> spinalML.ops.slice(w3, 3 * a.embedDim, 4 * a.embedDim, axis = 0)
-
-        comp.io.y
+        val rawY = comp.io.y
+        if (rawY.lanes != a.lanes) repack(rawY, a.lanes) else rawY
     }
 
     registerNode(nextTensor)
@@ -671,7 +700,7 @@ case class Sequential(
   // exact because consecutive frames are contiguous by construction (a
   // complete inference = exactly frameSize beats; a frame never stalls
   // partially at handshake level — fires only count completed beats).
-  val frameSize = finalShape.product
+  val frameSize = (finalShape.product + finalLanes - 1) / finalLanes
   require(frameSize > 0, "Sequential: output frame must be non-empty")
   val frameCounter = Counter(frameSize)
   when(io.outStream.stream.fire) {

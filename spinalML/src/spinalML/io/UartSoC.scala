@@ -7,6 +7,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.nn.Accelerator
 import spinalML.dtypes.FloatML
+import spinalML.Target
 
 /**
  * UART SoC top: Accelerator + AxiReadMem + UartBridge + UartRx/UartTx,
@@ -25,8 +26,10 @@ class UartSoC[T <: Data](
   val memoryWords: Int = 4096,
   val imgBase: Int    = 0x10000,
   val weightBase: Int = 0x20000,
+  val memoryAdapterFactory: Option[(Axi4Config) => spinalML.memory.MemoryAdapter] = None,
   val outCount: Int   = 10,
-  val version: Int    = 0x01
+  val version: Int    = 0x01,
+  val target: Target  = Target.FPGA()
 ) extends Component {
   val io = new Bundle {
     val resetN = in(Bool())
@@ -34,20 +37,25 @@ class UartSoC[T <: Data](
     val uartTx = out(Bool())
   }
 
-  // Power-On Reset: bitstream boot initialization without creating any external reset port
-  val bootClockDomain = ClockDomain(
-    clock = clockDomain.clock,
-    config = ClockDomainConfig(resetKind = BOOT)
-  )
-  val porActive = new ClockingArea(bootClockDomain) {
-    val counter = Reg(UInt(8 bits)) init(0)
-    val active = counter =/= 255
-    when(active) {
-      counter := counter + 1
-    }
-  }.active
+  // Power-On Reset: on FPGA, bitstream boot initialization without creating any external reset port.
+  // On ASIC, resetKind = BOOT does not exist; external active-low reset directly drives the chip.
+  val reset = if (!target.isAsic) {
+    val bootClockDomain = ClockDomain(
+      clock = clockDomain.clock,
+      config = ClockDomainConfig(resetKind = BOOT)
+    )
+    val porActive = new ClockingArea(bootClockDomain) {
+      val counter = Reg(UInt(8 bits)) init(0)
+      val active = counter =/= 255
+      when(active) {
+        counter := counter + 1
+      }
+    }.active
+    porActive || !io.resetN
+  } else {
+    !io.resetN
+  }
 
-  val reset = porActive || !io.resetN
   val cd = ClockDomain(
     clock = clockDomain.clock,
     reset = reset,
@@ -59,7 +67,12 @@ class UartSoC[T <: Data](
 
     val rx = new UartRx(clkFreq, baudRate)
     val tx = new UartTx(clkFreq, baudRate)
-    val mem = new AxiReadMem(axiConfig, memoryWords, imgBase, weightBase)
+    val mem = memoryAdapterFactory match {
+      case Some(factory) => factory(axiConfig)
+      case None =>
+        if (target.isAsic) new spinalML.memory.SramAsicAdapter(axiConfig, memoryWords, imgBase, weightBase)
+        else new spinalML.memory.BramAdapter(axiConfig, memoryWords, imgBase, weightBase)
+    }
     val bridge = new UartBridge(
       outCount = outCount,
       wordWidth = axiConfig.dataWidth,
@@ -91,15 +104,36 @@ class UartSoC[T <: Data](
     bridge.io.tx.ready := tx.io.ready
     io.uartTx := tx.io.tx
 
-    // Output stream: one FP8 byte per logit
-    val outElem = acc.io.outStream.stream.payload(0)
-    val outByte = outElem match {
+    // Output stream: one FP8 byte per logit (handles lanes >= 1 with sequential deserialization)
+    val outLanes = acc.io.outStream.lanes
+    def toByte(elem: Data): Bits = elem match {
       case f: FloatML => (f.sign ## f.exponent ## f.mantissa).asBits
       case b          => b.asBits.resize(8)
     }
-    bridge.io.outStream.valid := acc.io.outStream.stream.valid
-    bridge.io.outStream.payload := outByte
-    acc.io.outStream.stream.ready := bridge.io.outStream.ready
+
+    if (outLanes == 1) {
+      val outByte = toByte(acc.io.outStream.stream.payload(0))
+      bridge.io.outStream.valid := acc.io.outStream.stream.valid
+      bridge.io.outStream.payload := outByte
+      acc.io.outStream.stream.ready := bridge.io.outStream.ready
+    } else {
+      val laneIdx = Reg(UInt(log2Up(outLanes) bits)) init 0
+      val outBytes = Vec(Bits(8 bits), outLanes)
+      for (i <- 0 until outLanes) {
+        outBytes(i) := toByte(acc.io.outStream.stream.payload(i))
+      }
+      bridge.io.outStream.valid := acc.io.outStream.stream.valid
+      bridge.io.outStream.payload := outBytes(laneIdx)
+
+      when(bridge.io.outStream.fire) {
+        when(laneIdx === U(outLanes - 1, log2Up(outLanes) bits)) {
+          laneIdx := 0
+        } otherwise {
+          laneIdx := laneIdx + 1
+        }
+      }
+      acc.io.outStream.stream.ready := bridge.io.outStream.ready && (laneIdx === U(outLanes - 1, log2Up(outLanes) bits))
+    }
 
     // Status sources
     bridge.io.statusArValid := acc.io.axiMaster.ar.valid

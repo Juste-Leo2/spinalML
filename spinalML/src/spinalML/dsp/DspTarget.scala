@@ -32,6 +32,11 @@ object DspTarget {
     case _         => Generic
   }
 
+  import scala.language.implicitConversions
+
+  /** Implicit conversion from legacy DspTarget to unified Target. */
+  implicit def toTarget(dt: DspTarget): Target = Target.fromDspTarget(dt)
+
   /** Resolves the current target platform from environment or system properties. */
   def current: DspTarget = {
     sys.env.get("SPINALML_TARGET")
@@ -40,3 +45,4 @@ object DspTarget {
       .getOrElse(Generic)
   }
 }
+

@@ -42,8 +42,8 @@ case class Model(
     ReLU(),
     MaxPool2D(poolSize = 2, stride = 2),
     
-    // 2. Transition from Integer domain to Floating-Point domain (FP8 E4M3)
-    Cast(FP8_E4M3(), scales = Seq(0.08544921875)),
+    // 2. Transition from Integer domain to Floating-Point domain (FP8 E4M3) with runtime programmable scale
+    Cast(FP8_E4M3(), runtimeScale = true),
     Flatten(),
     
     // 3. Dense layer mapping to the 10 digit classes (0-9)

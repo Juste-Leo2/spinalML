@@ -240,4 +240,18 @@ class CastTest extends AnyFunSuite {
       SpinalConfig().generateVerilog(CastDequantTestComp(dt(), Seq(8), 4, Seq(0.5, 2.0)))
     }
   }
+
+  test("Test Cast with runtime dynamic scale port") {
+    case class CastRuntimeScaleTestComp[TIn <: Data](dataTypeIn: HardType[TIn], shape: Seq[Int], lanes: Int) extends Component {
+      val io = new Bundle {
+        val a = slave(Tensor(dataTypeIn, shape, lanes))
+        val c = master(Tensor(BF16(), shape, lanes))
+        val scale = in Bits(32 bits)
+      }
+      val casted = cast(io.a, BF16(), runtimeScalePort = Some(io.scale))
+      io.c <> casted
+    }
+
+    SpinalConfig().generateVerilog(CastRuntimeScaleTestComp(I8(), Seq(4), 4))
+  }
 }

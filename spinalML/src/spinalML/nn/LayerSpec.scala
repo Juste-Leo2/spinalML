@@ -35,7 +35,8 @@ case class Conv2D(
   outChannels: Int, 
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
-  customWeightType: Option[HardType[Data]] = None
+  customWeightType: Option[HardType[Data]] = None,
+  lanes: Int = 1
 ) extends LayerSpec {
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
@@ -70,7 +71,8 @@ case class Linear(
   // weight memory layout is unchanged (linear [inFeatures x outFeatures]);
   // only the per-beat lane count and the matmul's internal K chunking
   // change. -1 (default) = inFeatures, the legacy full-width beats.
-  weightLanes: Int = -1
+  weightLanes: Int = -1,
+  lanes: Int = 1
 ) extends LayerSpec {
   require(weightLanes == -1 || (weightLanes > 0 && inFeatures % weightLanes == 0),
     s"Linear weightLanes=$weightLanes must be -1 or a positive divisor of inFeatures=$inFeatures")
@@ -94,7 +96,8 @@ case class Conv1D(
   outChannels: Int,
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
-  customWeightType: Option[HardType[Data]] = None
+  customWeightType: Option[HardType[Data]] = None,
+  lanes: Int = 1
 ) extends LayerSpec {
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
@@ -116,25 +119,25 @@ case class LeakyReLU(shift: Int = 2) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Softmax() extends LayerSpec {
+case class Softmax(lanes: Int = 1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class BatchNorm1D(features: Int) extends LayerSpec {
+case class BatchNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
   override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
 }
 
-case class LayerNorm1D(features: Int) extends LayerSpec {
+case class LayerNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
   override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
 }
 
-case class MaxPool1D(poolSize: Int, stride: Int) extends LayerSpec {
+case class MaxPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2, "MaxPool1D requires at least 2D input shape (L, C)")
     val l = inShape(0)
@@ -146,7 +149,7 @@ case class MaxPool1D(poolSize: Int, stride: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class AvgPool1D(poolSize: Int, stride: Int) extends LayerSpec {
+case class AvgPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2, "AvgPool1D requires at least 2D input shape (L, C)")
     val l = inShape(0)
@@ -158,7 +161,7 @@ case class AvgPool1D(poolSize: Int, stride: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class MaxPool2D(poolSize: Int, stride: Int) extends LayerSpec {
+case class MaxPool2D(poolSize: Int, stride: Int, lanes: Int = 1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2 && inShape.length <= 3, "MaxPool2D requires a 2D (H, W) or 3D (H, W, C) input shape")
     val h = inShape(0)
@@ -171,7 +174,7 @@ case class MaxPool2D(poolSize: Int, stride: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class AvgPool2D(poolSize: Int, stride: Int) extends LayerSpec {
+case class AvgPool2D(poolSize: Int, stride: Int, lanes: Int = 1) extends LayerSpec {
   require(isPow2(poolSize * poolSize), "AvgPool2D requires isPow2(poolSize*poolSize) (shift-based division)")
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2 && inShape.length <= 3, "AvgPool2D requires a 2D (H, W) or 3D (H, W, C) input shape")
@@ -203,11 +206,19 @@ case class Tanh() extends LayerSpec {
  * W_float = FloatML(W_int) * scale (per-tensor, length 1). Default Seq(1.0)
  * keeps the pure cast behavior.
  */
-case class Cast(targetType: HardType[Data], scales: Seq[Double] = Seq(1.0)) extends LayerSpec {
+case class Cast(
+  targetType: HardType[Data],
+  scales: Seq[Double] = Seq(1.0),
+  runtimeScale: Boolean = false
+) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
   override def outType(default: HardType[Data]) = targetType
+}
+
+object Cast {
+  def runtime(targetType: HardType[Data]): Cast = Cast(targetType, runtimeScale = true)
 }
 
 case class Flatten() extends LayerSpec {
@@ -246,7 +257,7 @@ case class Add(a: Int, b: Int) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Concat(a: Int, b: Int, axis: Int = 0) extends LayerSpec {
+case class Concat(a: Int, b: Int, axis: Int = 0, lanes: Int = 1) extends LayerSpec {
   require(a >= 0 && b >= 0, "Concat node references must be non-negative")
   require(a != b, "Concat requires two distinct nodes")
   require(axis == 0, "Concat supports axis 0 only (sequential juxtaposition)")
