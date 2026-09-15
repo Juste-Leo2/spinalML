@@ -91,6 +91,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-04 : Débordement dans `MathLUTs.floatEncodeFn` transformant l'Infini en Zéro
+- **Statut** : corrigé — `+Inf`/`-Inf` encodés canoniquement (exposant all-ones, mantisse 0, signe préservé) et `NaN` -> 0 (même convention que le golden Python `dtypes.from_float`), au lieu du débordement `Double.toInt` qui produisait 0 (`+Inf`), `0x80` (`-Inf`) ou une mantisse poubelle (`NaN`). Tests : `spinalML/test/src/spinalML/utils/MathLUTsTest.scala` (3 cas) ; non-régression : `tests/python/test_exp.py --debug-math` (4 passed, métriques de précision inchangées).
 - **Fichier** : `spinalML/src/spinalML/utils/math_luts.scala` (lignes 74-88)
 - **Code concerné** :
   ```scala
