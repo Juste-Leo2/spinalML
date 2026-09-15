@@ -37,13 +37,13 @@ async def cocotb_log_i16(dut):
 async def cocotb_log_bf16(dut):
     def expected_fn(val):
         return pwl_log_float(val, BF16, index_bits=8)
-    await run_unary_test(dut, "Log", "BF16", BF16, [2.5, 12.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=log_b, edge_cases=[0.0, -1.0])
+    await run_unary_test(dut, "Log", "BF16", BF16, [2.5, 12.5, 0.5, 0.125], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=log_b, edge_cases=[0.0, -1.0])
 
 @cocotb.test()
 async def cocotb_log_bf16_base10(dut):
     def expected_fn(val):
         return pwl_log_float(val, BF16, base=10.0, index_bits=8)
-    await run_unary_test(dut, "Log", "BF16.base10", BF16, [2.5, 12.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=lambda x: log_b(x, 10.0), edge_cases=[0.0, -1.0])
+    await run_unary_test(dut, "Log", "BF16.base10", BF16, [2.5, 12.5, 0.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=lambda x: log_b(x, 10.0), edge_cases=[0.0, -1.0])
 
 # =========================================================================
 # Pytest Launchers
