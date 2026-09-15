@@ -175,6 +175,48 @@ case class UartBridgeTestComp(
   bridge.io.accDone := active
 }
 
+// wordWidth > 64 top: the 'W' command must assemble whole words whose last
+// byte index exceeds 7 (byteCnt must not be hard-coded to 3 bits).
+case class UartBridgeWideWordTestComp(
+  wordWidth: Int = 128,
+  clkFreq: BigInt = 27000000,
+  baudRate: BigInt = 115200
+) extends Component {
+  val io = new Bundle {
+    val rxIn      = in(Bool())
+    val txOut     = out(Bool())
+    val wrEnableO = out(Bool())
+    val wrAddrO   = out(UInt(32 bits))
+    val wrDataO   = out(Bits(wordWidth bits))
+  }
+
+  val rx = new UartRx(clkFreq, baudRate)
+  val tx = new UartTx(clkFreq, baudRate)
+  val bridge = new UartBridge(outCount = 10, wordWidth = wordWidth)
+  val csrStub = new CsrStub()
+
+  rx.io.rx := io.rxIn
+  bridge.io.rx.valid := rx.io.valid
+  bridge.io.rx.payload := rx.io.data
+  tx.io.start := bridge.io.tx.valid
+  tx.io.data := bridge.io.tx.payload
+  bridge.io.tx.ready := tx.io.ready
+  io.txOut := tx.io.tx
+
+  bridge.io.csr <> csrStub.io.ctrl
+
+  bridge.io.outStream.valid := False
+  bridge.io.outStream.payload := B(0, 8 bits)
+  bridge.io.statusArValid := False
+  bridge.io.statusRValid := False
+  bridge.io.accBusy := False
+  bridge.io.accDone := False
+
+  io.wrEnableO := bridge.io.wrEnable
+  io.wrAddrO := bridge.io.wrAddr
+  io.wrDataO := bridge.io.wrData
+}
+
 class UartBridgeTest extends AnyFunSuite {
   test("uart_bridge_toplevel") {
     SpinalConfig(
@@ -192,5 +234,12 @@ class UartBridgeTest extends AnyFunSuite {
       dut.setDefinitionName("UartBridgeWideCsrTestComp")
       dut
     }
+  }
+
+  test("Generate Verilog UartBridgeWideWordTestComp for Python co-simulation") {
+    SpinalConfig(
+      headerWithDate = true,
+      rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
+    ).generateVerilog(UartBridgeWideWordTestComp(wordWidth = 128))
   }
 }

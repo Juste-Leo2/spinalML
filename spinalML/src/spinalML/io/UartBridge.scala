@@ -74,7 +74,7 @@ class UartBridge(
   // Registers (1:1 with top.v)
   // ------------------------------------------------------------------
   val state   = RegInit(IDLE)
-  val byteCnt = Reg(UInt(3 bits)) init 0
+  val byteCnt = Reg(UInt(log2Up((wordBytes max 4) + 1) bits)) init 0
   val addrReg = Reg(UInt(32 bits)) init 0
   val valReg  = Reg(UInt(32 bits)) init 0
   val lenReg  = Reg(UInt(32 bits)) init 0

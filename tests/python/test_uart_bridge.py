@@ -268,3 +268,55 @@ def test_uart_bridge_wide_csr():
         timescale="1ns/1ps",
         extra_args=["-Wno-fatal"],
     )
+
+
+@cocotb.test()
+async def cocotb_uart_bridge_wide_word(dut):
+    """A 'W' write on a >64-bit bus must assemble full words: byteCnt must be
+    wide enough to reach wordBytes-1 (e.g. 15 for a 128-bit bus)."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+    dut.io_rxIn.value = 1
+    await RisingEdge(dut.clk)
+
+    captured = []
+
+    async def wr_monitor():
+        while True:
+            await ReadOnly()
+            if int(dut.io_wrEnableO.value):
+                captured.append(int(dut.io_wrDataO.value))
+            await RisingEdge(dut.clk)
+
+    monitor = cocotb.start_soon(wr_monitor())
+
+    payload = bytes(range(0x40, 0x50))  # 16 bytes = one 128-bit word
+    await script(dut,
+                 b"W" + (0x00010000).to_bytes(4, "little")
+                 + len(payload).to_bytes(4, "little") + payload,
+                 capture_symbols=2, n_frames=0)
+
+    monitor.kill()
+    expected = int.from_bytes(payload, "little")
+    assert captured == [expected], (
+        f"128-bit W word mismatch: got {[hex(w) for w in captured]}, "
+        f"expected {hex(expected)}")
+
+
+def test_uart_bridge_wide_word():
+    v_file = run_mill("spinalML.io.UartBridgeTest", "WideWord", "UartBridgeWideWordTestComp")
+    run(
+        simulator="verilator",
+        verilog_sources=[v_file],
+        toplevel="UartBridgeWideWordTestComp",
+        module="test_uart_bridge",
+        sim_build="sim_build/py_uart_bridge_wide_word",
+        testcase="cocotb_uart_bridge_wide_word",
+        timescale="1ns/1ps",
+        extra_args=["-Wno-fatal"],
+    )

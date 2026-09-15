@@ -711,6 +711,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-06 : Compteur d'octets `byteCnt` sous-dimensionné (3 bits) pour des bus de données $> 64$ bits dans `UartBridge`
+- **Statut** : corrigé — bug réel, mode de défaillance observé : **erreur d'élaboration** `OUT OF RANGE CONSTANT` (`byteCnt === wordBytes - 1`, ex. 15 pour un bus 128 bits) dès que `wordWidth > 64`, pas de corruption silencieuse. Fix : largeur calculée à l'élaboration `Reg(UInt(log2Up((wordBytes max 4) + 1) bits))` (le compteur sert aussi aux champs 4 octets des commandes) — aucune limite en dur, fonctionne pour 64/128/256 bits. Test : nouveau top `UartBridgeWideWordTestComp` (wordWidth = 128) + `tests/python/test_uart_bridge.py::test_uart_bridge_wide_word` (W de 16 octets, mot 128 bits relu ; rouge avant par échec d'élaboration) ; non-régression `test_uart_bridge.py` 3/3, Scala `UartBridgeTest` 3/3 + `UartSoCTest` 2/2.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 77, 226-239)
 - **Code concerné** :
   ```scala
