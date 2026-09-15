@@ -2,7 +2,7 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge
 import numpy as np
 import os
 
@@ -182,6 +182,76 @@ async def cocotb_conv1dmulti_bf16(dut):
     log_msg = log_true_math_error("Conv1DMulti", "BF16", BF16, True, collect["out"], collect["true"], details=details)
     dut._log.info(log_msg)
 
+@cocotb.test()
+async def cocotb_conv1d_rearm_bias(dut):
+    """Command-boundary reArm must also reset bias_add: a mid-load reArm must
+    clear the stale partial bias table before the next bias load."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    dut.io_x_stream_valid.value = 0
+    dut.io_w_stream_valid.value = 0
+    dut.io_b_stream_valid.value = 0
+    dut.io_y_stream_ready.value = 0
+    dut.io_reArm.value = 0
+
+    async def send_bias_beat(val, timeout=200):
+        dut.io_b_stream_payload_0.value = int(I32.from_float(val))
+        dut.io_b_stream_valid.value = 1
+        for _ in range(timeout):
+            await ReadOnly()
+            ready = int(dut.io_b_stream_ready.value)
+            await RisingEdge(dut.clk)
+            if ready:
+                dut.io_b_stream_valid.value = 0
+                return True
+        dut.io_b_stream_valid.value = 0
+        return False
+
+    # 1. Partial bias load (1 of 2 values) -> loadCounter left mid-count
+    assert await send_bias_beat(3), "initial bias beat not accepted"
+
+    # 2. Command-boundary reArm while the bias load is incomplete
+    dut.io_reArm.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.io_reArm.value = 0
+
+    # 3. Fresh weights (the matmul B buffer is re-armed too), column-major
+    X = [[1, 2], [3, 4], [5, 6]]
+    W = [[1, 0], [0, 1], [1, 1], [-1, -1]]
+    b = [[5, -5]]
+    W_T = [[W[i][j] for i in range(len(W))] for j in range(len(W[0]))]
+    await send_tensor(dut, "io_w_stream", W_T, (2, 4), 4, I8, False)
+
+    # 4. Full new bias: reArm must clear the stale partial load
+    ok0 = await send_bias_beat(b[0][0])
+    ok1 = await send_bias_beat(b[0][1])
+    assert ok0 and ok1, (
+        f"bias_add not re-armed by command boundary (accepted={ok0},{ok1})"
+    )
+
+    # 5. Convolution must match the golden model with the new bias
+    send_x = cocotb.start_soon(send_tensor(dut, "io_x_stream", X, (3, 2), 1, I8, False))
+    recv_y = cocotb.start_soon(recv_tensor(dut, "io_y_stream", (2, 2), I32, False, 1))
+    Y_out_bits, Y_out = await recv_y
+    await send_x
+
+    Y_expected = conv1d_hw(X, W, b, I8)
+    for m in range(2):
+        for n in range(2):
+            exp_bits = I32.from_float(Y_expected[m][n])
+            assert Y_out_bits[m][n] == exp_bits, (
+                f"Y[{m}][{n}]: got {Y_out[m][n]} (bits {Y_out_bits[m][n]}), "
+                f"expected {Y_expected[m][n]}"
+            )
+    dut._log.info("Conv1D reArm clears the stale bias load and reloads fresh bias")
+
+
 def test_pytest_conv1d_i8(request): run_layer_sim("Conv1D", "I8", "cocotb_conv1d_i8", "Conv1DTestComp", request)
 def test_pytest_conv1d_fp8(request): run_layer_sim("Conv1D", "FP8", "cocotb_conv1d_fp8", "Conv1DTestComp", request)
 def test_pytest_conv1d_i16(request): run_layer_sim("Conv1D", "I16", "cocotb_conv1d_i16", "Conv1DTestComp", request)
@@ -191,3 +261,5 @@ def test_pytest_conv1dmulti_i8(request): run_layer_sim("Conv1D", "I8", "cocotb_c
 def test_pytest_conv1dmulti_fp8(request): run_layer_sim("Conv1D", "FP8", "cocotb_conv1dmulti_fp8", "Conv1DTestCompMulti", request)
 def test_pytest_conv1dmulti_i16(request): run_layer_sim("Conv1D", "I16", "cocotb_conv1dmulti_i16", "Conv1DTestCompMulti", request)
 def test_pytest_conv1dmulti_bf16(request): run_layer_sim("Conv1D", "BF16", "cocotb_conv1dmulti_bf16", "Conv1DTestCompMulti", request)
+
+def test_pytest_conv1d_rearm_bias(request): run_layer_sim("Conv1D", "ReArm", "cocotb_conv1d_rearm_bias", "Conv1DReArmTestComp", request)

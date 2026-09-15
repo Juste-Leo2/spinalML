@@ -462,6 +462,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-LAY-03 : Omission de propagation du signal `reArm` vers `bias_add` dans `Conv1D` et `Conv2D`
+- **Statut** : corrigé — `bias_add(..., reArm = Some(io.reArm))` dans `Conv1DLayer` et `Conv2DLayer` (parité avec `Linear.scala:67`). Un reArm en cours de chargement du biais laissait `loadCounter` à mi-course : le biais suivant était chargé décalé (table partiellement périmée). Tests : `tests/python/test_conv1d.py::test_pytest_conv1d_rearm_bias` (nouveau top `Conv1DReArmTestComp`, rouge avant : second beat de biais jamais accepté) ; non-régression Python Conv1D+Conv2D 17/17 et Scala `Conv1DTest` 10/10, `Conv2DTest` 9/9.
 - **Fichier** : `spinalML/src/spinalML/layers/Conv1D.scala` (ligne 49) & `spinalML/src/spinalML/layers/Conv2D.scala` (ligne 51)
 - **Code concerné** :
   ```scala
