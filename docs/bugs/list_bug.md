@@ -66,6 +66,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-03 : Débordement d'exposant signant la perte de valeur (conversion Float étroit -> large)
+- **Statut** : corrigé — bug réel, mais le mode de défaillance observé est une **erreur d'élaboration** `OUT OF RANGE CONSTANT` (la comparaison `expSInt >= (1 << outExpBits) - 1` ne tient pas dans la largeur `a.expBits + 4` dès que `outExpBits >= a.expBits + 4`, ex. FP4/FP8 -> FP32), pas l'underflow silencieux décrit initialement. Fix : `expSIntWidth = (a.expBits max outExpBits) + 4` appliqué aux deux branches (drop et widening). Tests : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« roundTo widens the exponent without overflow (FP4 4.0 -> FP32 4.0) ») et non-régression `tests/python/test_softmax.py` (7 passed).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (lignes 403-405 et 421)
 - **Code concerné** :
   ```scala
