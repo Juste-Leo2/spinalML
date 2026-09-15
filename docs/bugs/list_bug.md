@@ -212,6 +212,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-06 : Perte du parallélisme de voies dans `ops/transpose.scala`
+- **Statut** : corrigé — `finalLanes = if (outLanes > 0) outLanes else a.lanes` (ligne 108) ; le repack interne vers 1 voie reste un détail d'implémentation, la sortie par défaut retrouve les lanes d'entrée. Tests : `TransposeTest.scala` (« transpose preserves the input lanes by default », top lanes = 4, rouge avant : `transpose dropped lanes: 1 != 4`) ; non-régression Scala `TransposeTest` 6/6, Python `test_transpose.py::test_transpose_4x4_i8` et `test_classicalattention.py::test_pytest_attention_bf16` (seul call site).
 - **Fichier** : `spinalML/src/spinalML/ops/transpose.scala` (ligne 108)
 - **Code concerné** :
   ```scala
