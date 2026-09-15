@@ -36,7 +36,11 @@ class SramAsicAdapter(
   // ------------------------------------------------------------------
   def mapIndex(addr: UInt): UInt = {
     val isWeight = addr >= weightBase
-    val offset   = Mux(isWeight, addr - weightBase, addr - imgBase)
+    // Addresses below imgBase must not underflow `addr - imgBase` into a huge
+    // unsigned offset (which would silently alias the last word): clamp to the
+    // first physical word. Addresses past the memory clamp to the last one.
+    val offset   = Mux(isWeight, addr - weightBase,
+      Mux(addr < imgBase, U(0, 32 bits), addr - imgBase))
     val raw      = (offset >> shift) + Mux(isWeight, U(halfWords, 32 bits), U(0, 32 bits))
     val clamped  = raw >= U(memoryWords - 1, raw.getWidth bits)
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))

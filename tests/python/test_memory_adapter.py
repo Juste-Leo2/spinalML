@@ -9,7 +9,8 @@
 # (wrEnable/wrAddr/wrData). Two virtual regions share the physical memory:
 #   [imgBase, weightBase)      -> physical [0, memoryWords/2)
 #   [weightBase, ...)          -> physical [memoryWords/2, memoryWords)
-# with defensive clamping to the last word for out-of-range addresses.
+# with defensive clamping: addresses below imgBase clamp to the first physical
+# word (no unsigned underflow), addresses past the memory clamp to the last.
 
 import cocotb
 from cocotb.clock import Clock
@@ -231,16 +232,23 @@ async def cocotb_bram_adapter_clamp(dut):
     cocotb.start_soon(clock.start())
     await reset_adapter(dut)
 
-    # Last physical word = last weight-region word
+    # First physical word = first image-region word; last = last weight word.
+    first_word = 0x0123456789ABCDEF
     last_word = 0xDEADBEEFCAFEBABE
+    await host_write(dut, IMG_BASE, first_word)
     await host_write(dut, WEIGHT_BASE + (HALF_WORDS - 1) * BEAT_BYTES, last_word)
 
-    # Below imgBase and past the weight region both clamp to the last word
-    for addr in [0x0, WEIGHT_BASE + HALF_WORDS * BEAT_BYTES + 0x800]:
-        data, lasts, ids = await axi_read_burst(dut, addr, beats=1, id_val=3)
-        check_single_read(data, lasts, ids, last_word, 3)
+    # Addresses below imgBase must never underflow into the last word: they
+    # clamp to the first physical word. Addresses past the weight region clamp
+    # to the last one.
+    data, lasts, ids = await axi_read_burst(dut, 0x0, beats=1, id_val=3)
+    check_single_read(data, lasts, ids, first_word, 3)
 
-    print("BramAdapter out-of-range reads defensively clamp to the last physical word")
+    data, lasts, ids = await axi_read_burst(
+        dut, WEIGHT_BASE + HALF_WORDS * BEAT_BYTES + 0x800, beats=1, id_val=3)
+    check_single_read(data, lasts, ids, last_word, 3)
+
+    print("BramAdapter out-of-range reads clamp to the first (addr < imgBase) / last physical word")
 
 
 @cocotb.test()
