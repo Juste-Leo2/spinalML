@@ -19,6 +19,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 1. Types de Données & Arithmétique Flottante
 
 ### BUG-DTYPE-01 : Crash d'élaboration sur tranche négative dans `Float.roundTo`
+- **Statut** : faux positif (vérifié le 2026-09-15) — aucune exception : `mantExt(-1 downto 0)` produit un slice de largeur 0 via `RangePimper` (`SpinalHDL core.scala:507-519`), et `(0 bits) =/= 0` se constant-fold en `False`, soit exactement le `sticky` RNE attendu pour `drop == 1`. Test d'élaboration ajouté : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« roundTo drops a single mantissa bit »).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (ligne 397)
 - **Code concerné** :
   ```scala
@@ -144,6 +145,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 2. Opérations Fondamentales & Algèbre
 
 ### BUG-OPS-01 : Inversion de signe dramatique via `.intoSInt` dans `ops/log.scala`
+- **Statut** : corrigé (commit `ec54afe`) — test de couverture : `tests/python/test_log.py::test_log_bf16` et `::test_log_bf16_base10` (valeurs x < 1).
 - **Fichier** : `spinalML/src/spinalML/ops/log.scala` (ligne 79)
 - **Code concerné** :
   ```scala
