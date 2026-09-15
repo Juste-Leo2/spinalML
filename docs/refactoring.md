@@ -103,6 +103,7 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
 * **Critère de succès** :
   * Compilation bit-exacte garantie sur Verilator.
   * Génération de Verilog propre sans macro Gowin en configuration `Target.ASIC`.
+  * Co-simulation Python/Cocotb ([`test_hardware_mul.py`](file:///e:/spinalML/tests/python/test_hardware_mul.py)) : le même multiplieur 8×8→16 est généré pour quatre politiques (`Generic+DSP`, `no-DSP`, `Target.ASIC` Sky130, chemin combinatoire `latency = 0`) et reste bit-exact sur tous les produits, gating d'`enable` inclus.
 
 ---
 
@@ -127,6 +128,7 @@ L'audit détaillé du code source confirme la validité de la roadmap à **90%**
   * Dans `UartSoC` et `Accelerator`, découpler l'accès mémoire pour accepter n'importe quel `MemoryAdapter`.
 * **Critère de succès** :
   * Le SoC fonctionne indifféremment sur BRAM ou DDR sans toucher à une ligne du cœur d'accélération.
+  * Co-simulation Python/Cocotb ([`test_memory_adapter.py`](file:///e:/spinalML/tests/python/test_memory_adapter.py)) : `BramAdapter` et `SramAsicAdapter` relus bit-exact sur les deux régions virtuelles (bursts multi-beats, RLAST/RID, backpressure sur `r_ready`, clamping défensif hors zone) ; `DdrAdapter` validé sur la traduction écriture hôte → AXI4 write et sur le pass-through AR/R.
 
 ---
 

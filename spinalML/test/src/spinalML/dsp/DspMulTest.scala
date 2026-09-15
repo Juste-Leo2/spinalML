@@ -161,5 +161,25 @@ class DspMulTest extends AnyFunSuite {
     val content = scala.io.Source.fromFile(s"$targetDir/DspMulSIntComp.v").mkString
     assert(content.contains("MULT18X18"), "Gowin target must instantiate MULT18X18 hard macro")
   }
+
+  test("Generate Verilog for Python co-simulation") {
+    def emit(cfg: DspConfig, name: String): Unit = {
+      SpinalConfig().generateVerilog {
+        val dut = DspMulSIntComp(8, 16, latency = 1, cfg)
+        dut.setDefinitionName(name)
+        dut
+      }
+    }
+
+    emit(DspConfig(target = DspTarget.Generic, useDsp = true, latency = 1), "DspMulGenericTestComp")
+    emit(DspConfig(target = DspTarget.Generic, useDsp = false, latency = 1), "DspMulNoDspTestComp")
+    emit(DspConfig.asic(PdkFamily.Sky130, latency = 1), "DspMulAsicTestComp")
+
+    SpinalConfig().generateVerilog {
+      val dut = DspMulSIntComp(8, 16, latency = 0, DspConfig(target = DspTarget.Generic, useDsp = false, latency = 0))
+      dut.setDefinitionName("DspMulCombTestComp")
+      dut
+    }
+  }
 }
 

@@ -172,4 +172,22 @@ class MemoryAdapterTest extends AnyFunSuite {
     val content = scala.io.Source.fromFile(s"$targetDir/UartSoC.v").mkString
     assert(content.contains("SramAsicAdapter"), "UartSoC Verilog must contain SramAsicAdapter when factory is injected")
   }
+
+  test("Generate Verilog for Python co-simulation") {
+    SpinalConfig().generateVerilog {
+      val dut = new BramAdapter(axiConfig, memoryWords = 64, imgBase = 0x1000, weightBase = 0x2000)
+      dut.setDefinitionName("BramAdapterTestComp")
+      dut
+    }
+    SpinalConfig().generateVerilog {
+      val dut = new SramAsicAdapter(axiConfig, memoryWords = 64, imgBase = 0x1000, weightBase = 0x2000, pdk = PdkFamily.Sky130)
+      dut.setDefinitionName("SramAsicAdapterTestComp")
+      dut
+    }
+    SpinalConfig().generateVerilog {
+      val dut = new DdrAdapter(axiConfig)
+      dut.setDefinitionName("DdrAdapterTestComp")
+      dut
+    }
+  }
 }
