@@ -609,6 +609,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-06 : Danger de blocage en polling CPU sur le bit de complétion CSR `0x04`
+- **Statut** : corrigé — registre verrou `doneSticky` mis à 1 sur `frameDone` et remis à 0 uniquement sur écriture hôte de 0x00 ; CSR 0x04 bit 0 lit `Mux(writeToDdr, doneSticky, outStream.valid)`. Un hôte qui poll ne peut plus rater l'impulsion d'un cycle (la lecture AXI-Lite dure elle-même plusieurs cycles). Tests : `tests/python/test_accelerator.py::test_accel_dma_write_back` (assertion ajoutée : 50 cycles après `io_done`, lire 0x04 et exiger bit0=1 ; rouge avant fix) ; non-régression Python 5/5 + Scala `AcceleratorTest` 4/4.
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (ligne 239)
 - **Code concerné** :
   ```scala

@@ -450,6 +450,15 @@ async def cocotb_accel_dma_write_back(dut):
 
     status_after = await axi_lite_read(dut, 0x28)
     assert status_after & 0x1 == 0, f"DMA writer still busy after completion: 0x{status_after:X}"
+
+    # CSR 0x04 bit 0 must stay latched after the 1-cycle frameDone pulse: the
+    # host AXI-Lite read itself spans many cycles, so a polling driver must not
+    # miss completion.
+    for _ in range(50):
+        await RisingEdge(dut.clk)
+    status_done = await axi_lite_read(dut, 0x04)
+    assert status_done & 0x1 == 1, f"CSR 0x04 done bit not latched: 0x{status_done:X}"
+
     print("Accelerator DMA write-back bit-exact (CSR 0x20/0x24/0x28), outStream silent")
 
 
