@@ -345,6 +345,59 @@ async def cocotb_accel_passthrough_continuous(dut):
 
 
 @cocotb.test()
+async def cocotb_accel_image_base_reset(dut):
+    seed_random()
+    setup_accel(dut, "AcceleratorPassthroughTestComp")
+
+    frame = [((i * 7) % 251) - 125 for i in range(N_ELEMS)]
+    new_base = IMG_BASE + 0x1000
+    new_frame = [((i * 11) % 251) - 125 for i in range(N_ELEMS)]
+    memory = {}
+    write_image(memory, IMG_BASE, frame)
+    write_image(memory, new_base, new_frame)
+    slave = AxiMemSlave(dut, memory)
+    cocotb.start_soon(slave.run())
+
+    await reset_accel(dut)
+    await axi_lite_write(dut, 0x08, IMG_BASE)
+    await axi_lite_write(dut, 0x0C, WEIGHT_BASE)
+    dut.io_outStream_stream_ready.value = 1
+    await axi_lite_write(dut, 0x1C, 1)  # RUN
+    await axi_lite_write(dut, 0x00, 1)  # START
+
+    first = await collect_i8(dut, N_ELEMS)
+    assert first == frame, f"RUN frame mismatch: {first} != {frame}"
+    await axi_lite_write(dut, 0x1C, 0)  # STOP; the RUN cursor has advanced
+
+    # Drain what is in flight and wait for the output stream to go quiet
+    silence = 0
+    for _ in range(50000):
+        await ReadOnly()
+        if int(dut.io_outStream_stream_valid.value):
+            silence = 0
+        else:
+            silence += 1
+        await RisingEdge(dut.clk)
+        if silence > 300:
+            break
+    assert silence > 300, "Accelerator kept streaming after STOP"
+
+    # New session: the host reprograms the image base. The RUN cursor must be
+    # reset, otherwise the accelerator reads new_base + k*FRAME_BYTES (garbage).
+    await axi_lite_write(dut, 0x08, new_base)
+    await axi_lite_write(dut, 0x00, 1)
+
+    second = await collect_i8(dut, N_ELEMS)
+    assert second == new_frame, (
+        f"Image base cursor not reset: got {second} instead of {new_frame}"
+    )
+    assert any(addr == new_base for addr, _ in slave.bursts), (
+        f"No read burst at 0x{new_base:X}; bursts={slave.bursts}"
+    )
+    print("Accelerator 0x08 rewrite resets the RUN image cursor (new base honored)")
+
+
+@cocotb.test()
 async def cocotb_accel_dma_write_back(dut):
     seed_random()
     setup_accel(dut, "AcceleratorPassthroughTestComp")
@@ -480,6 +533,15 @@ def test_accel_dma_write_back(request):
         "cocotb_accel_dma_write_back",
         "AcceleratorPassthroughTestComp",
         "sim_build/py_accel_writeback",
+        request,
+    )
+
+
+def test_accel_image_base_reset(request):
+    _run_sim(
+        "cocotb_accel_image_base_reset",
+        "AcceleratorPassthroughTestComp",
+        "sim_build/py_accel_image_base_reset",
         request,
     )
 

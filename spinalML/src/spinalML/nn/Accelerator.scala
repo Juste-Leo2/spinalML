@@ -232,6 +232,13 @@ class Accelerator[T <: Data](
     }
   }
 
+  // A host write to 0x08 starts a new image stream: reset the RUN cursor so the
+  // next inference reads from the newly programmed base without a hard reset.
+  // Placed after the frameDone increment so a same-cycle host write wins.
+  ctrlFactory.onWrite(0x08) {
+    imgBaseOffset := 0
+  }
+
   // Register 0x04: Status
   // Bit 0: Done (outStream.valid in stream mode, dmaWriter.done in DDR mode)
   // Bit 1: Busy (model busy || dmaWriter busy)

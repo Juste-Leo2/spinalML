@@ -583,6 +583,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-05 : Absence de réinitialisation logicielle de `imgBaseOffset` dans `Accelerator.scala`
+- **Statut** : corrigé — `ctrlFactory.onWrite(0x08) { imgBaseOffset := 0 }`, placé après l'incrément `frameDone` pour qu'une écriture hôte gagne en cas de collision dans le même cycle. Une écriture 0x08 repart donc du nouveau base sans hard reset. Tests : `tests/python/test_accelerator.py::test_accel_image_base_reset` (rouge avant : zéros lus à `new_base + k*FRAME_BYTES`) ; non-régression `test_accelerator.py` 5/5 (dont RUN continu).
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (lignes 221-233)
 - **Code concerné** :
   ```scala
