@@ -367,6 +367,157 @@ async def cocotb_ddr_adapter_write(dut):
 
 
 @cocotb.test()
+async def cocotb_ddr_adapter_accel_write(dut):
+    """The accelerator AXI4 write burst shares the DDR master with the host
+    port: host priority, burst forwarding, and B response routing."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.io_wrEnable.value = 0
+    dut.io_wrAddr.value = 0
+    dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
+    dut.io_axi_aw_valid.value = 0
+    dut.io_axi_w_valid.value = 0
+    dut.io_axi_b_ready.value = 0
+    dut.io_axi_ar_valid.value = 0
+    dut.io_axi_r_ready.value = 1
+    dut.extIo_ddrMaster_aw_ready.value = 0
+    dut.extIo_ddrMaster_w_ready.value = 0
+    dut.extIo_ddrMaster_b_valid.value = 0
+    dut.extIo_ddrMaster_r_valid.value = 0
+    dut.extIo_ddrMaster_r_payload_data.value = 0
+    dut.extIo_ddrMaster_r_payload_last.value = 0
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    # An idle adapter must accept accelerator AW (read-only implementations
+    # tie aw.ready low: probe before driving the AXI payloads).
+    acc_ready_seen = False
+    for _ in range(50):
+        await ReadOnly()
+        acc_ready_seen = int(dut.io_axi_aw_ready.value) == 1
+        await RisingEdge(dut.clk)
+        if acc_ready_seen:
+            break
+    assert acc_ready_seen, "DdrAdapter never accepts accelerator writes (aw.ready stuck low)"
+
+    # --- 1. Host write takes the bus and blocks the accelerator AW ---
+    dut.io_wrEnable.value = 1
+    dut.io_wrAddr.value = 0x80000000
+    dut.io_wrData.value = 0x1122334455667788
+    dut.io_wrStrb.value = 0x0F
+    await RisingEdge(dut.clk)
+    dut.io_wrEnable.value = 0
+    await RisingEdge(dut.clk)
+
+    await ReadOnly()
+    assert int(dut.extIo_ddrMaster_aw_valid.value) == 1, "Host AW must be pending"
+    assert int(dut.extIo_ddrMaster_aw_payload_addr.value) == 0x80000000, "Host AW address mismatch"
+    assert int(dut.extIo_ddrMaster_w_payload_strb.value) == 0x0F, "Host w.strb mismatch"
+    await RisingEdge(dut.clk)
+
+    dut.io_axi_aw_valid.value = 1
+    dut.io_axi_aw_payload_addr.value = 0x9000
+    dut.io_axi_aw_payload_len.value = 1
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    assert int(dut.io_axi_aw_ready.value) == 0, "Accelerator AW must wait for the host write"
+    await RisingEdge(dut.clk)
+
+    # Complete the host single-beat write, then its auto-acked B.
+    dut.extIo_ddrMaster_aw_ready.value = 1
+    dut.extIo_ddrMaster_w_ready.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 0
+    dut.extIo_ddrMaster_w_ready.value = 0
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_b_valid.value = 1
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_b_valid.value = 0
+
+    # --- 2. Accelerator 2-beat burst now owns the bus ---
+    burst_addr = 0x9000
+    words = [0xAAAABBBBCCCCDDDD, 0x1234567890ABCDEF]
+    strbs = [0xFF, 0x0F]
+    aw_done = False
+    for _ in range(200):
+        await ReadOnly()
+        ready = int(dut.io_axi_aw_ready.value)
+        await RisingEdge(dut.clk)
+        if ready:
+            aw_done = True
+            break
+    assert aw_done, "Accelerator AW never accepted after the host write"
+    dut.io_axi_aw_valid.value = 0
+
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.extIo_ddrMaster_aw_valid.value) == 1:
+            break
+        await RisingEdge(dut.clk)
+    assert int(dut.extIo_ddrMaster_aw_valid.value) == 1, "Burst AW never reached the DDR master"
+    assert int(dut.extIo_ddrMaster_aw_payload_addr.value) == burst_addr, "Burst AW address mismatch"
+    assert int(dut.extIo_ddrMaster_aw_payload_len.value) == 1, "Burst AW len mismatch"
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 1
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 0
+
+    dut.extIo_ddrMaster_w_ready.value = 1
+    for i, word in enumerate(words):
+        last = 1 if i == len(words) - 1 else 0
+        dut.io_axi_w_valid.value = 1
+        dut.io_axi_w_payload_data.value = word
+        dut.io_axi_w_payload_strb.value = strbs[i]
+        dut.io_axi_w_payload_last.value = last
+        w_done = False
+        for _ in range(200):
+            await ReadOnly()
+            ready = int(dut.io_axi_w_ready.value)
+            if ready:
+                assert int(dut.extIo_ddrMaster_w_valid.value) == 1, f"ext W valid dropped on beat {i}"
+                assert int(dut.extIo_ddrMaster_w_payload_data.value) == word, f"beat {i} data mismatch"
+                assert int(dut.extIo_ddrMaster_w_payload_strb.value) == strbs[i], f"beat {i} strb mismatch"
+                assert int(dut.extIo_ddrMaster_w_payload_last.value) == last, f"beat {i} last mismatch"
+            await RisingEdge(dut.clk)
+            if ready:
+                w_done = True
+                break
+        assert w_done, f"Accelerator W beat {i} never handshook"
+    dut.io_axi_w_valid.value = 0
+
+    # B is now owned by the accelerator burst and must be forwarded.
+    dut.io_axi_b_ready.value = 1
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.extIo_ddrMaster_b_ready.value) == 1:
+            break
+        await RisingEdge(dut.clk)
+    assert int(dut.extIo_ddrMaster_b_ready.value) == 1, "Burst B must be accepted for the accelerator"
+    await RisingEdge(dut.clk)
+
+    dut.extIo_ddrMaster_b_valid.value = 1
+    b_seen = False
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.io_axi_b_valid.value) == 1:
+            b_seen = True
+        await RisingEdge(dut.clk)
+        if b_seen:
+            break
+    assert b_seen, "B response was not forwarded to the accelerator"
+    dut.extIo_ddrMaster_b_valid.value = 0
+    dut.io_axi_b_ready.value = 0
+    await RisingEdge(dut.clk)
+    print("DdrAdapter host priority + accelerator burst write-back with B routing validated")
+
+
+@cocotb.test()
 async def cocotb_ddr_adapter_read(dut):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -493,6 +644,10 @@ def test_bram_adapter_write_strobes(request):
 
 def test_ddr_adapter_write(request):
     _run_sim("cocotb_ddr_adapter_write", "DdrAdapterTestComp", "sim_build/py_ddr_write", request)
+
+
+def test_ddr_adapter_accel_write(request):
+    _run_sim("cocotb_ddr_adapter_accel_write", "DdrAdapterTestComp", "sim_build/py_ddr_accel_write", request)
 
 
 def test_ddr_adapter_read(request):
