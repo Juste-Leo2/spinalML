@@ -201,7 +201,19 @@ case class DMAWriter[T <: Data](
   val wFire = io.axiMaster.w.fire
   io.axiMaster.w.valid := wDataValid && (burstRemain =/= 0)
   io.axiMaster.w.data  := wDataBits
-  io.axiMaster.w.strb.setAll()
+
+  // Byte strobes: the transfer is contiguous, so a partial final beat can only
+  // be THE last beat of the whole transfer. After the last AW fires `remaining`
+  // drops to 0 while `burstRemain` counts the final burst down, so mask the
+  // padding bytes of the final beat instead of strobing them all (which would
+  // corrupt the bytes adjacent to the tensor).
+  val finalBeatBytes = (totalElements - (totalAxiBeats - 1) * axiLanes) * (elemWidth / 8)
+  val fullByteMask = (BigInt(1) << bytesPerBeat) - 1
+  val lastByteMask = (BigInt(1) << finalBeatBytes) - 1
+  val finalBeat = (remaining === 0) && (burstRemain === 1)
+  io.axiMaster.w.strb := Mux(finalBeat,
+    B(lastByteMask, bytesPerBeat bits),
+    B(fullByteMask, bytesPerBeat bits))
   io.axiMaster.w.last  := (burstRemain === 1)
 
   wDataReady := io.axiMaster.w.ready && (burstRemain =/= 0)

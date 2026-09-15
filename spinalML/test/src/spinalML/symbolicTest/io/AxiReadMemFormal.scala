@@ -50,6 +50,7 @@ class AxiReadMemFormal extends Component {
   anyseq(dut.io.wrEnable)
   anyseq(dut.io.wrAddr)
   anyseq(dut.io.wrData)
+  anyseq(dut.io.wrStrb)
 
   assumeInitial(clockDomain.isResetActive)
 
@@ -69,6 +70,15 @@ class AxiReadMemFormal extends Component {
   when(dut.io.axi.r.valid || dut.io.axi.ar.valid) {
     assume(!dut.io.wrEnable)
   }
+
+  // The accelerator AXI write channel is out of scope for this read formal;
+  // tie it off (constants, not assumptions) so Yosys prunes the write path
+  // and the read proofs keep their original BMC budget.
+  dut.io.axi.aw.valid := False
+  dut.io.axi.aw.payload.assignDontCare()
+  dut.io.axi.w.valid := False
+  dut.io.axi.w.payload.assignDontCare()
+  dut.io.axi.b.ready := True
 
   // ==========================================
   // 1. READY GUARD
@@ -138,7 +148,7 @@ object AxiReadMemFormal {
       .withBMC(8)
       .withTimeout(180)
       .withDebug
-      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.Boolector)))
       .workspacePath("formal")
       .doVerify(new AxiReadMemFormal, "axi_read_mem_formal")
   }

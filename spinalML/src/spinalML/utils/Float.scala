@@ -380,6 +380,9 @@ object Float {
   def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int): FloatML = {
     val c = FloatML(outExpBits, outMantBits)
     val biasDelta = ((1 << (outExpBits - 1)) - 1) - a.bias
+    // The exponent sum must hold the input exponent plus the bias delta (which
+    // can be large when widening towards a bigger exponent bias, e.g. FP4 -> FP32)
+    val expSIntWidth = (a.expBits max outExpBits) + 4
 
     val aZero = a.exponent === 0 && a.mantissa === 0
 
@@ -400,7 +403,7 @@ object Float {
         val mantRnd = kept +^ roundUp.asUInt
         val mantOv = mantRnd.msb
 
-        val expSInt = a.exponent.intoSInt.resize(a.expBits + 4 bits) +
+        val expSInt = a.exponent.intoSInt.resize(expSIntWidth bits) +
           biasDelta +
           mantOv.asUInt.intoSInt.resized
 
@@ -418,7 +421,7 @@ object Float {
       } else  {
         // Exact widening path: fraction stays normalized, left-justified.
         c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
-        val expSInt = a.exponent.intoSInt.resize(a.expBits + 4 bits) + biasDelta
+        val expSInt = a.exponent.intoSInt.resize(expSIntWidth bits) + biasDelta
         when(expSInt >= ((1 << outExpBits) - 1)) {
           c.exponent := ((1 << outExpBits) - 1)
           c.mantissa := 0

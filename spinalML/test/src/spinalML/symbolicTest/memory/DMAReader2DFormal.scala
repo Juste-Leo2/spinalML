@@ -21,7 +21,8 @@ import spinalML.memory.{DMAReader2D, FetchRequest2D}
  *     guarantees what Sequential used to assume); rows advance in order below
  *     the commanded height and completion happens only on the last row.
  *  2. Trim geometry: the latched window anchors the filter — rowSkip is the
- *     misalignment of the issued row base, rowKeepEnd = rowSkip + W - 1.
+ *     misalignment of the issued row base converted to output beats,
+ *     rowKeepEnd = rowSkip + W/lanes - 1.
  *  3. Beat accounting (the Mnist bug class): per command, kept output beats
  *     have consecutive indices starting at rowSkip — no gap, no duplicate,
  *     order preserved — and total exactly H * (W / lanes); nothing is lost
@@ -92,12 +93,12 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
   assumeInitial(clockDomain.isResetActive)
   assume(dut.io.cmd.patchHeight > 0)
 
-  // Multi-lane contract: whole-group trim requires group-aligned rows. With
-  // 1 byte per element, every row start (base + r*stride) is beat-aligned
-  // iff base and stride both are.
-  if (alignedRowsOnly) {
-    assume(dut.io.cmd.payload.baseAddress(0, 2 bits) === 0)
-    assume(dut.io.cmd.payload.stride(0, 2 bits) === 0)
+  // Multi-lane contract: whole-group trim requires group-aligned rows, i.e.
+  // the row start offset inside an AXI beat must be a multiple of `lanes`
+  // (1 byte per element here, so byte offset == element offset).
+  if (alignedRowsOnly && lanes > 1) {
+    assume(dut.io.cmd.payload.baseAddress(0, log2Up(lanes) bits) === 0)
+    assume(dut.io.cmd.payload.stride(0, log2Up(lanes) bits) === 0)
   }
 
   // AXI-Stream protocol: stable-valid handshakes on the control stream...
@@ -129,12 +130,15 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
     assert(rowReqAddr(0, 2 bits) === 0, "row fetch not beat-aligned")
     assert((past(currentAddress) - rowReqAddr) < 4, "align-down skipped a beat")
     // ...and a beat budget covering head-skip + row width exactly.
-    val expectedWords = ((rowSkip.resize(8 bits) +^ W +^ (EW - 1)) / EW)
+    val skipElems = rowSkip.resize(8 bits) * U(lanes, 8 bits)
+    val expectedWords = ((skipElems +^ W +^ (EW - 1)) / EW)
     assert(rowWords === expectedWords.resized, "row beat budget mismatch")
-    // Row skip is exactly the misalignment of the issued row base
-    // (1 byte per element, so byte offset == element offset).
-    assert(rowSkip === past(currentAddress)(0, 2 bits), "rowSkip != head skip of issued row base")
-    assert(rowKeepEnd === (rowSkip +^ W - 1).resized, "keep window end mismatch")
+    // Row skip is exactly the misalignment of the issued row base, expressed
+    // in OUTPUT BEATS (rowSkip/rowKeepEnd share the elemCnt unit).
+    assert(rowSkip === (past(currentAddress)(0, 2 bits) / U(lanes, 3 bits)).resized,
+      "rowSkip != head skip (beats) of issued row base")
+    assert(rowKeepEnd === (rowSkip.resize(8 bits) + U(W / lanes - 1, 8 bits)).resized,
+      "keep window end mismatch")
   }
   // The design guarantees what callers previously had to assume: every AR
   // is beat-aligned (Sequential relies on this for region starts).
@@ -206,13 +210,14 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
   cover(cmdFire)
   cover(outFire)
   cover(dut.io.cmd.ready)
-  if (!alignedRowsOnly) cover(rowSkip =/= 0)                  // unaligned row exercised
+  if (lanes <= 2) cover(rowSkip =/= 0)                       // non-zero skip exercised
   cover(draining && elemCnt < rowSkip)                        // trimming actively drops a beat
   cover(cmdCount >= 2)                                        // back-to-back commands
 }
 
 // Distinct top-level names: each contract gets its own formal/ workspace
 class DMAReader2DFormalLanes1 extends DMAReader2DFormal(lanes = 1)
+class DMAReader2DFormalLanes2Aligned extends DMAReader2DFormal(lanes = 2, alignedRowsOnly = true)
 class DMAReader2DFormalLanes4Aligned extends DMAReader2DFormal(lanes = 4, alignedRowsOnly = true)
 
 object DMAReader2DFormal {
@@ -237,7 +242,28 @@ object DMAReader2DFormal {
         .workspacePath("formal")
         .doVerify(new DMAReader2DFormalLanes1, "dma_reader_2d_lanes1_cover")
 
-    // Contract 2: lanes > 1 under the documented aligned-rows precondition
+    // Contract 2: lanes = 2 under the documented 2-byte-aligned-rows
+    // precondition (headSkip is a multiple of the group, non-zero skips
+    // reachable) — full proof + cover.
+    FormalConfig
+      .withSymbiYosys
+      .withBMC(10)
+      .withTimeout(300)
+      .withDebug
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
+      .workspacePath("formal")
+      .doVerify(new DMAReader2DFormalLanes2Aligned, "dma_reader_2d_lanes2_aligned_bmc")
+
+    FormalConfig
+      .withSymbiYosys
+      .withCover(20)
+      .withTimeout(300)
+      .withDebug
+      .withEngies(List(SmtBmc(solver = SmtBmcSolver.cvc4)))
+      .workspacePath("formal")
+      .doVerify(new DMAReader2DFormalLanes2Aligned, "dma_reader_2d_lanes2_aligned_cover")
+
+    // Contract 3: lanes > 1 with 4-byte-aligned rows (headSkip always 0)
     FormalConfig
       .withSymbiYosys
       .withBMC(10)

@@ -35,6 +35,20 @@ case class Conv1DTestCompMulti[T <: Data, TAcc <: Data](dataType: HardType[T], a
   io.y <> Conv1D(io.x, io.w, io.b, accType, parallelN = false)
 }
 
+// Same configuration as Conv1DTestCompMulti, with the command-boundary reArm
+// input exposed: an aborted bias load must be cleared by reArm (bias_add).
+case class Conv1DReArmTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
+  val io = new Bundle {
+    val x = slave(Tensor(dataType, Seq(3, 2), lanes = 1))
+    val w = slave(Tensor(dataType, Seq(4, 2), lanes = 4))
+    val b = slave(Tensor(accType, Seq(1, 2), lanes = 1))
+    val reArm = in Bool()
+    val y = master(Tensor(accType, Seq(2, 2), lanes = 1))
+  }
+
+  io.y <> Conv1D(io.x, io.w, io.b, accType, parallelN = false, reArm = Some(io.reArm))
+}
+
 class Conv1DTest extends AnyFunSuite {
   test("Test Conv1D Layer: Y = Conv1D(X, W) + b on I4") {
     SimConfig.withWave.compile(Conv1DTestComp(I4(), I16())).doSim { dut =>
@@ -108,5 +122,9 @@ class Conv1DTest extends AnyFunSuite {
     test(s"Test Conv1DMulti compilation on $name") {
       SpinalConfig().generateVerilog(Conv1DTestCompMulti(dt(), accDt()))
     }
+  }
+
+  test("Generate Verilog Conv1DReArmTestComp for Python co-simulation") {
+    SpinalConfig().generateVerilog(Conv1DReArmTestComp(I8(), I32()))
   }
 }

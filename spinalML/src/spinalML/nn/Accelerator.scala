@@ -153,9 +153,14 @@ class Accelerator[T <: Data](
   // Register 0x00: Control
   // Bit 0: Start inference (trigger)
   val startPending = RegInit(False)
+  // Sticky completion flag for the DDR path: frameDone is a single-cycle pulse
+  // but a host AXI-Lite status read spans many cycles. Cleared by a host START
+  // write so a polling driver cannot miss completion.
+  val doneSticky = RegInit(False)
   ctrlFactory.onWrite(0x00) {
     // Trigger inference. We hold the request until the datapath accepts it.
     startPending := True
+    doneSticky := False
   }
   
   val startEvent = Event
@@ -225,6 +230,7 @@ class Accelerator[T <: Data](
 
   when(frameDone) {
     tileCntReg := tileCntReg + 1
+    doneSticky := True
     when(runActive) {
       // Auto-advance: re-fire START and slide the image cursor forward.
       startPending := True
@@ -232,11 +238,18 @@ class Accelerator[T <: Data](
     }
   }
 
+  // A host write to 0x08 starts a new image stream: reset the RUN cursor so the
+  // next inference reads from the newly programmed base without a hard reset.
+  // Placed after the frameDone increment so a same-cycle host write wins.
+  ctrlFactory.onWrite(0x08) {
+    imgBaseOffset := 0
+  }
+
   // Register 0x04: Status
-  // Bit 0: Done (outStream.valid in stream mode, dmaWriter.done in DDR mode)
+  // Bit 0: Done (latched frameDone in DDR mode, outStream.valid in stream mode)
   // Bit 1: Busy (model busy || dmaWriter busy)
   // Bit 2: RUN state (mirror of 0x1C bit0)
-  ctrlFactory.read(Mux(writeToDdr, dmaWriter.io.done, io.outStream.stream.valid), 0x04, 0)
+  ctrlFactory.read(Mux(writeToDdr, doneSticky, io.outStream.stream.valid), 0x04, 0)
   ctrlFactory.read(io.busy, 0x04, 1)
   ctrlFactory.read(runActive, 0x04, 2)
   ctrlFactory.read(tileCntReg, 0x18, 0)

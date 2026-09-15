@@ -21,10 +21,13 @@ abstract class MemoryAdapter(val axiConfig: Axi4Config) extends Component {
     /** AXI4 slave read interface connected to the Neural Network Accelerator master. */
     val axi = slave(Axi4(axiConfig))
 
-    /** Host / UART loader write port. */
+    /** Host / UART loader write port. `wrStrb` is a per-byte write mask
+      * (bit i enables byte i of `wrData`, LSB-first), mirroring AXI w.strb,
+      * so partial-word writes never leak stale bytes from earlier commands. */
     val wrEnable = in(Bool())
     val wrAddr   = in(UInt(32 bits))
     val wrData   = in(Bits(axiConfig.dataWidth bits))
+    val wrStrb   = in(Bits((axiConfig.dataWidth / 8) bits))
   }
 }
 

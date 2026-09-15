@@ -104,11 +104,14 @@ case class DMAReader2D[T <: Data](
   val cmdStride      = Reg(UInt(axiConfig.addressWidth bits)) init (0)
 
   // Per-row latched geometry (computed combinationally from currentAddress
-  // while issuing the row command, then stable during drain)
+  // while issuing the row command, then stable during drain). The trim
+  // thresholds are expressed in OUTPUT BEATS (the `elemCnt` unit): each beat
+  // carries `outLanes` elements, and the group-aligned row contract keeps the
+  // beat conversion exact.
   val rowReqAddr  = Reg(UInt(axiConfig.addressWidth bits)) init (0)
   val rowWords    = Reg(UInt(rowWordsW bits)) init (0)
-  val rowSkip     = Reg(UInt(skipW bits)) init (0) // leading elements to trim
-  val rowKeepEnd  = Reg(UInt(keepEndW bits)) init (0)// last kept element index
+  val rowSkip     = Reg(UInt(skipW bits)) init (0) // leading beats to trim
+  val rowKeepEnd  = Reg(UInt(keepEndW bits)) init (0)// last kept beat index
 
   readerCmd.valid   := False
   readerCmd.address := rowReqAddr
@@ -132,6 +135,9 @@ case class DMAReader2D[T <: Data](
   // Row trim: mask leading (alignment) and trailing (overshoot) elements of
   // each row's raw stream so the output carries exactly `shape(1)` elements
   // per row. With aligned, exact-width rows this is a pure passthrough.
+  // The latched window is in beats; `headSkipElems` and `rowWidth` are both
+  // multiples of `outLanes` under the documented row contract, so the
+  // division below is exact and no element group is ever split.
   // --------------------------------------------------------
   val elemCnt  = Reg(UInt(beatsW bits)) init (0)
   val suppress = (elemCnt < rowSkip.resize(beatsW bits)) || (elemCnt > rowKeepEnd)
@@ -165,8 +171,8 @@ case class DMAReader2D[T <: Data](
         when(readerCmd.ready) {
           rowReqAddr := reqAddrAligned
           rowWords   := wordsForCurrentRow
-          rowSkip    := headSkipElems.resize(skipW bits)
-          rowKeepEnd := (headSkipElems +^ rowWidth -^ U(1)).resize(keepEndW bits)
+          rowSkip    := (headSkipElems / U(outLanes)).resize(skipW bits)
+          rowKeepEnd := ((headSkipElems +^ rowWidth) / U(outLanes) -^ U(1)).resize(keepEndW bits)
           lastRow    := currentRow === cmdHeight - 1
           goto(stateDrain)
         }

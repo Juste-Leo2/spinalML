@@ -75,8 +75,14 @@ class AxiWriteSlave:
                 data = int(d.io_axiMaster_w_payload_data.value)
                 last = int(d.io_axiMaster_w_payload_last.value)
                 strb = int(d.io_axiMaster_w_payload_strb.value)
-                self.beats.append((self.current["addr"], data, last, strb))
-                self.memory[self.current["addr"]] = data
+                beat_addr = self.current["addr"]
+                self.beats.append((beat_addr, data, last, strb))
+                # Byte-granular merge: honour w.strb (AXI byte strobes).
+                merged = self.memory.get(beat_addr, 0)
+                for b in range(AXI_BYTES):
+                    if (strb >> b) & 1:
+                        merged = (merged & ~(0xFF << (8 * b))) | (((data >> (8 * b)) & 0xFF) << (8 * b))
+                self.memory[beat_addr] = merged
                 self.current["addr"] += AXI_BYTES
                 self.current["left"] -= 1
                 if self.current["left"] == 0:
@@ -257,11 +263,55 @@ async def cocotb_dma_writer_backpressure(dut):
     print(f"DMAWriter random AW/W/B backpressure validated: {slave.bursts}")
 
 
-def _run_sim(testcase, sim_build, request=None):
+@cocotb.test()
+async def cocotb_dma_writer_partial_last_beat(dut):
+    """3 SInt16 elements = 6 valid bytes on a 64-bit bus: the last (and only)
+    W beat must strobe bytes 0..5 only and leave the 2 padding bytes intact."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    slave = AxiWriteSlave(dut)
+    cocotb.start_soon(slave.run())
+
+    await reset_dut(dut)
+
+    base_addr = 0x1000
+    sentinel_hi = 0xBEEF
+    slave.memory[base_addr] = sentinel_hi << 48  # bytes 6,7 pre-existing data
+
+    values = [0x1234, -0x4567, 0x7ABC]
+    await issue_cmd(dut, base_addr, length=0)  # 1 beat
+    await send_stream(dut, values + [0x5555])  # 3 elements padded to 2 beats
+    await wait_done(dut, dump=slave)
+
+    await ReadOnly()
+    assert int(dut.io_busy.value) == 0, "DMAWriter still busy after done"
+    await RisingEdge(dut.clk)
+
+    assert slave.bursts == [(base_addr, 1)], f"Expected one 1-beat burst, got {slave.bursts}"
+    last_strb = slave.beats[-1][3]
+    assert last_strb == 0x3F, f"Last-beat strb 0x{last_strb:02X} != 0x3F (6 valid bytes)"
+    expected_word = sum((v & 0xFFFF) << (16 * i) for i, v in enumerate(values))
+    assert slave.memory[base_addr] & 0xFFFFFFFFFFFF == expected_word, (
+        f"Payload mismatch: 0x{slave.memory[base_addr]:016X} != 0x{expected_word:016X}"
+    )
+    assert slave.memory[base_addr] >> 48 == sentinel_hi, (
+        f"Padding bytes were overwritten: 0x{slave.memory[base_addr]:016X}"
+    )
+    print("DMAWriter partial last beat: strb=0x3F, padding bytes preserved")
+
+
+def _run_sim(
+    testcase,
+    sim_build,
+    request=None,
+    mill_filter="Generate Verilog for DMAWriterTestWrapper",
+    toplevel="DMAWriterTestComp",
+):
     v_file = run_mill(
         "spinalML.memory.DMAWriterTest",
-        "Generate Verilog for DMAWriterTestWrapper",
-        "DMAWriterTestComp",
+        mill_filter,
+        toplevel,
     )
 
     from utils.test_layers_utils import safe_run_sim as run
@@ -269,7 +319,7 @@ def _run_sim(testcase, sim_build, request=None):
     run(
         simulator="verilator",
         verilog_sources=[v_file],
-        toplevel="DMAWriterTestComp",
+        toplevel=toplevel,
         module="test_dma_writer",
         sim_build=sim_build,
         timescale="1ns/1ps",
@@ -288,3 +338,13 @@ def test_dma_writer_4k_boundary(request):
 
 def test_dma_writer_backpressure(request):
     _run_sim("cocotb_dma_writer_backpressure", "sim_build/py_dma_writer_backpressure", request)
+
+
+def test_dma_writer_partial_last_beat(request):
+    _run_sim(
+        "cocotb_dma_writer_partial_last_beat",
+        "sim_build/py_dma_writer_partial",
+        request,
+        mill_filter="Generate Verilog for DMAWriterPartialTestWrapper",
+        toplevel="DMAWriterPartialTestComp",
+    )

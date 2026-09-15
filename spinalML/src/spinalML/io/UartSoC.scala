@@ -65,6 +65,17 @@ class UartSoC[T <: Data](
   val soc = new ClockingArea(cd) {
     val acc = acceleratorFactory()
 
+    // The UART 'R' reply carries one byte per logit (documented FP8/INT8
+    // protocol). Fail loudly for wider element types instead of a cryptic
+    // WIDTH MISMATCH deep inside the serializer below.
+    // TODO(multi-byte-logits): support BF16/FP16 outputs by serializing
+    //   bytesPerElem bytes per element in the R reply — this changes the
+    //   protocol (UartBridge byte counting, uart_host.read_logits, docs) and
+    //   is tracked in docs/full_roadmap.md §Refactoring 1.4.
+    val outElemBits = acc.io.outStream.stream.payload(0).getBitsWidth
+    require(outElemBits == 8,
+      s"UartSoC only serializes 8-bit output elements over UART (got $outElemBits bits) — see docs/uart_bridge.md and the multi-byte-logits TODO")
+
     val rx = new UartRx(clkFreq, baudRate)
     val tx = new UartTx(clkFreq, baudRate)
     val mem = memoryAdapterFactory match {
@@ -79,13 +90,12 @@ class UartSoC[T <: Data](
       version = version
     )
 
-    // AXI master (read only): accelerator <-> internal BRAM
+    // AXI master: accelerator <-> internal memory (read path + write-back)
     mem.io.axi.ar <> acc.io.axiMaster.ar
     mem.io.axi.r  <> acc.io.axiMaster.r
-    acc.io.axiMaster.aw.ready := mem.io.axi.aw.ready
-    acc.io.axiMaster.w.ready  := mem.io.axi.w.ready
-    acc.io.axiMaster.b.valid  := mem.io.axi.b.valid
-    acc.io.axiMaster.b.payload := mem.io.axi.b.payload
+    mem.io.axi.aw <> acc.io.axiMaster.aw
+    mem.io.axi.w  <> acc.io.axiMaster.w
+    mem.io.axi.b  <> acc.io.axiMaster.b
 
     // Control bus: bridge (master) <-> accelerator AXI-lite slave
     bridge.io.csr <> acc.io.ctrlBus
@@ -94,6 +104,7 @@ class UartSoC[T <: Data](
     mem.io.wrEnable := bridge.io.wrEnable
     mem.io.wrAddr   := bridge.io.wrAddr
     mem.io.wrData   := bridge.io.wrData
+    mem.io.wrStrb   := bridge.io.wrStrb
 
     // UART wiring (1-cycle pulse handshake, mirror of top.v)
     rx.io.rx := io.uartRx

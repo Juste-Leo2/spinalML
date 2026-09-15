@@ -76,7 +76,7 @@ case class LogOp[T <: Data](
       // 1. log2(x) in fixed point Q8.8: int part = exponent - bias, frac part = ROM
       val expTrueSInt = x.exponent.intoSInt - S(bias, expBits + 2 bits)
       val fracBits = log2MantLuts(i).readAsync(x.mantissa).asUInt
-      val log2Fixed = (((expTrueSInt << 8).asUInt) | fracBits.resize(expTrueSInt.getWidth + 8)).intoSInt
+      val log2Fixed = (((expTrueSInt << 8).asUInt) | fracBits.resize(expTrueSInt.getWidth + 8)).asSInt
 
       // 2. Multiply by ln(2)/ln(b) in Q0.16: Q8.8 * Q0.16 = Q8.24
       val yFixedFull = log2Fixed * S(log2ToBase, 18 bits)

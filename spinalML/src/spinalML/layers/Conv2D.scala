@@ -48,7 +48,7 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
   val matmulResult = matmul(cols, io.w, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal)
 
   // 3. Add Bias
-  val biasAdded = bias_add(matmulResult, io.b)
+  val biasAdded = bias_add(matmulResult, io.b, reArm = Some(io.reArm))
 
   // 4. Reshape to 3D [H_out, W_out, outChannels]
   val reshaped = reshape(biasAdded, Seq(H_out, W_out, outChannels))

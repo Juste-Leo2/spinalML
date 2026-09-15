@@ -6,6 +6,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import spinal.core._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.examples.Mnistw4a8
+import spinalML.dtypes.BF16
+import spinalML.nn.{Accelerator, Flatten}
 
 import spinalML.Target
 
@@ -36,5 +38,26 @@ class UartSoCTest extends AnyFunSuite {
     val soc = report.toplevel.asInstanceOf[UartSoC[_]]
     assert(soc.target.isAsic, "Target should be ASIC")
     assert(soc.soc.mem.isInstanceOf[spinalML.memory.SramAsicAdapter], "ASIC target must select SramAsicAdapter by default")
+  }
+
+  test("uart_soc_toplevel refuses non-8-bit output elements") {
+    val cfg = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+    val ex = intercept[Exception] {
+      SpinalConfig().generateVerilog {
+        new UartSoC(
+          acceleratorFactory = () => new Accelerator(
+            dataType = BF16(),
+            inputShape = Seq(4, 4, 1),
+            modelSpec = Seq(Flatten()),
+            axiConfig = cfg
+          ),
+          axiConfig = cfg,
+          target = Target.FPGA()
+        )
+      }
+    }
+    val msg = Option(ex.getMessage).getOrElse("") + Option(ex.getCause).map(_.getMessage).getOrElse("")
+    assert(msg.contains("8-bit"),
+      s"Elaboration must reject 16-bit logits with a clear message, got: $ex / ${ex.getCause}")
   }
 }

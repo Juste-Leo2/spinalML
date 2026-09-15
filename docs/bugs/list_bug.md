@@ -19,6 +19,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 1. Types de Données & Arithmétique Flottante
 
 ### BUG-DTYPE-01 : Crash d'élaboration sur tranche négative dans `Float.roundTo`
+- **Statut** : faux positif (vérifié le 2026-09-15) — aucune exception : `mantExt(-1 downto 0)` produit un slice de largeur 0 via `RangePimper` (`SpinalHDL core.scala:507-519`), et `(0 bits) =/= 0` se constant-fold en `False`, soit exactement le `sticky` RNE attendu pour `drop == 1`. Test d'élaboration ajouté : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« roundTo drops a single mantissa bit »).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (ligne 397)
 - **Code concerné** :
   ```scala
@@ -39,6 +40,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-02 : Crash d'élaboration sur tranche négative dans `Float.mul`
+- **Statut** : faux positif (vérifié le 2026-09-15) — même mécanisme que DTYPE-01 : `mantProd(-1 downto 0)` donne un slice de largeur 0 via `RangePimper` (`SpinalHDL core.scala:507-519`), donc le `stickyM` de la branche non-overflow est constant `False` (Vérifié dans le Verilog généré : `(overflow ? (prod[0] != 0) : 1'b0)`), soit le RNE correct pour un seul bit de mantisse. Test d'élaboration ajouté : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« mul on a single-mantissa-bit format (FP4_E2M1) »).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (ligne 51)
 - **Code concerné** :
   ```scala
@@ -64,6 +66,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-03 : Débordement d'exposant signant la perte de valeur (conversion Float étroit -> large)
+- **Statut** : corrigé — bug réel, mais le mode de défaillance observé est une **erreur d'élaboration** `OUT OF RANGE CONSTANT` (la comparaison `expSInt >= (1 << outExpBits) - 1` ne tient pas dans la largeur `a.expBits + 4` dès que `outExpBits >= a.expBits + 4`, ex. FP4/FP8 -> FP32), pas l'underflow silencieux décrit initialement. Fix : `expSIntWidth = (a.expBits max outExpBits) + 4` appliqué aux deux branches (drop et widening). Tests : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« roundTo widens the exponent without overflow (FP4 4.0 -> FP32 4.0) ») et non-régression `tests/python/test_softmax.py` (7 passed).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (lignes 403-405 et 421)
 - **Code concerné** :
   ```scala
@@ -88,6 +91,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-04 : Débordement dans `MathLUTs.floatEncodeFn` transformant l'Infini en Zéro
+- **Statut** : corrigé — `+Inf`/`-Inf` encodés canoniquement (exposant all-ones, mantisse 0, signe préservé) et `NaN` -> 0 (même convention que le golden Python `dtypes.from_float`), au lieu du débordement `Double.toInt` qui produisait 0 (`+Inf`), `0x80` (`-Inf`) ou une mantisse poubelle (`NaN`). Tests : `spinalML/test/src/spinalML/utils/MathLUTsTest.scala` (3 cas) ; non-régression : `tests/python/test_exp.py --debug-math` (4 passed, métriques de précision inchangées).
 - **Fichier** : `spinalML/src/spinalML/utils/math_luts.scala` (lignes 74-88)
 - **Code concerné** :
   ```scala
@@ -119,6 +123,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-05 : Incohérence d'encodage de l'Infini entre `Float.scala` et `math_luts.scala`
+- **Statut** : corrigé — la saturation sur débordement fini encode désormais l'infini canonique (exposant all-ones, mantisse 0), cohérent avec `Float.scala` (ligne 76) et le golden `dtypes.from_float`, au lieu de la mantisse all-ones qui correspond à un code NaN. Tests : `spinalML/test/src/spinalML/utils/MathLUTsTest.scala` (« floatEncodeFn saturates finite overflow to canonical infinity (mant 0) ») ; non-régression `tests/python/test_exp.py --debug-math` (4 passed, métriques inchangées).
 - **Fichier** : `spinalML/src/spinalML/utils/math_luts.scala` (ligne 87) vs `Float.scala` (ligne 76)
 - **Description** :
   Dans `Float.scala`, la saturation vers l'infini configure `exponent = (1 << expBits) - 1` et `mantissa = 0` (conformité IEEE 754).
@@ -144,6 +149,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 2. Opérations Fondamentales & Algèbre
 
 ### BUG-OPS-01 : Inversion de signe dramatique via `.intoSInt` dans `ops/log.scala`
+- **Statut** : corrigé (commit `ec54afe`) — test de couverture : `tests/python/test_log.py::test_log_bf16` et `::test_log_bf16_base10` (valeurs x < 1).
 - **Fichier** : `spinalML/src/spinalML/ops/log.scala` (ligne 79)
 - **Code concerné** :
   ```scala
@@ -206,6 +212,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-06 : Perte du parallélisme de voies dans `ops/transpose.scala`
+- **Statut** : corrigé — `finalLanes = if (outLanes > 0) outLanes else a.lanes` (ligne 108) ; le repack interne vers 1 voie reste un détail d'implémentation, la sortie par défaut retrouve les lanes d'entrée. Tests : `TransposeTest.scala` (« transpose preserves the input lanes by default », top lanes = 4, rouge avant : `transpose dropped lanes: 1 != 4`) ; non-régression Scala `TransposeTest` 6/6, Python `test_transpose.py::test_transpose_4x4_i8` et `test_classicalattention.py::test_pytest_attention_bf16` (seul call site).
 - **Fichier** : `spinalML/src/spinalML/ops/transpose.scala` (ligne 108)
 - **Code concerné** :
   ```scala
@@ -230,6 +237,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-08 : Corruption des canaux dans `CumSumOp` lorsque la dimension $C$ n'est pas multiple de `lanes`
+- **Statut** : faux positif (vérifié le 2026-09-15) — le contrat de streaming du projet rembourre **chaque ligne** à `ceil(C/lanes)` battements (même contrat que `MatmulDynPad`, `test_matmul.py`), et `CumSumOp` compte précisément `chunks` battements par ligne avec un `Delay(chunks)` : l'alignement de voie est donc préservé pour `C % lanes != 0`. Test ajouté : `CumsumTest.scala` (« CumSum with C=5, lanes=4 on per-row padded beats », valeurs par ligne vérifiées, passe). Un `require(C % lanes == 0)` casserait ce contrat légitime.
 - **Fichier** : `spinalML/src/spinalML/ops/cumsum.scala` (lignes 21, 47-58)
 - **Code concerné** :
   ```scala
@@ -247,6 +255,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-09 : Désynchronisation inter-lignes dans `MatMulOp` (mode séquentiel) lorsque $K \pmod{lanes} \ne 0$
+- **Statut** : faux positif (vérifié le 2026-09-15) — le rembourrage par ligne est le contrat d'entrée : le driver de `test_matmul.py` zéro-remplit chaque ligne (`k_idx >= K -> 0.0`) et le test `test_matmul_dyn_pad_*` (K=3, lanes=2) passe déjà ; le RTL masque explicitement les lanes de padding (`matmul.scala:248`). Ajouter `require(K % lanes == 0)` casserait ce test valide.
 - **Fichier** : `spinalML/src/spinalML/ops/matmul.scala` (lignes 232-249, 321-328)
 - **Code concerné** :
   ```scala
@@ -281,6 +290,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-11 : Interprétation signée erronée de l'exposant (`intoSInt`) provoquant un faux débordement dans `ReciprocalOp`
+- **Statut** : faux positif (vérifié le 2026-09-15) — dans SpinalHDL 1.15.0, `UInt.intoSInt = this.expand.asSInt` et `expand` **préfixe un 0** (`core/UInt.scala:397/399`) : l'exposant biaisé est donc zéro-étendu, ce qui est le comportement correct. Les tests BF16 `1/2.0`, `1/50.0` passent. Ne pas « corriger » en `asSInt` (ce serait le bug). Preuve du piège inverse : BUG-OPS-01, où `intoSInt` est appliqué à une valeur déjà en complément à 2.
 - **Fichier** : `spinalML/src/spinalML/ops/reciprocal.scala` (lignes 66-74)
 - **Code concerné** :
   ```scala
@@ -332,6 +342,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 3. Mémoire, Buffers, DMA & Adaptateurs
 
 ### BUG-MEM-01 : Décalage d'unités (battements vs éléments) dans le rognage spatial de `DMAReader2D`
+- **Statut** : corrigé (2026-09-15) — `rowSkip`/`rowKeepEnd` sont désormais latés **en battements de sortie** (`headSkipElems / outLanes` et `(headSkipElems + rowWidth) / outLanes - 1`, division exacte sous le contrat « lignes alignées au groupe ») au lieu d'éléments comparés à `elemCnt` (battements). Test rouge : `DMAReader2DTest` « DMAReader2D outLanes=4 with unaligned row starts » (base 0x1004, stride 12, I8, outLanes=4 → 16/32 éléments avant fix, timeout ; 32/32 après). Formel renforcé : `DMAReader2DFormal` exprime `rowSkip`/`rowKeepEnd`/comptage en battements et une variante `Lanes2Aligned` (base/stride 2 octets alignés, skip non nul couvert) a été ajoutée ; `test-all-formal -k DMAReader2DFormal` passe. Non-régression : `DMAReader2DTest` 3/3, `test_dma_reader2d.py`, `SequentialTest`.
 - **Fichier** : `spinalML/src/spinalML/memory/DMAReader2D.scala` (lignes 152-156)
 - **Code concerné** :
   ```scala
@@ -345,6 +356,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-02 : Violation de protocole Stream sur `io.cmd` dans `DMAReader2D`
+- **Statut** : faux positif (vérifié le 2026-09-15) — `io.cmd` est un esclave Stream : différer `ready` jusqu'à la fin de la transaction est légal, le maître devant maintenir `valid`/payload jusqu'au handshake (contrat explicitement vérifié par `DMAReader2DFormal` : `assume(cmd.valid && payload === past(payload))` quand `ready` est bas). Les bancs Scala (`waitSamplingWhere(cmd.ready)`) et cocotb (valid maintenu jusqu'à ready) sont conformes ; le scénario « maître attendant un ack immédiat » suppose un maître hors protocole.
 - **Fichier** : `spinalML/src/spinalML/memory/DMAReader2D.scala` (lignes 95-103)
 - **Description** :
   Dans l'état `stateIdle`, `when(io.cmd.valid)` démarre immédiatement le traitement multi-lignes mais n'asserte pas `io.cmd.ready`. Le signal `ready` n'est levé que dans l'état final `stateDrain`.
@@ -354,6 +366,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-03 : Écriture mémoire non alignée et écrasement par strobes pleins dans `DMAWriter`
+- **Statut** : corrigé (2026-09-15) — `io.axiMaster.w.strb` n'est plus `setAll()` : le dernier beat du transfert (`remaining === 0 && burstRemain === 1`, le transfert étant contigu le beat partiel est toujours le dernier) reçoit le masque des `(totalElements - (totalAxiBeats-1)*axiLanes) * (elemWidth/8)` octets valides, les beats pleins gardent tout-1. Test rouge : `tests/python/test_dma_writer.py::test_dma_writer_partial_last_beat` (3 SInt16 = 6 octets sur bus 64 b, sentinelle 0xBEEF dans les octets 6-7 : avant fix `strb=0xFF` et sentinelle écrasée ; après fix `strb=0x3F` et sentinelle intacte). Le banc `AxiWriteSlave` applique désormais `w.strb` octet par octet (il ignorait le strobe, d'où l'angle mort). Non-régression : `test_dma_writer.py` 4/4, `test-all -k DMAWriterTest`, `test-all-formal -k DMAWriterFormal`, `test-all-python -k accelerator` (write-back).
 - **Fichier** : `spinalML/src/spinalML/memory/DMAWriter.scala` (ligne 96)
 - **Code concerné** :
   ```scala
@@ -367,6 +380,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-04 : Deadlock systématique en écriture sur `BramAdapter`, `SramAsicAdapter` et `DdrAdapter`
+- **Statut** : corrigé (2026-09-15) — les deux adapters on-chip implémentent un esclave AXI4 write single-outstanding (AW accepté en priorité, beats W commités avec leurs strobes via `Mem.write(mask=...)`, une réponse B), et `UartSoC` connecte désormais les canaux `aw`/`w`/`b` complets de l'accélérateur à la mémoire (avant : seuls les handshakes, payloads non pilotés). `DdrAdapter` arbitre maintenant le port hôte (prioritaire dès qu'une écriture est latée) et le burst accélérateur sur le maître externe : le burst possède le bus de son AW jusqu'à sa réponse B, `aw.len`/`last` sont générés depuis le compteur de beats, `w.strb` est transmis, et la réponse B est routée vers l'accélérateur (auto-acquittée pour l'hôte). Tests rouges : `test_memory_adapter.py::test_bram_adapter_write_burst` / `test_sram_adapter_write_burst` (avant : `aw.ready` bloqué bas ; après : burst relu bit-exact), `test_bram_adapter_write_strobes`, et `test_ddr_adapter_accel_write` (priorité hôte vérifiée : `io_axi_aw_ready` reste bas pendant l'écriture hôte ; puis burst 2 beats avec `len`/`last`/`strb` corrects et `B` forwardé). Formel `AxiReadMemFormal` : write path neutralisé en constantes pour l'élaguer + solveur **boolector** (150 s+ / TIMEOUT → 10 s). Non-régression : `test-all-python -k memory_adapter`, `test-all -k MemoryAdapterTest`, `-k UartSoCTest`. Complément bancs : `MemoryAdapterTest` pilote maintenant explicitement les entrées AXI write (`aw/w.valid := false`, `b.ready := true`) — sans quoi les entrées laissées libres déclenchaient un AW fantôme aléatoire (bancs flaky 2/5) maintenant que `aw.ready` est actif au repos.
 - **Fichier** : `spinalML/src/spinalML/memory/BramAdapter.scala`, `SramAsicAdapter.scala`, `DdrAdapter.scala`
 - **Code concerné** :
   ```scala
@@ -381,6 +395,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-05 : Underflow d'adresse et clamping erroné dans `BramAdapter.mapIndex`
+- **Statut** : corrigé (durcissement, 2026-09-15) — `mapIndex` clampe désormais les adresses sous `imgBase` sur le **premier** mot physique (`Mux(addr < imgBase, U(0), addr - imgBase)`) au lieu de laisser l'underflow non signé déborder vers le dernier mot ; le clamp haut (au-delà de la mémoire → dernier mot) est conservé. Appliqué aussi à `SramAsicAdapter`. Test rouge : `test_memory_adapter.py::cocotb_bram_adapter_clamp` mis à jour (`addr=0` renvoyait `0xDEAD…` = dernier mot, attend maintenant le premier mot) ; Python 12/12, `MemoryAdapterTest` ✅, formel `AxiReadMemFormal` ✅ (boolector).
 - **Fichier** : `spinalML/src/spinalML/memory/BramAdapter.scala` (lignes 44-55)
 - **Code concerné** :
   ```scala
@@ -396,6 +411,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-06 : Interblocage d'ordonnancement des consommateurs dans `TapBuffer.fork`
+- **Statut** : faux positif (contrat, vérifié le 2026-09-15) — le chaînage est documenté dans `TapBuffer.scala` (tee atomique : un handshake d'entrée alimente les deux sorties, FIFO à capacité pleine taille) et `TapBufferTest` draine explicitement le consommateur direct avant le différé. Le « deadlock » décrit n'arrive que si un consommateur aval dépend d'un consommateur amont qui ne draine pas (usage hors contrat) ; les usages réels (`Sequential`, `DagDSL.residual`) respectent l'ordre. Repro possible : `direct.ready=0` + `deferred.ready=1` → starvation par construction. Un redesign par FIFO indépendante par branche relèverait de l'évolution, pas du correctif.
 - **Fichier** : `spinalML/src/spinalML/memory/TapBuffer.scala` (lignes 59-71)
 - **Description** :
   Le chaînage en cascade impose que le consommateur $0$ lise ses données avant le consommateur $1$, qui doit lire avant le consommateur $2$.
@@ -456,6 +472,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-LAY-03 : Omission de propagation du signal `reArm` vers `bias_add` dans `Conv1D` et `Conv2D`
+- **Statut** : corrigé — `bias_add(..., reArm = Some(io.reArm))` dans `Conv1DLayer` et `Conv2DLayer` (parité avec `Linear.scala:67`). Un reArm en cours de chargement du biais laissait `loadCounter` à mi-course : le biais suivant était chargé décalé (table partiellement périmée). Tests : `tests/python/test_conv1d.py::test_pytest_conv1d_rearm_bias` (nouveau top `Conv1DReArmTestComp`, rouge avant : second beat de biais jamais accepté) ; non-régression Python Conv1D+Conv2D 17/17 et Scala `Conv1DTest` 10/10, `Conv2DTest` 9/9.
 - **Fichier** : `spinalML/src/spinalML/layers/Conv1D.scala` (ligne 49) & `spinalML/src/spinalML/layers/Conv2D.scala` (ligne 51)
 - **Code concerné** :
   ```scala
@@ -560,6 +577,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-04 : Absence de garde-fou sur `dmaCmd.length` dans `Accelerator.scala` (risque de troncature 16 bits)
+- **Statut** : faux positif (vérifié le 2026-09-15) — `U(valeur, width)` **lève une exception** si la valeur ne tient pas dans la largeur (`core/internals/Expression.scala:2457`, « literal ... can't fit in UInt(...) ») : il n'y a pas de troncature silencieuse. Un `require(totalOutBeats <= 65536 && > 0)` reste une amélioration de message d'erreur possible (non appliquée).
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (ligne 164)
 - **Code concerné** :
   ```scala
@@ -577,6 +595,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-05 : Absence de réinitialisation logicielle de `imgBaseOffset` dans `Accelerator.scala`
+- **Statut** : corrigé — `ctrlFactory.onWrite(0x08) { imgBaseOffset := 0 }`, placé après l'incrément `frameDone` pour qu'une écriture hôte gagne en cas de collision dans le même cycle. Une écriture 0x08 repart donc du nouveau base sans hard reset. Tests : `tests/python/test_accelerator.py::test_accel_image_base_reset` (rouge avant : zéros lus à `new_base + k*FRAME_BYTES`) ; non-régression `test_accelerator.py` 5/5 (dont RUN continu).
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (lignes 221-233)
 - **Code concerné** :
   ```scala
@@ -602,6 +621,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-06 : Danger de blocage en polling CPU sur le bit de complétion CSR `0x04`
+- **Statut** : corrigé — registre verrou `doneSticky` mis à 1 sur `frameDone` et remis à 0 uniquement sur écriture hôte de 0x00 ; CSR 0x04 bit 0 lit `Mux(writeToDdr, doneSticky, outStream.valid)`. Un hôte qui poll ne peut plus rater l'impulsion d'un cycle (la lecture AXI-Lite dure elle-même plusieurs cycles). Tests : `tests/python/test_accelerator.py::test_accel_dma_write_back` (assertion ajoutée : 50 cycles après `io_done`, lire 0x04 et exiger bit0=1 ; rouge avant fix) ; non-régression Python 5/5 + Scala `AcceleratorTest` 4/4.
 - **Fichier** : `spinalML/src/spinalML/nn/Accelerator.scala` (ligne 239)
 - **Code concerné** :
   ```scala
@@ -619,6 +639,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 7. Entrées / Sorties, Pont Série & SoC
 
 ### BUG-IO-01 : Perte silencieuse d'octets entrants dans `UartBridge` (`rx.ready := True` permanent)
+- **Statut** : faux positif (mécanisme erroné, vérifié le 2026-09-15) — `UartRx` n'expose **aucun `ready`** (sa `valid` est une impulsion d'un cycle) et `UartSoC` ne connecte pas `bridge.io.rx.ready` au récepteur (`io.rx.valid`/`payload` seulement) : gater `io.rx.ready` ne changerait donc rien. La perte n'existe que si l'hôte pipeline des commandes, ce que le protocole requête/réponse du top.v de référence interdit. Un durcissement réel (FIFO RX + `ready` honoré) serait une évolution hors périmètre.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (ligne 101)
 - **Code concerné** :
   ```scala
@@ -638,6 +659,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-02 : Corruption de données lors d'écritures BRAM partielles dans `UartBridge`
+- **Statut** : corrigé (2026-09-15) — `UartBridge` expose désormais un masque d'octets `wrStrb` (bit i = octet i valide) laté par mot : tout-1 pour un mot complet, seuls les octets reçus pour le dernier mot partiel. `MemoryAdapter.io` (donc `BramAdapter`/`AxiReadMem`/`SramAsicAdapter`) reçoit `wrStrb` et le convertit en masque bit-à-bit pour `Mem.write(mask=...)` ; `DdrAdapter` le recopie dans `w.strb` AXI. Test rouge : `test_uart_bridge.py::test_uart_bridge_partial_write` (mot complet 0xAA puis 3 octets au mot suivant : avant fix la queue valait `0xAA…`, après fix elle reste à zéro) et `test_memory_adapter.py::test_bram_adapter_partial_write` (strobes 0x07, octets hauts préservés). Non-régression : `test-all-python -k uart` 3/3, `-k memory_adapter`, `test-all -k MemoryAdapterTest/UartBridgeTest/UartSoCTest`, formels `AxiReadMemFormal` (+ `anyseq(wrStrb)`) et `UartBridgeFormal`.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 226-240)
 - **Code concerné** :
   ```scala
@@ -657,6 +679,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-03 : Violation du protocole Stream sur `io.tx.valid` (impulsion d'un seul cycle)
+- **Statut** : faux positif (vérifié le 2026-09-15) — la FSM ne pulse `txStartR` que dans `R_WAIT` (condition `io.outStream.valid && io.tx.ready`) ou en `IDLE`, atteint uniquement après que `tx.ready` soit repassé haut en `R_SEND`/`S_SEND` ; les commandes C/W ne touchent pas TX. De plus `UartTx` est une interface `start`+`ready` (pas un Stream) : l'impulsion d'un cycle n'est pas une violation et aucun octet n'est perdu.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 102, 123)
 - **Code concerné** :
   ```scala
@@ -672,6 +695,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-04 : Tronquage statique d'adresse CSR dans `UartBridge`
+- **Statut** : corrigé — le mode de défaillance réel n'est pas une troncature silencieuse mais une **erreur d'élaboration** (`WIDTH MISMATCH`) dès que `csrAddrWidth != 8` : `addrReg(7 downto 0)` (8 bits) est assigné à `csrAwAddrR` de largeur `csrAddrWidth`. Fix : `csrAwAddrR := addrReg.resize(csrAddrWidth)`. Tests : nouveau top `UartBridgeWideCsrTestComp` (csrAddrWidth = 12, généré par `UartBridgeTest.scala`) + `tests/python/test_uart_bridge.py::test_uart_bridge_wide_csr` (C-commande vers 0x123, moniteur AW ; rouge avant par échec d'élaboration) ; non-régression `test_uart_bridge.py` 2/2 et Scala `UartSoCTest` 2/2.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (ligne 169)
 - **Code concerné** :
   ```scala
@@ -685,6 +709,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-05 : Exception d'élaboration sur largeurs de types $> 8$ bits dans `UartSoC`
+- **Statut** : corrigé (garde d'élaboration, 2026-09-15) — `UartSoC` vérifie en tête d'élaboration `outElemBits == 8` et échoue avec un message explicite (« UartSoC only serializes 8-bit output elements over UART (got N bits) — see docs/uart_bridge.md ») au lieu du WIDTH MISMATCH cryptique du sérialiseur ; le protocole `R` reste 1 octet/logit (FP8/INT8). Le support BF16/FP16 est tracé par `TODO(multi-byte-logits)` dans `UartSoC.scala` et une entrée backlog dans `docs/full_roadmap.md` (Refactoring 1.4 : sérialisation `outCount × bytesPerElem`, mise à jour de `uart_host.read_logits` et de la doc). Test : `UartSoCTest` « refuses non-8-bit output elements » (BF16 → exception contenant « 8-bit ») ; `UartSoCTest` 3/3, `MemoryAdapterTest` ✅.
 - **Fichier** : `spinalML/src/spinalML/io/UartSoC.scala` (lignes 109-118)
 - **Code concerné** :
   ```scala
@@ -701,6 +726,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-06 : Compteur d'octets `byteCnt` sous-dimensionné (3 bits) pour des bus de données $> 64$ bits dans `UartBridge`
+- **Statut** : corrigé — bug réel, mode de défaillance observé : **erreur d'élaboration** `OUT OF RANGE CONSTANT` (`byteCnt === wordBytes - 1`, ex. 15 pour un bus 128 bits) dès que `wordWidth > 64`, pas de corruption silencieuse. Fix : largeur calculée à l'élaboration `Reg(UInt(log2Up((wordBytes max 4) + 1) bits))` (le compteur sert aussi aux champs 4 octets des commandes) — aucune limite en dur, fonctionne pour 64/128/256 bits. Test : nouveau top `UartBridgeWideWordTestComp` (wordWidth = 128) + `tests/python/test_uart_bridge.py::test_uart_bridge_wide_word` (W de 16 octets, mot 128 bits relu ; rouge avant par échec d'élaboration) ; non-régression `test_uart_bridge.py` 3/3, Scala `UartBridgeTest` 3/3 + `UartSoCTest` 2/2.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 77, 226-239)
 - **Code concerné** :
   ```scala
@@ -724,6 +750,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 8. Utilitaires & DSL
 
 ### BUG-DSL-01 : Indexation erronée des connexions résiduelles dans `DagDSL.residual`
+- **Statut** : faux positif (vérifié le 2026-09-15) — le contrat documenté (`DagDSL.scala:8-18`) exige `base` = nœud d'entrée = fin courante au moment de l'appel, et l'unique usage (`tests/universal/UniversalTransformerDemo.scala:26,31`) le respecte. La formule `base + branch.length` est correcte sous ce contrat ; le risque n'existe que si un appelant passe un `base` antérieur à la fin courante (usage hors contrat).
 - **Fichier** : `spinalML/src/spinalML/nn/DagDSL.scala` (ligne 31)
 - **Code concerné** :
   ```scala

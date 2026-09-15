@@ -9,7 +9,8 @@
 # (wrEnable/wrAddr/wrData). Two virtual regions share the physical memory:
 #   [imgBase, weightBase)      -> physical [0, memoryWords/2)
 #   [weightBase, ...)          -> physical [memoryWords/2, memoryWords)
-# with defensive clamping to the last word for out-of-range addresses.
+# with defensive clamping: addresses below imgBase clamp to the first physical
+# word (no unsigned underflow), addresses past the memory clamp to the last.
 
 import cocotb
 from cocotb.clock import Clock
@@ -31,6 +32,7 @@ async def reset_adapter(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_aw_valid.value = 0
     dut.io_axi_w_valid.value = 0
     dut.io_axi_b_ready.value = 0
@@ -46,13 +48,71 @@ async def reset_adapter(dut):
     await RisingEdge(dut.clk)
 
 
-async def host_write(dut, addr, data):
+async def host_write(dut, addr, data, strb=0xFF):
     await RisingEdge(dut.clk)
     dut.io_wrEnable.value = 1
     dut.io_wrAddr.value = addr
     dut.io_wrData.value = data
+    dut.io_wrStrb.value = strb
     await RisingEdge(dut.clk)
     dut.io_wrEnable.value = 0
+    await RisingEdge(dut.clk)
+
+
+async def axi_write_burst(dut, addr, words, strbs=None, timeout=500):
+    """Drive one AXI4 INCR write burst (test = AXI master), one beat per word."""
+    # An idle slave must be able to accept AW at any time (read-only
+    # implementations tie aw.ready low: this probe fails loudly there).
+    aw_ready_seen = False
+    for _ in range(100):
+        await ReadOnly()
+        aw_ready_seen = int(dut.io_axi_aw_ready.value) == 1
+        await RisingEdge(dut.clk)
+        if aw_ready_seen:
+            break
+    assert aw_ready_seen, "Adapter never accepts accelerator writes (aw.ready stuck low)"
+
+    dut.io_axi_aw_valid.value = 1
+    dut.io_axi_aw_payload_addr.value = addr
+    dut.io_axi_aw_payload_len.value = len(words) - 1
+    aw_accepted = False
+    for _ in range(timeout):
+        await ReadOnly()
+        if int(dut.io_axi_aw_ready.value) == 1:
+            aw_accepted = True
+        await RisingEdge(dut.clk)
+        if aw_accepted:
+            break
+    assert aw_accepted, f"AW never accepted for write burst at 0x{addr:X}"
+    dut.io_axi_aw_valid.value = 0
+
+    dut.io_axi_b_ready.value = 1
+    for i, word in enumerate(words):
+        dut.io_axi_w_valid.value = 1
+        dut.io_axi_w_payload_data.value = word
+        dut.io_axi_w_payload_strb.value = 0xFF if strbs is None else strbs[i]
+        dut.io_axi_w_payload_last.value = 1 if i == len(words) - 1 else 0
+        w_accepted = False
+        for _ in range(timeout):
+            await ReadOnly()
+            if int(dut.io_axi_w_ready.value) == 1:
+                w_accepted = True
+            await RisingEdge(dut.clk)
+            if w_accepted:
+                break
+        assert w_accepted, f"W beat {i} never accepted"
+    dut.io_axi_w_valid.value = 0
+
+    b_seen = False
+    for _ in range(timeout):
+        await ReadOnly()
+        if int(dut.io_axi_b_valid.value) == 1:
+            b_seen = True
+        await RisingEdge(dut.clk)
+        if b_seen:
+            break
+    assert b_seen, "B response never received"
+    dut.io_axi_b_ready.value = 0
     await RisingEdge(dut.clk)
 
 
@@ -109,17 +169,17 @@ def check_single_read(data, lasts, ids, expected, id_val):
     assert ids == [id_val], f"RID echo mismatch: {ids} != [{id_val}]"
 
 
-async def check_tie_offs(dut):
+async def check_write_idle(dut):
     await ReadOnly()
-    assert int(dut.io_axi_aw_ready.value) == 0, "Read-only adapter must not accept AW"
-    assert int(dut.io_axi_w_ready.value) == 0, "Read-only adapter must not accept W"
-    assert int(dut.io_axi_b_valid.value) == 0, "Read-only adapter must not emit B"
+    assert int(dut.io_axi_aw_ready.value) == 1, "Adapter must accept AW when idle"
+    assert int(dut.io_axi_w_ready.value) == 0, "W must wait for an accepted AW"
+    assert int(dut.io_axi_b_valid.value) == 0, "No B response before any write"
     await RisingEdge(dut.clk)
 
 
 async def bram_like_readback(dut):
     await reset_adapter(dut)
-    await check_tie_offs(dut)
+    await check_write_idle(dut)
 
     img_word = 0x1122334455667788
     weight_word = 0xAABBCCDDEEFF0011
@@ -172,16 +232,41 @@ async def cocotb_bram_adapter_clamp(dut):
     cocotb.start_soon(clock.start())
     await reset_adapter(dut)
 
-    # Last physical word = last weight-region word
+    # First physical word = first image-region word; last = last weight word.
+    first_word = 0x0123456789ABCDEF
     last_word = 0xDEADBEEFCAFEBABE
+    await host_write(dut, IMG_BASE, first_word)
     await host_write(dut, WEIGHT_BASE + (HALF_WORDS - 1) * BEAT_BYTES, last_word)
 
-    # Below imgBase and past the weight region both clamp to the last word
-    for addr in [0x0, WEIGHT_BASE + HALF_WORDS * BEAT_BYTES + 0x800]:
-        data, lasts, ids = await axi_read_burst(dut, addr, beats=1, id_val=3)
-        check_single_read(data, lasts, ids, last_word, 3)
+    # Addresses below imgBase must never underflow into the last word: they
+    # clamp to the first physical word. Addresses past the weight region clamp
+    # to the last one.
+    data, lasts, ids = await axi_read_burst(dut, 0x0, beats=1, id_val=3)
+    check_single_read(data, lasts, ids, first_word, 3)
 
-    print("BramAdapter out-of-range reads defensively clamp to the last physical word")
+    data, lasts, ids = await axi_read_burst(
+        dut, WEIGHT_BASE + HALF_WORDS * BEAT_BYTES + 0x800, beats=1, id_val=3)
+    check_single_read(data, lasts, ids, last_word, 3)
+
+    print("BramAdapter out-of-range reads clamp to the first (addr < imgBase) / last physical word")
+
+
+@cocotb.test()
+async def cocotb_bram_adapter_partial_write(dut):
+    """Host byte strobes must preserve the untouched bytes of a word."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    sentinel = 0xAABBCCDDEEFF0011
+    await host_write(dut, IMG_BASE, sentinel)
+    # Overwrite the 3 low bytes only (0x332211 -> bytes 0..2).
+    await host_write(dut, IMG_BASE, 0x0000000000332211, strb=0x07)
+
+    data, lasts, ids = await axi_read_burst(dut, IMG_BASE, beats=1, id_val=1)
+    expected = (sentinel & ~0xFFFFFF) | 0x332211
+    check_single_read(data, lasts, ids, expected, 1)
+    print("BramAdapter partial host write honours byte strobes")
 
 
 @cocotb.test()
@@ -202,6 +287,43 @@ async def cocotb_bram_adapter_backpressure(dut):
 
 
 @cocotb.test()
+async def cocotb_bram_adapter_write_burst(dut):
+    """Accelerator-side AXI4 write burst (AW/W/B) must land in the same memory
+    the accelerator reads back (DMAWriter write-back path)."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    words = [0x0102030405060708 * (i + 1) & ((1 << 64) - 1) for i in range(4)]
+    await axi_write_burst(dut, IMG_BASE, words)
+
+    data, lasts, ids = await axi_read_burst(dut, IMG_BASE, beats=4, id_val=2)
+    assert data == words, f"Write-back mismatch: {[hex(w) for w in data]} != {[hex(w) for w in words]}"
+    assert lasts == [0, 0, 0, 1], f"RLAST corrupted after write-back: {lasts}"
+    assert ids == [2, 2, 2, 2], f"RID corrupted after write-back: {ids}"
+    print("BramAdapter accelerator AXI4 write-back burst round-trips bit-exact")
+
+
+@cocotb.test()
+async def cocotb_bram_adapter_write_strobes(dut):
+    """AXI w.strb must preserve the untouched bytes of a word."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    await reset_adapter(dut)
+
+    sentinel = 0x1122334455667788
+    await host_write(dut, IMG_BASE, sentinel)
+    await axi_write_burst(dut, IMG_BASE, [0x000000000000BEEF], strbs=[0x03])
+
+    data, _, _ = await axi_read_burst(dut, IMG_BASE, beats=1, id_val=3)
+    expected = (sentinel & ~0xFFFF) | 0xBEEF
+    assert data == [expected], (
+        f"AXI strobe mismatch: 0x{data[0]:016X} != 0x{expected:016X}"
+    )
+    print("BramAdapter AXI w.strb preserves untouched bytes")
+
+
+@cocotb.test()
 async def cocotb_ddr_adapter_write(dut):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -209,6 +331,7 @@ async def cocotb_ddr_adapter_write(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_ar_valid.value = 0
     dut.io_axi_r_ready.value = 1
     dut.extIo_ddrMaster_aw_ready.value = 0
@@ -252,6 +375,157 @@ async def cocotb_ddr_adapter_write(dut):
 
 
 @cocotb.test()
+async def cocotb_ddr_adapter_accel_write(dut):
+    """The accelerator AXI4 write burst shares the DDR master with the host
+    port: host priority, burst forwarding, and B response routing."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    dut.io_wrEnable.value = 0
+    dut.io_wrAddr.value = 0
+    dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
+    dut.io_axi_aw_valid.value = 0
+    dut.io_axi_w_valid.value = 0
+    dut.io_axi_b_ready.value = 0
+    dut.io_axi_ar_valid.value = 0
+    dut.io_axi_r_ready.value = 1
+    dut.extIo_ddrMaster_aw_ready.value = 0
+    dut.extIo_ddrMaster_w_ready.value = 0
+    dut.extIo_ddrMaster_b_valid.value = 0
+    dut.extIo_ddrMaster_r_valid.value = 0
+    dut.extIo_ddrMaster_r_payload_data.value = 0
+    dut.extIo_ddrMaster_r_payload_last.value = 0
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    # An idle adapter must accept accelerator AW (read-only implementations
+    # tie aw.ready low: probe before driving the AXI payloads).
+    acc_ready_seen = False
+    for _ in range(50):
+        await ReadOnly()
+        acc_ready_seen = int(dut.io_axi_aw_ready.value) == 1
+        await RisingEdge(dut.clk)
+        if acc_ready_seen:
+            break
+    assert acc_ready_seen, "DdrAdapter never accepts accelerator writes (aw.ready stuck low)"
+
+    # --- 1. Host write takes the bus and blocks the accelerator AW ---
+    dut.io_wrEnable.value = 1
+    dut.io_wrAddr.value = 0x80000000
+    dut.io_wrData.value = 0x1122334455667788
+    dut.io_wrStrb.value = 0x0F
+    await RisingEdge(dut.clk)
+    dut.io_wrEnable.value = 0
+    await RisingEdge(dut.clk)
+
+    await ReadOnly()
+    assert int(dut.extIo_ddrMaster_aw_valid.value) == 1, "Host AW must be pending"
+    assert int(dut.extIo_ddrMaster_aw_payload_addr.value) == 0x80000000, "Host AW address mismatch"
+    assert int(dut.extIo_ddrMaster_w_payload_strb.value) == 0x0F, "Host w.strb mismatch"
+    await RisingEdge(dut.clk)
+
+    dut.io_axi_aw_valid.value = 1
+    dut.io_axi_aw_payload_addr.value = 0x9000
+    dut.io_axi_aw_payload_len.value = 1
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    assert int(dut.io_axi_aw_ready.value) == 0, "Accelerator AW must wait for the host write"
+    await RisingEdge(dut.clk)
+
+    # Complete the host single-beat write, then its auto-acked B.
+    dut.extIo_ddrMaster_aw_ready.value = 1
+    dut.extIo_ddrMaster_w_ready.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 0
+    dut.extIo_ddrMaster_w_ready.value = 0
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_b_valid.value = 1
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_b_valid.value = 0
+
+    # --- 2. Accelerator 2-beat burst now owns the bus ---
+    burst_addr = 0x9000
+    words = [0xAAAABBBBCCCCDDDD, 0x1234567890ABCDEF]
+    strbs = [0xFF, 0x0F]
+    aw_done = False
+    for _ in range(200):
+        await ReadOnly()
+        ready = int(dut.io_axi_aw_ready.value)
+        await RisingEdge(dut.clk)
+        if ready:
+            aw_done = True
+            break
+    assert aw_done, "Accelerator AW never accepted after the host write"
+    dut.io_axi_aw_valid.value = 0
+
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.extIo_ddrMaster_aw_valid.value) == 1:
+            break
+        await RisingEdge(dut.clk)
+    assert int(dut.extIo_ddrMaster_aw_valid.value) == 1, "Burst AW never reached the DDR master"
+    assert int(dut.extIo_ddrMaster_aw_payload_addr.value) == burst_addr, "Burst AW address mismatch"
+    assert int(dut.extIo_ddrMaster_aw_payload_len.value) == 1, "Burst AW len mismatch"
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 1
+    await RisingEdge(dut.clk)
+    dut.extIo_ddrMaster_aw_ready.value = 0
+
+    dut.extIo_ddrMaster_w_ready.value = 1
+    for i, word in enumerate(words):
+        last = 1 if i == len(words) - 1 else 0
+        dut.io_axi_w_valid.value = 1
+        dut.io_axi_w_payload_data.value = word
+        dut.io_axi_w_payload_strb.value = strbs[i]
+        dut.io_axi_w_payload_last.value = last
+        w_done = False
+        for _ in range(200):
+            await ReadOnly()
+            ready = int(dut.io_axi_w_ready.value)
+            if ready:
+                assert int(dut.extIo_ddrMaster_w_valid.value) == 1, f"ext W valid dropped on beat {i}"
+                assert int(dut.extIo_ddrMaster_w_payload_data.value) == word, f"beat {i} data mismatch"
+                assert int(dut.extIo_ddrMaster_w_payload_strb.value) == strbs[i], f"beat {i} strb mismatch"
+                assert int(dut.extIo_ddrMaster_w_payload_last.value) == last, f"beat {i} last mismatch"
+            await RisingEdge(dut.clk)
+            if ready:
+                w_done = True
+                break
+        assert w_done, f"Accelerator W beat {i} never handshook"
+    dut.io_axi_w_valid.value = 0
+
+    # B is now owned by the accelerator burst and must be forwarded.
+    dut.io_axi_b_ready.value = 1
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.extIo_ddrMaster_b_ready.value) == 1:
+            break
+        await RisingEdge(dut.clk)
+    assert int(dut.extIo_ddrMaster_b_ready.value) == 1, "Burst B must be accepted for the accelerator"
+    await RisingEdge(dut.clk)
+
+    dut.extIo_ddrMaster_b_valid.value = 1
+    b_seen = False
+    for _ in range(50):
+        await ReadOnly()
+        if int(dut.io_axi_b_valid.value) == 1:
+            b_seen = True
+        await RisingEdge(dut.clk)
+        if b_seen:
+            break
+    assert b_seen, "B response was not forwarded to the accelerator"
+    dut.extIo_ddrMaster_b_valid.value = 0
+    dut.io_axi_b_ready.value = 0
+    await RisingEdge(dut.clk)
+    print("DdrAdapter host priority + accelerator burst write-back with B routing validated")
+
+
+@cocotb.test()
 async def cocotb_ddr_adapter_read(dut):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -259,6 +533,7 @@ async def cocotb_ddr_adapter_read(dut):
     dut.io_wrEnable.value = 0
     dut.io_wrAddr.value = 0
     dut.io_wrData.value = 0
+    dut.io_wrStrb.value = 0xFF
     dut.io_axi_ar_valid.value = 0
     dut.io_axi_ar_payload_addr.value = 0
     dut.io_axi_ar_payload_len.value = 0
@@ -359,8 +634,28 @@ def test_bram_adapter_backpressure(request):
     _run_sim("cocotb_bram_adapter_backpressure", "BramAdapterTestComp", "sim_build/py_bram_backpressure", request)
 
 
+def test_bram_adapter_partial_write(request):
+    _run_sim("cocotb_bram_adapter_partial_write", "BramAdapterTestComp", "sim_build/py_bram_partial_write", request)
+
+
+def test_bram_adapter_write_burst(request):
+    _run_sim("cocotb_bram_adapter_write_burst", "BramAdapterTestComp", "sim_build/py_bram_write_burst", request)
+
+
+def test_sram_adapter_write_burst(request):
+    _run_sim("cocotb_bram_adapter_write_burst", "SramAsicAdapterTestComp", "sim_build/py_sram_write_burst", request)
+
+
+def test_bram_adapter_write_strobes(request):
+    _run_sim("cocotb_bram_adapter_write_strobes", "BramAdapterTestComp", "sim_build/py_bram_write_strobes", request)
+
+
 def test_ddr_adapter_write(request):
     _run_sim("cocotb_ddr_adapter_write", "DdrAdapterTestComp", "sim_build/py_ddr_write", request)
+
+
+def test_ddr_adapter_accel_write(request):
+    _run_sim("cocotb_ddr_adapter_accel_write", "DdrAdapterTestComp", "sim_build/py_ddr_accel_write", request)
 
 
 def test_ddr_adapter_read(request):
