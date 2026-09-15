@@ -195,6 +195,7 @@ Mandatory structural refactoring of existing modules before adding any new visio
   - **Problem**: While `Linear.weightLanes` and `Conv2D.outLanes` are configurable, intermediate data adapters and interfaces (specifically UART output serialization) still hardcode `lanes = 1` or truncate to 8 bits.
   - **Action**: Propagate SIMD parallelism (`lanes: Int`) across the entire datapath, automatically inserting `Repack` (gearbox) modules wherever bus widths differ between consecutive stages.
   - **Success Criteria**: Bit-exact execution verified for `lanes = 1, 2, 4, 8` across all universal test suites.
+  - **Backlog — Multi-byte UART logits**: `UartSoC` now fails loudly at elaboration (`require` with a clear message, `TODO(multi-byte-logits)` in the code) when the output element type is wider than 8 bits. Supporting BF16/FP16 logits requires the `R` reply to carry `outCount × bytesPerElem` bytes — a byte serializer per element, `uart_host.read_logits` and `docs/uart_bridge.md` updates — so 16-bit outputs stay unsupported over UART until that protocol extension lands.
 
 - [x] **Refactoring 1.5: Enable AXI Master Write Channels (`DMAWriter`)**
   - **Impacted file**: [`spinalML/src/spinalML/Accelerator.scala:L60-65`](file:///e:/spinalML/spinalML/src/spinalML/Accelerator.scala#L60-L65)

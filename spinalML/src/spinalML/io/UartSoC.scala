@@ -65,6 +65,17 @@ class UartSoC[T <: Data](
   val soc = new ClockingArea(cd) {
     val acc = acceleratorFactory()
 
+    // The UART 'R' reply carries one byte per logit (documented FP8/INT8
+    // protocol). Fail loudly for wider element types instead of a cryptic
+    // WIDTH MISMATCH deep inside the serializer below.
+    // TODO(multi-byte-logits): support BF16/FP16 outputs by serializing
+    //   bytesPerElem bytes per element in the R reply — this changes the
+    //   protocol (UartBridge byte counting, uart_host.read_logits, docs) and
+    //   is tracked in docs/full_roadmap.md §Refactoring 1.4.
+    val outElemBits = acc.io.outStream.stream.payload(0).getBitsWidth
+    require(outElemBits == 8,
+      s"UartSoC only serializes 8-bit output elements over UART (got $outElemBits bits) — see docs/uart_bridge.md and the multi-byte-logits TODO")
+
     val rx = new UartRx(clkFreq, baudRate)
     val tx = new UartTx(clkFreq, baudRate)
     val mem = memoryAdapterFactory match {

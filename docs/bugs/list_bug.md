@@ -356,6 +356,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-02 : Violation de protocole Stream sur `io.cmd` dans `DMAReader2D`
+- **Statut** : faux positif (vérifié le 2026-09-15) — `io.cmd` est un esclave Stream : différer `ready` jusqu'à la fin de la transaction est légal, le maître devant maintenir `valid`/payload jusqu'au handshake (contrat explicitement vérifié par `DMAReader2DFormal` : `assume(cmd.valid && payload === past(payload))` quand `ready` est bas). Les bancs Scala (`waitSamplingWhere(cmd.ready)`) et cocotb (valid maintenu jusqu'à ready) sont conformes ; le scénario « maître attendant un ack immédiat » suppose un maître hors protocole.
 - **Fichier** : `spinalML/src/spinalML/memory/DMAReader2D.scala` (lignes 95-103)
 - **Description** :
   Dans l'état `stateIdle`, `when(io.cmd.valid)` démarre immédiatement le traitement multi-lignes mais n'asserte pas `io.cmd.ready`. Le signal `ready` n'est levé que dans l'état final `stateDrain`.
@@ -410,6 +411,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-MEM-06 : Interblocage d'ordonnancement des consommateurs dans `TapBuffer.fork`
+- **Statut** : faux positif (contrat, vérifié le 2026-09-15) — le chaînage est documenté dans `TapBuffer.scala` (tee atomique : un handshake d'entrée alimente les deux sorties, FIFO à capacité pleine taille) et `TapBufferTest` draine explicitement le consommateur direct avant le différé. Le « deadlock » décrit n'arrive que si un consommateur aval dépend d'un consommateur amont qui ne draine pas (usage hors contrat) ; les usages réels (`Sequential`, `DagDSL.residual`) respectent l'ordre. Repro possible : `direct.ready=0` + `deferred.ready=1` → starvation par construction. Un redesign par FIFO indépendante par branche relèverait de l'évolution, pas du correctif.
 - **Fichier** : `spinalML/src/spinalML/memory/TapBuffer.scala` (lignes 59-71)
 - **Description** :
   Le chaînage en cascade impose que le consommateur $0$ lise ses données avant le consommateur $1$, qui doit lire avant le consommateur $2$.
@@ -637,6 +639,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 7. Entrées / Sorties, Pont Série & SoC
 
 ### BUG-IO-01 : Perte silencieuse d'octets entrants dans `UartBridge` (`rx.ready := True` permanent)
+- **Statut** : faux positif (mécanisme erroné, vérifié le 2026-09-15) — `UartRx` n'expose **aucun `ready`** (sa `valid` est une impulsion d'un cycle) et `UartSoC` ne connecte pas `bridge.io.rx.ready` au récepteur (`io.rx.valid`/`payload` seulement) : gater `io.rx.ready` ne changerait donc rien. La perte n'existe que si l'hôte pipeline des commandes, ce que le protocole requête/réponse du top.v de référence interdit. Un durcissement réel (FIFO RX + `ready` honoré) serait une évolution hors périmètre.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (ligne 101)
 - **Code concerné** :
   ```scala
@@ -676,6 +679,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-03 : Violation du protocole Stream sur `io.tx.valid` (impulsion d'un seul cycle)
+- **Statut** : faux positif (vérifié le 2026-09-15) — la FSM ne pulse `txStartR` que dans `R_WAIT` (condition `io.outStream.valid && io.tx.ready`) ou en `IDLE`, atteint uniquement après que `tx.ready` soit repassé haut en `R_SEND`/`S_SEND` ; les commandes C/W ne touchent pas TX. De plus `UartTx` est une interface `start`+`ready` (pas un Stream) : l'impulsion d'un cycle n'est pas une violation et aucun octet n'est perdu.
 - **Fichier** : `spinalML/src/spinalML/io/UartBridge.scala` (lignes 102, 123)
 - **Code concerné** :
   ```scala
@@ -705,6 +709,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-IO-05 : Exception d'élaboration sur largeurs de types $> 8$ bits dans `UartSoC`
+- **Statut** : corrigé (garde d'élaboration, 2026-09-15) — `UartSoC` vérifie en tête d'élaboration `outElemBits == 8` et échoue avec un message explicite (« UartSoC only serializes 8-bit output elements over UART (got N bits) — see docs/uart_bridge.md ») au lieu du WIDTH MISMATCH cryptique du sérialiseur ; le protocole `R` reste 1 octet/logit (FP8/INT8). Le support BF16/FP16 est tracé par `TODO(multi-byte-logits)` dans `UartSoC.scala` et une entrée backlog dans `docs/full_roadmap.md` (Refactoring 1.4 : sérialisation `outCount × bytesPerElem`, mise à jour de `uart_host.read_logits` et de la doc). Test : `UartSoCTest` « refuses non-8-bit output elements » (BF16 → exception contenant « 8-bit ») ; `UartSoCTest` 3/3, `MemoryAdapterTest` ✅.
 - **Fichier** : `spinalML/src/spinalML/io/UartSoC.scala` (lignes 109-118)
 - **Code concerné** :
   ```scala
