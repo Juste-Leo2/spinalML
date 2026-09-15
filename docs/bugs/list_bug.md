@@ -40,6 +40,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-02 : Crash d'élaboration sur tranche négative dans `Float.mul`
+- **Statut** : faux positif (vérifié le 2026-09-15) — même mécanisme que DTYPE-01 : `mantProd(-1 downto 0)` donne un slice de largeur 0 via `RangePimper` (`SpinalHDL core.scala:507-519`), donc le `stickyM` de la branche non-overflow est constant `False` (Vérifié dans le Verilog généré : `(overflow ? (prod[0] != 0) : 1'b0)`), soit le RNE correct pour un seul bit de mantisse. Test d'élaboration ajouté : `spinalML/test/src/spinalML/utils/FloatTest.scala` (« mul on a single-mantissa-bit format (FP4_E2M1) »).
 - **Fichier** : `spinalML/src/spinalML/utils/Float.scala` (ligne 51)
 - **Code concerné** :
   ```scala
