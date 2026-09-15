@@ -386,4 +386,33 @@ class AcceleratorTest extends AnyFunSuite {
       println(f"[AcceleratorTest] DDR Write-Back bit-exact: max dev = $dev%.3f in $cycles cycles (HW=$hwLogits, SW=${oracle.logits})")
     }
   }
+
+  test("Generate Verilog for Python co-simulation") {
+    // Identity passthrough: exercises the AXI-Lite control plane, the output
+    // stream, continuous RUN/STOP and the DMAWriter write-back path without
+    // needing a weight-layout oracle on the Python side.
+    SpinalConfig().generateVerilog {
+      val dut = new Accelerator(
+        dataType = I8(),
+        inputShape = Seq(4, 4, 1),
+        modelSpec = Seq(Flatten()),
+        axiConfig = axiConfig
+      )
+      dut.setDefinitionName("AcceleratorPassthroughTestComp")
+      dut
+    }
+
+    // Runtime dequantization boundary: CSR 0x30 programs the Cast scale
+    // (mirrors examples/Mnist/Model.scala + inference.py).
+    SpinalConfig().generateVerilog {
+      val dut = new Accelerator(
+        dataType = I8(),
+        inputShape = Seq(4, 4, 1),
+        modelSpec = Seq(Flatten(), Cast(spinalML.dtypes.BF16(), runtimeScale = true)),
+        axiConfig = axiConfig
+      )
+      dut.setDefinitionName("AcceleratorRuntimeCastTestComp")
+      dut
+    }
+  }
 }

@@ -200,7 +200,7 @@ Cast(FP8_E4M3(), runtimeScale = true),
   3. Au démarrage, [`inference.py`](file:///e:/spinalML/examples/Mnist/inference.py) lit le coefficient `convScale` depuis le fichier de métadonnées [`Mnist_weights.npz`](file:///e:/spinalML/examples/Mnist/Mnist_weights.npz) et l'écrit dynamiquement dans le registre `0x30` via la commande UART `C`.
   4. Le test universel bit-exact sous Verilator (`python cli/main.py test examples/Mnist/Model.scala`) est validé à 100% avec une déviation de 0.000.
   5. Aucun nombre magique ne réside plus dans le code Scala du modèle.
-  6. Le port `runtimeScalePort` est validé dynamiquement par co-simulation Python/Cocotb ([`test_cast_runtime.py`](file:///e:/spinalML/tests/python/test_cast_runtime.py)) : scales statiques (1.0, 0.5, 2.0, −1.0, 0.0…), changements de scale en cours de flux, et vérification que seuls les bits bas `expBits+mantBits+1` de `io_scale` sont décodés.
+  6. Le port `runtimeScalePort` est validé dynamiquement par co-simulation Python/Cocotb ([`test_cast_runtime.py`](file:///e:/spinalML/tests/python/test_cast_runtime.py)) : scales statiques (1.0, 0.5, 2.0, −1.0, 0.0…), changements de scale en cours de flux, et vérification que seuls les bits bas `expBits+mantBits+1` de `io_scale` sont décodés. Le même chemin est validé au niveau SoC par [`test_accelerator.py`](file:///e:/spinalML/tests/python/test_accelerator.py) : CSR `0x30` programmé via AXI-Lite (défaut 1.0 en relecture, scales 0.5/2.0/−1.0 bit-exactes sur le flux BF16).
 
 ---
 
