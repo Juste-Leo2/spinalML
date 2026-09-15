@@ -123,6 +123,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-DTYPE-05 : Incohérence d'encodage de l'Infini entre `Float.scala` et `math_luts.scala`
+- **Statut** : corrigé — la saturation sur débordement fini encode désormais l'infini canonique (exposant all-ones, mantisse 0), cohérent avec `Float.scala` (ligne 76) et le golden `dtypes.from_float`, au lieu de la mantisse all-ones qui correspond à un code NaN. Tests : `spinalML/test/src/spinalML/utils/MathLUTsTest.scala` (« floatEncodeFn saturates finite overflow to canonical infinity (mant 0) ») ; non-régression `tests/python/test_exp.py --debug-math` (4 passed, métriques inchangées).
 - **Fichier** : `spinalML/src/spinalML/utils/math_luts.scala` (ligne 87) vs `Float.scala` (ligne 76)
 - **Description** :
   Dans `Float.scala`, la saturation vers l'infini configure `exponent = (1 << expBits) - 1` et `mantissa = 0` (conformité IEEE 754).

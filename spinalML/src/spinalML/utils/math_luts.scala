@@ -88,9 +88,9 @@ object MathLUTs {
          expEnc += 1
       }
       
-      if (expEnc >= (1 << expBits)) { // Overflow (Sat)
+      if (expEnc >= (1 << expBits)) { // Overflow (Saturate to canonical infinity)
         expEnc = (1 << expBits) - 1
-        mantEnc = (1 << mantBits) - 1
+        mantEnc = 0
       } else if (expEnc <= 0) { // Underflow
         expEnc = 0
         mantEnc = 0

@@ -21,4 +21,11 @@ class MathLUTsTest extends AnyFunSuite {
     val got = encFp8(Double.NaN)
     assert(got == BigInt(0), s"got 0x${got.toString(16)}, expected 0")
   }
+
+  test("floatEncodeFn saturates finite overflow to canonical infinity (mant 0)") {
+    val pos = encFp8(1e10)
+    assert(pos == BigInt(0x78), s"+overflow: got 0x${pos.toString(16)}, expected 0x78")
+    val neg = encFp8(-1e10)
+    assert(neg == BigInt(0xF8), s"-overflow: got 0x${neg.toString(16)}, expected 0xF8")
+  }
 }
