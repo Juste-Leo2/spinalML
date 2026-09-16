@@ -127,14 +127,14 @@ case class Softmax(lanes: Int = 1) extends LayerSpec {
 
 case class BatchNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
-  override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
-  override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
+  override def getWeightShape(): Seq[Int] = Seq(features) // gamma
+  override def getBiasShape(): Seq[Int] = Seq(features) // beta
 }
 
 case class LayerNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
-  override def getWeightShape(): Seq[Int] = Seq(features, 1) // gamma
-  override def getBiasShape(): Seq[Int] = Seq(features, 1) // beta
+  override def getWeightShape(): Seq[Int] = Seq(features) // gamma
+  override def getBiasShape(): Seq[Int] = Seq(features) // beta
 }
 
 case class MaxPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {

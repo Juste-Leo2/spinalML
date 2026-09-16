@@ -465,6 +465,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-LAY-02 : Incohérence de forme 1D vs 2D pour les poids de `BatchNorm1D` et `LayerNorm1D`
+- **Statut** : corrigé — `getWeightShape()/getBiasShape()` retournent `Seq(features)` (1D) pour les deux specs, en cohérence avec les ports `gamma`/`beta` `Tensor(..., Seq(channels))`. Consommateurs vérifiés : `Sequential.scala:319-320` et `WeightMemoryLayout.scala:102-103` utilisent `head`/`product`, donc layout octets et lanes inchangés (aucun impact fonctionnel). Test rouge : `LayerSpecTest` « weight and bias shapes are 1D (LAY-02) » (`List(4,1) did not equal List(4)` avant). Non-régression : `LayerSpecTest` ✅, suites Scala BatchNorm/LayerNorm ✅, `SequentialTest` ✅, pytest batchnorm+layernorm 8/8 ✅, `test-all-python -k accelerator` ✅.
 - **Fichier** : `spinalML/src/spinalML/nn/LayerSpec.scala` (lignes 130-137) vs `layers/batchnorm.scala`
 - **Description** :
   Dans `LayerSpec.scala`, `getWeightShape()` et `getBiasShape()` retournent `Seq(features, 1)` (2D).
