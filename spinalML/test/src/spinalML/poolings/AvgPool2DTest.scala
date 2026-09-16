@@ -40,6 +40,17 @@ case class AvgPool2DTestCompMulti[T <: Data](dataType: HardType[T]) extends Comp
   io.c <> spinalML.poolings.avgpool2d(io.a, poolSize = 2, stride = 2)
 }
 
+// ACT-03 repro: 5x5, pool=2, stride=2 -> 2x2 windows leave a 6-beat tail per
+// frame that must be drained before the next frame starts.
+case class AvgPool2DResidueTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(5, 5), lanes = 1))
+    val c = master(Tensor(dataType, Seq(2, 2), lanes = 1))
+  }
+
+  io.c <> spinalML.poolings.avgpool2d(io.a, poolSize = 2, stride = 2)
+}
+
 class AvgPool2DTest extends AnyFunSuite {
   test("Test streaming AvgPool2D operation on I8 tensors") {
     SimConfig.withWave.compile(AvgPool2DTestComp(I8())).doSim { dut =>
@@ -135,5 +146,9 @@ class AvgPool2DTest extends AnyFunSuite {
     test(s"Test AvgPool2DMulti compilation on $name") {
       SpinalConfig().generateVerilog(AvgPool2DTestCompMulti(dt()))
     }
+  }
+
+  test("Test AvgPool2D residue compilation on I8") {
+    SpinalConfig().generateVerilog(AvgPool2DResidueTestComp(I8()))
   }
 }

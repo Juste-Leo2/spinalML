@@ -26,6 +26,12 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
   val totalWindows = H_out * W_out
   val depth = W * C
   val shift = log2Up(K * K)
+  // ACT-03: beats left over after the last emitted window. They belong to the
+  // current image and MUST be drained before the next frame starts, otherwise
+  // the next image is consumed from a mid-image counter state.
+  val yLast = (K - 1) + (H_out - 1) * stride
+  val xLast = (K - 1) + (W_out - 1) * stride
+  val residue = H * W * C - (yLast * W + xLast + 1) * C
 
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(H, W, C), lanes = 1))
@@ -169,13 +175,30 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
         when(io.c.stream.ready) {
           outCnt.increment()
           when(outCnt.willOverflowIfInc) {
-            goto(stateDone)
+            if (residue > 0) goto(statePurge) else goto(stateDone)
           } otherwise {
             goto(stateFill)
           }
         }
       }
     }
+
+    // Drain the per-frame tail ignored by the last window (ACT-03). The line
+    // buffers keep shifting (they are fed by stream.fire): the tail is real
+    // image data needed by the delay lines when the next frame starts. Only the
+    // position counters are held until stateDone clears them.
+    val purgeCounter = Counter(residue max 1)
+    val statePurge: State = if (residue > 0) new State {
+      whenIsActive {
+        io.a.stream.ready := True
+        when(io.a.stream.fire) {
+          purgeCounter.increment()
+          when(purgeCounter.willOverflowIfInc) {
+            goto(stateDone)
+          }
+        }
+      }
+    } else null
 
     val stateDone: State = new State {
       whenIsActive {

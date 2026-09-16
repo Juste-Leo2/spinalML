@@ -440,6 +440,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-ACT-03 : Désynchronisation spatiale dans `MaxPool2D` et `AvgPool2D` sur dimensions non multiples du pas
+- **Statut** : corrigé — état `statePurge` ajouté dans `maxpool2d.scala` et `avgpool2d.scala` : après la dernière fenêtre, les `H*W*C - (yLast*W + xLast + 1)*C` battements résiduels (constante d'élaboration, `yLast/xLast` = dernier centre de fenêtre) sont consommés avant le clear des compteurs (les line buffers continuent de glisser, ils portent la vraie queue d'image). Rouges avant : nouveaux `MaxPool2DResidueTestComp` / `AvgPool2DResidueTestComp` (I8, 5x5, K=2, stride=2, 2 frames contigus) + cas cocotb `cocotb_maxpool2d_residue_i8` / `cocotb_avgpool2d_residue_i8` (frame 2 corrompue : `got 26` au lieu de `32`). Tests : pytest 2D 14/14, Scala `MaxPool2DTest`/`AvgPool2DTest` ✅, formels `MaxPool2DFormal`/`AvgPool2DFormal` ✅.
 - **Fichier** : `spinalML/src/spinalML/poolings/maxpool2d.scala` & `spinalML/src/spinalML/poolings/avgpool2d.scala`
 - **Description** :
   Lorsque $(W - K) \pmod{stride} \ne 0$ ou $(H - K) \pmod{stride} \ne 0$, la grille de pooling n'atteint pas le bord droit ou le bord bas de l'image (pixels de queue / résidus de bordure).
