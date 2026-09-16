@@ -45,15 +45,17 @@ Synthesized using **Yosys** and placed & routed via **nextpnr-himbaechel** for t
 
 | Resource | Used | Capacity | Utilization | Status |
 | :--- | :---: | :---: | :---: | :---: |
-| **Logic (LUT4)** | **10,309** | 20,736 | **49.7 %** | OK (-4,321 LUTs saved) |
-| **Registers (FF)** | **5,577** | 15,552 | **35.9 %** | OK |
+| **Logic (LUT4)** | **10,437** | 20,736 | **50.3 %** | OK |
+| **Registers (FF)** | **5,137** | 15,552 | **33.0 %** | OK |
 | **Block RAM (BSRAM)** | **27** | 46 | **58.7 %** | OK |
 | **DSP (MULT)** | **25** | 48 | **52.1 %** (`MULT18X18`) | OK |
 
+*Numbers from the current `top.fs` (2026-09-16 build, single-write-port memory adapters).*
+
 ### Timing & Performance Summary
 - **Target Clock**: 27.00 MHz
-- **Estimated Fmax**: **47.58 MHz** (Timing constraints MET, +20.58 MHz slack)
-- **Bitstream Size**: ~7.09 MB (`top.fs`)
+- **Estimated Fmax**: **43.21 MHz** (Timing constraints MET, +16.21 MHz slack)
+- **Bitstream Size**: **7,091 KiB (~6.93 MiB)** (`top.fs`)
 - **Inference Latency**:
   - **~180 ms total roundtrip over UART** (a large portion of this duration is taken up by serial communication: transferring the 784-byte image and retrieving logits at 115,200 baud).
   - **~440 ms on first run** (includes automatic one-time upload of the 2,936-byte weight payload into FPGA BRAM).

@@ -28,6 +28,18 @@ case class TransposeTestComp_4x4[T <: Data](dataType: HardType[T]) extends Compo
   io.c <> spinalML.ops.transpose(io.a)
 }
 
+// Multi-lane input: transpose must keep the caller's lane parallelism by
+// default (the internal repack to 1 lane is an implementation detail).
+case class TransposeLanesTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 4))
+    val c = master(Tensor(dataType, Seq(4, 2), lanes = 4))
+  }
+  val t = transpose(io.a)
+  require(t.lanes == io.a.lanes, s"transpose dropped lanes: ${t.lanes} != ${io.a.lanes}")
+  io.c <> t
+}
+
 class TransposeTest extends AnyFunSuite {
   test("Test streaming Transpose operation on 2x3 matrix") {
     SimConfig.withWave.compile(TransposeTestComp_2x3(I8())).doSim { dut =>
@@ -74,5 +86,9 @@ class TransposeTest extends AnyFunSuite {
       SpinalConfig().generateVerilog(TransposeTestComp_2x3(dt()))
       SpinalConfig().generateVerilog(TransposeTestComp_4x4(dt()))
     }
+  }
+
+  test("transpose preserves the input lanes by default") {
+    SpinalConfig().generateVerilog(TransposeLanesTestComp(I8()))
   }
 }

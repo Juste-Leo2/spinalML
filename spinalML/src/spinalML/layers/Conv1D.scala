@@ -46,7 +46,7 @@ case class Conv1DLayer[T <: Data, TAcc <: Data](
   val matmulResult = matmul(cols, io.w, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal)
 
   // 3. Add Bias
-  val biased = bias_add(matmulResult, io.b)
+  val biased = bias_add(matmulResult, io.b, reArm = Some(io.reArm))
   if (convOutLanes == biased.lanes) io.y <> biased else io.y <> repack(biased, convOutLanes)
 }
 

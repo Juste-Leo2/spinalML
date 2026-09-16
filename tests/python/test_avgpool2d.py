@@ -117,6 +117,52 @@ async def cocotb_avgpool2d_bf16(dut):
     log_msg = log_true_math_error("AvgPool2D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
     dut._log.info(log_msg)
 
+async def run_avgpool2d_residue_test(dut, dtype_name, dtype, frames, poolSize, stride):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    dut.io_a_stream_valid.value = 0
+    dut.io_c_stream_ready.value = 0
+
+    H = len(frames[0])
+    W_in = len(frames[0][0])
+    H_out = (H - poolSize) // stride + 1
+    W_out = (W_in - poolSize) // stride + 1
+    Y_shape = (H_out, W_out)
+
+    async def send_frames():
+        for frame in frames:
+            await send_tensor(dut, "io_a_stream", frame, (H, W_in), 1, dtype, False)
+
+    send_task = cocotb.start_soon(send_frames())
+
+    for fi, frame in enumerate(frames):
+        Y_bits, Y_out = await recv_tensor(dut, "io_c_stream", Y_shape, dtype, False, lanes=1)
+        Y_expected = avgpool2d_hw(frame, poolSize, stride, dtype)
+        for i in range(H_out):
+            for j in range(W_out):
+                exp_bits = dtype.from_float(Y_expected[i][j])
+                assert Y_bits[i][j] == exp_bits, (
+                    f"frame {fi} HW Mismatch at [{i}][{j}]: got {Y_out[i][j]} "
+                    f"(bits {Y_bits[i][j]}) instead of {dtype.to_float(exp_bits)} (bits {exp_bits})"
+                )
+
+    await send_task
+
+@cocotb.test()
+async def cocotb_avgpool2d_residue_i8(dut):
+    # ACT-03: 5x5, pool=2, stride=2 -> 2x2 outputs, 6-beat tail per frame.
+    # Two contiguous frames must not shift the second one.
+    frames = [
+        [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15], [16, 17, 18, 19, 20], [21, 22, 23, 24, 25]],
+        [[26, 27, 28, 29, 30], [31, 32, 33, 34, 35], [36, 37, 38, 39, 40], [41, 42, 43, 44, 45], [46, 47, 48, 49, 50]],
+    ]
+    await run_avgpool2d_residue_test(dut, "I8", I8, frames, 2, 2)
+
 # Multi-channel tests
 @cocotb.test()
 async def cocotb_avgpool2dmulti_i8(dut):
@@ -163,3 +209,4 @@ def test_pytest_avgpool2d_bf16(request): run_pool_sim("AvgPool2D", "BF16", "coco
 
 def test_pytest_avgpool2dmulti_i8(request): run_pool_sim("AvgPool2D", "I8", "cocotb_avgpool2dmulti_i8", "AvgPool2DTestCompMulti", request)
 def test_pytest_avgpool2dmulti_fp8(request): run_pool_sim("AvgPool2D", "FP8", "cocotb_avgpool2dmulti_fp8", "AvgPool2DTestCompMulti", request)
+def test_pytest_avgpool2d_residue_i8(request): run_pool_sim("AvgPool2D", "residue", "cocotb_avgpool2d_residue_i8", "AvgPool2DResidueTestComp", request)

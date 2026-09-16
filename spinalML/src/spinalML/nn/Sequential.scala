@@ -378,9 +378,12 @@ case class Sequential(
       val fetchNowW = !fetchedOnceW || !residentMode || reloadPendingW || residentRise
       val startPathW = startTriggers(triggerIdx).valid && fetchNowW
       val reqW = Stream(FetchRequest(axiConfig.addressWidth))
+      // NN-01: `valid` must never depend on `ready`. The eager fetch is a pure
+      // state function (sticky request x loader capacity); it holds until the
+      // DMA accepts it and self-clears on `reqW.fire`.
       reqW.valid := startPathW ||
         (prefetchWorldW && (reloadPendingW || residentRise) &&
-          reqW.ready && wDoubleBuffer.io.loadCanAccept && !startPathW)
+          wDoubleBuffer.io.loadCanAccept && !startPathW)
       startTriggers(triggerIdx).ready := Mux(fetchNowW, reqW.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqW.address := io.weightsBaseAddress + currentMemoryOffset
@@ -466,9 +469,11 @@ case class Sequential(
       val fetchNowB = !fetchedOnceB || !residentMode || reloadPendingB || residentRise
       val startPathB = startTriggers(triggerIdx).valid && fetchNowB
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
+      // NN-01: `valid` must never depend on `ready` (bias mirror of the weight
+      // eager-fetch site above).
       reqB.valid := startPathB ||
         (prefetchWorldB && (reloadPendingB || residentRise) &&
-          reqB.ready && bDoubleBuffer.io.loadCanAccept && !startPathB)
+          bDoubleBuffer.io.loadCanAccept && !startPathB)
       startTriggers(triggerIdx).ready := Mux(fetchNowB, reqB.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqB.address := io.weightsBaseAddress + currentMemoryOffset
@@ -555,7 +560,7 @@ case class Sequential(
       case bn: BatchNorm1D =>
         val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
         val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
-        val bnOut = batchnorm(inRepacked, layerWeights, layerBias)
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias, reArm = Option(weightDmaFire))
         if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
@@ -566,6 +571,7 @@ case class Sequential(
         comp.io.x <> inRepacked
         comp.io.gamma <> layerWeights
         comp.io.beta <> layerBias
+        comp.io.reArm := weightDmaFire
         val lnOut = comp.io.y
         if (lnOut.lanes != targetLanes) repack(lnOut, targetLanes) else lnOut
 
@@ -707,10 +713,11 @@ case class Sequential(
     frameCounter.increment()
   }
   val ioBusy = RegInit(False)
+  // NN-02: a START accepted on the same cycle as the final-beat clear must win
+  // (last-assignment-wins would drop busy while a new inference just began).
   when(io.start.fire) {
     ioBusy := True
-  }
-  when(ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc) {
+  } elsewhen(ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc) {
     ioBusy := False
   }
   io.busy := ioBusy

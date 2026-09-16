@@ -40,4 +40,14 @@ class LayerSpecTest extends AnyFunSuite {
       assert(Cast(BF16()).getOutShape(shape) == shape)
     }
   }
+
+  test("BatchNorm1D/LayerNorm1D weight and bias shapes are 1D (LAY-02)") {
+    // The hardware ports are Tensor(dataType, Seq(channels)) (batchnorm.scala /
+    // layernorm.scala): the declarative metadata must match, otherwise shape
+    // checks and the generic LayerSpec compliance test disagree with the RTL.
+    for (spec <- Seq[LayerSpec](BatchNorm1D(4), LayerNorm1D(4))) {
+      assert(spec.getWeightShape() == Seq(4), s"$spec weights")
+      assert(spec.getBiasShape() == Seq(4), s"$spec bias")
+    }
+  }
 }

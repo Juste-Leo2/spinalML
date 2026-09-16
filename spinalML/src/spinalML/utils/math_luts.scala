@@ -65,7 +65,13 @@ object MathLUTs {
   }
   
   def floatEncodeFn(expBits: Int, mantBits: Int): Double => BigInt = y => {
-    if (y == 0.0) BigInt(0)
+    if (y.isNaN) BigInt(0)
+    else if (y.isInfinity) {
+      // Canonical IEEE-like infinity: exponent all ones, mantissa zero
+      val sign = if (y < 0) 1 else 0
+      BigInt((sign << (expBits + mantBits)) | (((1 << expBits) - 1) << mantBits))
+    }
+    else if (y == 0.0) BigInt(0)
     else {
       val sign = if (y < 0) 1 else 0
       val absY = Math.abs(y)
@@ -82,9 +88,9 @@ object MathLUTs {
          expEnc += 1
       }
       
-      if (expEnc >= (1 << expBits)) { // Overflow (Sat)
+      if (expEnc >= (1 << expBits)) { // Overflow (Saturate to canonical infinity)
         expEnc = (1 << expBits) - 1
-        mantEnc = (1 << mantBits) - 1
+        mantEnc = 0
       } else if (expEnc <= 0) { // Underflow
         expEnc = 0
         mantEnc = 0

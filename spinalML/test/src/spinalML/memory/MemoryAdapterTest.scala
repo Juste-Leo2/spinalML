@@ -35,7 +35,11 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.wrEnable #= false
       dut.io.wrAddr #= 0
       dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
       dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
       dut.io.axi.r.ready #= true
       dut.clockDomain.waitSampling(5)
 
@@ -88,7 +92,11 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.wrEnable #= false
       dut.io.wrAddr #= 0
       dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
       dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
       dut.io.axi.r.ready #= true
       dut.clockDomain.waitSampling(5)
 
@@ -121,7 +129,11 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.wrEnable #= false
       dut.io.wrAddr #= 0
       dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
       dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
       dut.extIo.ddrMaster.aw.ready #= false
       dut.extIo.ddrMaster.w.ready #= false
       dut.extIo.ddrMaster.r.valid #= false

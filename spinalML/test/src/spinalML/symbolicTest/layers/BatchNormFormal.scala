@@ -18,6 +18,7 @@ case class BatchNormTestComp[T <: Data](dataType: HardType[T]) extends Component
     val y = master(Tensor(dataType, Seq(1, channels), lanes = channels))
   }
   val norm = BatchNorm1D(dataType, channels, 1)
+  norm.io.reArm := False
   norm.io.x <> io.x
   norm.io.gamma <> io.gamma
   norm.io.beta <> io.beta

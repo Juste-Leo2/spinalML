@@ -12,17 +12,17 @@ import spinal.lib.bus.amba4.axilite._
  * 0x0C weights base, 0x1C run reg, 0x00 start pulse). Explicit handshake
  * (aw+wr accept, single b response) for test determinism.
  */
-case class CsrStub() extends Component {
+case class CsrStub(addressWidth: Int = 8) extends Component {
   import spinal.lib.bus.amba4.axilite._
   val io = new Bundle {
-    val ctrl       = slave(AxiLite4(AxiLite4Config(addressWidth = 8, dataWidth = 32)))
+    val ctrl       = slave(AxiLite4(AxiLite4Config(addressWidth = addressWidth, dataWidth = 32)))
     val imgBaseR   = out(UInt(32 bits))
     val weightBaseR = out(UInt(32 bits))
     val runRegR    = out(UInt(8 bits))
     val startPulse = out(Bool())
   }
 
-  val awAddrR = Reg(UInt(8 bits)) init 0
+  val awAddrR = Reg(UInt(addressWidth bits)) init 0
   val wDataR  = Reg(UInt(32 bits)) init 0
   val bValidR = RegInit(False)
 
@@ -78,7 +78,8 @@ case class UartBridgeTestComp(
   clkFreq: BigInt = 27000000,
   baudRate: BigInt = 115200,
   outCount: Int = 10,
-  version: Int = 0x01
+  version: Int = 0x01,
+  csrAddrWidth: Int = 8
 ) extends Component {
   val axiConfig = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
 
@@ -96,7 +97,7 @@ case class UartBridgeTestComp(
     val csrWValidO   = out(Bool())
     val csrWReadyO   = out(Bool())
     val csrBValidO   = out(Bool())
-    val csrAwAddrO   = out(UInt(8 bits))
+    val csrAwAddrO   = out(UInt(csrAddrWidth bits))
     val csrWDataO    = out(UInt(32 bits))
 
     val bram = slave(spinal.lib.bus.amba4.axi.Axi4(axiConfig))
@@ -109,7 +110,7 @@ case class UartBridgeTestComp(
 
   val rx = new UartRx(clkFreq, baudRate)
   val tx = new UartTx(clkFreq, baudRate)
-  val bridge = new UartBridge(outCount = outCount, wordWidth = axiConfig.dataWidth, version = version)
+  val bridge = new UartBridge(outCount = outCount, wordWidth = axiConfig.dataWidth, csrAddrWidth = csrAddrWidth, version = version)
   val mem = new AxiReadMem(axiConfig, memoryWords = 4096, imgBase = 0x10000, weightBase = 0x20000)
 
   io.rxPulseO := rx.io.valid
@@ -128,6 +129,7 @@ case class UartBridgeTestComp(
   mem.io.wrEnable := bridge.io.wrEnable
   mem.io.wrAddr := bridge.io.wrAddr
   mem.io.wrData := bridge.io.wrData
+  mem.io.wrStrb := bridge.io.wrStrb
   mem.io.axi.ar <> io.bram.ar
   mem.io.axi.r <> io.bram.r
   mem.io.axi.aw.valid := io.bram.aw.valid
@@ -142,7 +144,7 @@ case class UartBridgeTestComp(
 
   // CSR stub: identical register map as the Accelerator (component form,
   // so the master/slave connect follows the UartSoC pattern).
-  val csrStub = new CsrStub()
+  val csrStub = new CsrStub(csrAddrWidth)
   bridge.io.csr <> csrStub.io.ctrl
   io.csrAwValidO := csrStub.io.ctrl.aw.valid
   io.csrAwReadyO := csrStub.io.ctrl.aw.ready
@@ -174,11 +176,71 @@ case class UartBridgeTestComp(
   bridge.io.accDone := active
 }
 
+// wordWidth > 64 top: the 'W' command must assemble whole words whose last
+// byte index exceeds 7 (byteCnt must not be hard-coded to 3 bits).
+case class UartBridgeWideWordTestComp(
+  wordWidth: Int = 128,
+  clkFreq: BigInt = 27000000,
+  baudRate: BigInt = 115200
+) extends Component {
+  val io = new Bundle {
+    val rxIn      = in(Bool())
+    val txOut     = out(Bool())
+    val wrEnableO = out(Bool())
+    val wrAddrO   = out(UInt(32 bits))
+    val wrDataO   = out(Bits(wordWidth bits))
+  }
+
+  val rx = new UartRx(clkFreq, baudRate)
+  val tx = new UartTx(clkFreq, baudRate)
+  val bridge = new UartBridge(outCount = 10, wordWidth = wordWidth)
+  val csrStub = new CsrStub()
+
+  rx.io.rx := io.rxIn
+  bridge.io.rx.valid := rx.io.valid
+  bridge.io.rx.payload := rx.io.data
+  tx.io.start := bridge.io.tx.valid
+  tx.io.data := bridge.io.tx.payload
+  bridge.io.tx.ready := tx.io.ready
+  io.txOut := tx.io.tx
+
+  bridge.io.csr <> csrStub.io.ctrl
+
+  bridge.io.outStream.valid := False
+  bridge.io.outStream.payload := B(0, 8 bits)
+  bridge.io.statusArValid := False
+  bridge.io.statusRValid := False
+  bridge.io.accBusy := False
+  bridge.io.accDone := False
+
+  io.wrEnableO := bridge.io.wrEnable
+  io.wrAddrO := bridge.io.wrAddr
+  io.wrDataO := bridge.io.wrData
+}
+
 class UartBridgeTest extends AnyFunSuite {
   test("uart_bridge_toplevel") {
     SpinalConfig(
       headerWithDate = true,
       rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
     ).generateVerilog(UartBridgeTestComp(27000000, 115200))
+  }
+
+  test("Generate Verilog UartBridgeWideCsrTestComp for Python co-simulation") {
+    SpinalConfig(
+      headerWithDate = true,
+      rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
+    ).generateVerilog {
+      val dut = UartBridgeTestComp(27000000, 115200, csrAddrWidth = 12)
+      dut.setDefinitionName("UartBridgeWideCsrTestComp")
+      dut
+    }
+  }
+
+  test("Generate Verilog UartBridgeWideWordTestComp for Python co-simulation") {
+    SpinalConfig(
+      headerWithDate = true,
+      rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
+    ).generateVerilog(UartBridgeWideWordTestComp(wordWidth = 128))
   }
 }

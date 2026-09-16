@@ -36,16 +36,20 @@ class SramAsicAdapter(
   // ------------------------------------------------------------------
   def mapIndex(addr: UInt): UInt = {
     val isWeight = addr >= weightBase
-    val offset   = Mux(isWeight, addr - weightBase, addr - imgBase)
+    // Addresses below imgBase must not underflow `addr - imgBase` into a huge
+    // unsigned offset (which would silently alias the last word): clamp to the
+    // first physical word. Addresses past the memory clamp to the last one.
+    val offset   = Mux(isWeight, addr - weightBase,
+      Mux(addr < imgBase, U(0, 32 bits), addr - imgBase))
     val raw      = (offset >> shift) + Mux(isWeight, U(halfWords, 32 bits), U(0, 32 bits))
     val clamped  = raw >= U(memoryWords - 1, raw.getWidth bits)
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))
   }
 
-  // Write port (Host loader -> SRAM)
-  when(io.wrEnable) {
-    sramCore.write(mapIndex(io.wrAddr), io.wrData)
-  }
+  // Host write byte strobes are passed straight to Mem.write as the byte-level
+  // mask: the mask width drives the Mem symbol width, so one mask bit per
+  // byte yields byte-wide memory symbols (which pack into full-width SRAM
+  // macros) instead of one single-bit RAM per data bit.
 
   // ------------------------------------------------------------------
   // AXI4 read response machine
@@ -90,9 +94,54 @@ class SramAsicAdapter(
   io.axi.r.payload.last := rlastR
   io.axi.r.payload.resp := B"00"
 
-  io.axi.aw.ready := False
-  io.axi.w.ready := False
-  io.axi.b.valid := False
-  io.axi.b.payload.id := 0
-  io.axi.b.payload.resp := 0
+  // ------------------------------------------------------------------
+  // AXI4 write slave (accelerator write-back, e.g. DMAWriter): single
+  // outstanding burst, AW accepted first, byte-strobed W beats, one B.
+  // ------------------------------------------------------------------
+  val beatCountW = log2Up((1 << axiConfig.lenWidth) + 1)
+  val awPending  = RegInit(False)
+  val bValidR    = RegInit(False)
+  val wRemaining = Reg(UInt(beatCountW bits)) init (0)
+  val wAddrR     = Reg(UInt(axiConfig.addressWidth bits)) init (0)
+
+  io.axi.aw.ready := !awPending && !bValidR
+  when(io.axi.aw.valid && io.axi.aw.ready) {
+    awPending  := True
+    wRemaining := (io.axi.aw.payload.len +^ 1).resize(beatCountW bits)
+    wAddrR     := io.axi.aw.payload.addr
+  }
+
+  io.axi.w.ready := awPending && !bValidR && !io.wrEnable
+
+  // Single physical write port shared by the host loader and the accelerator
+  // write-back (host priority; the accelerator beat is stalled, never
+  // dropped). A 1-read + 1-write memory maps to a compiled 1R1W SRAM macro;
+  // a second write port would prevent macro mapping and expand the memory to
+  // flip-flops.
+  val wrFire    = io.wrEnable || (io.axi.w.valid && io.axi.w.ready)
+  val wrAddrSel = Mux(io.wrEnable, io.wrAddr, wAddrR)
+  val wrDataSel = Mux(io.wrEnable, io.wrData, io.axi.w.payload.data)
+  val wrMaskSel = Mux(io.wrEnable, io.wrStrb, io.axi.w.payload.strb)
+
+  when(wrFire) {
+    sramCore.write(mapIndex(wrAddrSel), wrDataSel, mask = wrMaskSel)
+  }
+
+  when(io.axi.w.valid && io.axi.w.ready) {
+    wAddrR := wAddrR + bytePerBeat
+    when(wRemaining === 1) {
+      awPending := False
+      bValidR   := True
+    } otherwise {
+      wRemaining := wRemaining - 1
+    }
+  }
+
+  when(bValidR && io.axi.b.ready) {
+    bValidR := False
+  }
+
+  io.axi.b.valid        := bValidR
+  io.axi.b.payload.id   := 0
+  io.axi.b.payload.resp := B"00"
 }

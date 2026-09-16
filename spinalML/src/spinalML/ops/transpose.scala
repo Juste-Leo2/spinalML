@@ -105,7 +105,7 @@ object transpose {
     val comp = TransposeOp(in.dataType, M, N, 1)
     comp.io.a <> in
     val rawC = comp.io.c
-    val finalLanes = if (outLanes > 0) outLanes else in.lanes
+    val finalLanes = if (outLanes > 0) outLanes else a.lanes
     if (rawC.lanes != finalLanes) repack(rawC, finalLanes) else rawC
   }
 }

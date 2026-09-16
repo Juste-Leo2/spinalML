@@ -128,6 +128,50 @@ async def cocotb_maxpool1d_bf16(dut):
     log_msg = log_true_math_error("MaxPool1D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
     dut._log.info(log_msg)
 
+async def run_maxpool1d_residue_test(dut, dtype_name, dtype, frames, poolSize, stride):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    dut.io_a_stream_valid.value = 0
+    dut.io_c_stream_ready.value = 0
+
+    L_in = len(frames[0])
+    channels = len(frames[0][0])
+    L_out = (L_in - poolSize) // stride + 1
+
+    async def send_frames():
+        for frame in frames:
+            await send_tensor(dut, "io_a_stream", frame, (L_in, channels), channels, dtype, False)
+
+    send_task = cocotb.start_soon(send_frames())
+
+    for fi, frame in enumerate(frames):
+        Y_bits, Y_out = await recv_tensor(dut, "io_c_stream", (L_out, channels), dtype, False, lanes=channels)
+        Y_expected = maxpool1d_hw(frame, poolSize, stride, dtype)
+        for m in range(L_out):
+            for n in range(channels):
+                exp_bits = dtype.from_float(Y_expected[m][n])
+                assert Y_bits[m][n] == exp_bits, (
+                    f"frame {fi} HW Mismatch at Y[{m}][{n}]: got {Y_out[m][n]} "
+                    f"(bits {Y_bits[m][n]}) instead of {dtype.to_float(exp_bits)} (bits {exp_bits})"
+                )
+
+    await send_task
+
+@cocotb.test()
+async def cocotb_maxpool1d_residue_i8(dut):
+    # ACT-01: L=7, pool=2, stride=2 -> L_out=3, one tail element per frame.
+    # Two contiguous frames must not shift the second one.
+    frames = [
+        [[1, 10], [2, 20], [3, 30], [4, 40], [5, 50], [6, 60], [7, 70]],
+        [[8, 80], [9, 90], [10, 100], [11, 110], [12, 120], [13, 130], [14, 140]],
+    ]
+    await run_maxpool1d_residue_test(dut, "I8", I8, frames, 2, 2)
+
 def run_pool_sim(layer_name, dtype_filter, testcase_name, toplevel, request=None):
     v_file = run_mill(f"spinalML.poolings.{layer_name}Test", dtype_filter, toplevel)
     build_dir = f"sim_build/{layer_name.lower()}_{toplevel.lower()}_{dtype_filter.lower()}"
@@ -150,3 +194,4 @@ def test_pytest_maxpool1d_i8(request): run_pool_sim("MaxPool1D", "I8", "cocotb_m
 def test_pytest_maxpool1d_fp8(request): run_pool_sim("MaxPool1D", "FP8", "cocotb_maxpool1d_fp8", "MaxPool1DTestComp", request)
 def test_pytest_maxpool1d_i16(request): run_pool_sim("MaxPool1D", "I16", "cocotb_maxpool1d_i16", "MaxPool1DTestComp", request)
 def test_pytest_maxpool1d_bf16(request): run_pool_sim("MaxPool1D", "BF16", "cocotb_maxpool1d_bf16", "MaxPool1DTestComp", request)
+def test_pytest_maxpool1d_residue_i8(request): run_pool_sim("MaxPool1D", "residue", "cocotb_maxpool1d_residue_i8", "MaxPool1DResidueTestComp", request)

@@ -6,7 +6,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import spinal.core._
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
-import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig, SparseMemory}
+import spinal.lib.bus.amba4.axi.sim.{Axi4ReadOnlySlaveAgent, AxiMemorySim, AxiMemorySimConfig, SparseMemory}
 import spinalML.dtypes.{BF16, FloatML, I4, I8}
 import spinalML.harness.MemoryHarness
 import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
@@ -140,6 +140,85 @@ class SequentialTest extends AnyFunSuite {
       }
 
       println(s"[SequentialTest] All $numPasses consecutive inferences passed cleanly without reset")
+    }
+  }
+
+  test("Sequential: busy survives a START accepted on the final-beat cycle (NN-02)") {
+    // NN-02: ioBusy is written by two `when` blocks; the clear (last output beat)
+    // used to win over a same-cycle START accept, dropping busy while a new
+    // inference had just begun. A single-beat frame (outFeatures=1) makes the
+    // only output beat the final one: hold it with ready=0, then present the
+    // new START and the completion on the very same DUT sampling edge.
+    val spec = Seq(
+      Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3),
+      ReLU(),
+      Flatten(),
+      Linear(inFeatures = 8, outFeatures = 1)
+    )
+
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      new Sequential(
+        globalDataType = I8(),
+        inputShape = Seq(4, 4, 1),
+        layers = spec,
+        axiConfig = axiConfig
+      )
+    )
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      // Sequential exposes a read-only AXI master: drive it with the read-only
+      // slave agent over a plain SparseMemory.
+      val memory = SparseMemory()
+      new Axi4ReadOnlySlaveAgent(dut.io.axiMaster, dut.clockDomain) {
+        override def readByte(address: BigInt, id: Int): Byte = memory.read(address.toLong)
+      }
+
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.layers, dut.globalDataType, axiConfig)
+      writeWords(memory, weightBase, packed.words)
+
+      val inInts = (0 until 16).map(idx => ((idx * 3) % 7).toLong)
+      writeWords(memory, imgBase, MemoryHarness.packBytes(inInts.map(_.toInt)))
+
+      dut.io.start.valid #= false
+      dut.io.outStream.stream.ready #= false
+      dut.io.imgBaseAddress #= imgBase
+      dut.io.weightsBaseAddress #= weightBase
+      dut.clockDomain.waitSampling(5)
+
+      val frameSize = (dut.finalShape.product + dut.finalLanes - 1) / dut.finalLanes
+      assert(frameSize == 1, s"NN-02 harness expects a single-beat frame, got $frameSize")
+
+      // Start the first inference. Its only (final) output beat is held by the
+      // ready=0 set above, so the frame is exactly one fire from completion.
+      dut.io.start.valid #= true
+      dut.clockDomain.waitSamplingWhere(dut.io.start.ready.toBoolean)
+      dut.io.start.valid #= false
+      dut.clockDomain.waitSamplingWhere(dut.io.outStream.stream.valid.toBoolean)
+
+      assert(dut.io.busy.toBoolean, "ioBusy lost before the final beat (harness assumption broken)")
+      assert(dut.io.start.ready.toBoolean,
+        "START not accepted while holding the final beat (harness assumption broken)")
+
+      // Same DUT edge: the new START is accepted AND the final beat completes.
+      // Both inputs are assigned in the same delta, so they become visible on
+      // the same sampling edge (two edges after the assignment in this sim).
+      dut.io.start.valid #= true
+      dut.io.outStream.stream.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.waitSampling()
+
+      val busyAfter = dut.io.busy.toBoolean
+      val beatFired = !dut.io.outStream.stream.valid.toBoolean
+      dut.io.start.valid #= false
+      dut.io.outStream.stream.ready #= false
+
+      assert(beatFired,
+        "final beat did not complete on the conflict edge (harness assumption broken)")
+      assert(busyAfter,
+        "ioBusy fell while a new inference START was accepted on the final-beat cycle (NN-02)")
+      println("[SequentialTest] NN-02: busy stayed high across the same-cycle START + final beat")
     }
   }
 

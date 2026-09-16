@@ -73,6 +73,7 @@ class AcceleratorFormal extends Component {
   val frameDone      = dut.frameDone.pull()
   val startEventFire = dut.startEvent.fire.pull()
   val writeToDdr     = dut.writeToDdr.pull()
+  val modelBusy      = dut.model.io.busy.pull()
 
   // AcceleratorFormal verifies the standard read-only inference control plane
   assume(!writeToDdr)
@@ -111,6 +112,13 @@ class AcceleratorFormal extends Component {
   // When frameDone occurs under STOP (RUN=0): image cursor stays frozen.
   when(pastValid() && past(frameDone) && !past(runActive)) {
     assert(imgBaseOffset === past(imgBaseOffset), "Image offset mutated after STOP was issued")
+  }
+
+  // 5. NN-02 START/busy contract: an accepted START must leave the datapath
+  // busy on the next cycle, even when it is accepted on the cycle the previous
+  // frame completes (the frame-completion clear must not win that collision).
+  when(pastValid() && past(startEventFire)) {
+    assert(modelBusy, "model busy dropped after an accepted START (NN-02)")
   }
 
   // ==========================================

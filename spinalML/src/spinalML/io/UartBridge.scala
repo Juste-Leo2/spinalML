@@ -59,6 +59,9 @@ class UartBridge(
     val wrEnable = out(Bool())
     val wrAddr   = out(UInt(32 bits))
     val wrData   = out(Bits(wordWidth bits))
+    // Per-byte write mask (bit i = byte i valid), AXI w.strb convention: the
+    // final partial word of a 'W' command must not commit stale bytes.
+    val wrStrb   = out(Bits(wordBytes bits))
 
     // Accelerator output stream (one FP8 byte per logit)
     val outStream = slave(Stream(Bits(8 bits)))
@@ -74,7 +77,7 @@ class UartBridge(
   // Registers (1:1 with top.v)
   // ------------------------------------------------------------------
   val state   = RegInit(IDLE)
-  val byteCnt = Reg(UInt(3 bits)) init 0
+  val byteCnt = Reg(UInt(log2Up((wordBytes max 4) + 1) bits)) init 0
   val addrReg = Reg(UInt(32 bits)) init 0
   val valReg  = Reg(UInt(32 bits)) init 0
   val lenReg  = Reg(UInt(32 bits)) init 0
@@ -91,6 +94,7 @@ class UartBridge(
 
   val wrEnableR = RegInit(False)
   val wrBytes   = Vec(Reg(Bits(8 bits)) init 0, wordBytes)
+  val wrStrbR   = Reg(Bits(wordBytes bits)) init(0)
 
   // Helper: {rxByte, acc[31:8]} — LSB-first accumulation (shifts right by 8)
   def shiftIn(rxByte: Bits, acc: UInt): UInt = (rxByte ## acc(31 downto 8)).asUInt
@@ -98,6 +102,7 @@ class UartBridge(
   io.wrEnable := wrEnableR
   io.wrAddr   := addrReg
   io.wrData   := wrBytes.asBits
+  io.wrStrb   := wrStrbR
   io.rx.ready := True
   io.tx.valid := txStartR
   io.tx.payload := txDataR
@@ -121,6 +126,14 @@ class UartBridge(
   // ------------------------------------------------------------------
   wrEnableR := False
   txStartR  := False
+
+  // Byte strobes of the word being assembled: bit i turns on once byte i has
+  // been received (LSB-first), so a complete word yields all-ones and the
+  // final partial word only enables the bytes actually present.
+  val wordByteMask = Bits(wordBytes bits)
+  for (i <- 0 until wordBytes) {
+    wordByteMask(i) := (byteCnt >= U(i, byteCnt.getWidth bits))
+  }
 
   // Delayed virtual address walk, exact mirror of the Verilog
   // `if (w_bram_en) addr_reg <= addr_reg + 8;`
@@ -166,7 +179,7 @@ class UartBridge(
       when(io.rx.valid) {
         valReg := shiftIn(io.rx.payload, valReg)
         when(byteCnt === 3) {
-          csrAwAddrR := addrReg(7 downto 0)
+          csrAwAddrR := addrReg.resize(csrAddrWidth)
           csrWDataR  := shiftIn(io.rx.payload, valReg)
           csrAwValidR := True
           csrWValidR  := True
@@ -229,6 +242,7 @@ class UartBridge(
         lenReg := lenReg - 1
         when(byteCnt === (wordBytes - 1) || lenReg === 1) {
           wrEnableR := True
+          wrStrbR := wordByteMask
           byteCnt := 0
           when(lenReg === 1) {
             state := IDLE
