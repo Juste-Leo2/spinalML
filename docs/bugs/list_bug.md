@@ -433,6 +433,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-ACT-02 : `Softmax1D` - Risque de saturation de la table exp
+- **Statut** : faux positif — le dénominateur ne peut jamais être nul. Après la soustraction du max (`softmax.scala`, max-tree puis `sub`), l'élément dominant vaut exactement 0 (entiers : clamp exact ; flottants : `Float.add(x, -x)` → +0 explicite), et `ExpOp` (`ops/exp.scala`, LUT `Math.exp`) encode `exp(0)=1` exactement (`intEncodeFn(round(1))=1`, `floatEncodeFn(1.0)=1.0`). La somme est donc ≥ 1 ; les exponentielles très négatives sous-flue à 0 sans annuler le terme dominant. Couverture existante : `test_softmax.py` teste pour chaque dtype (I8/FP8/I16/BF16) le vecteur uniforme, un dominant extrême (100/−100, 15/−15, 5000/−5000, 50/−50) et tous très négatifs (−120, −10, −10000, −30) ; 7/7 ✅ et formels `SoftmaxFormal_I8/FP4/FP9` ✅. Aucun code modifié.
 - **Fichier** : `spinalML/src/spinalML/activations/softmax.scala`
 - **Description** :
   Le calcul de soustraction du maximum ($x_i - x_{max}$) atténue les débordements positifs, mais pour des écarts importants négatifs, l'exponentielle peut sous-dévier brutalement à 0, rendant la somme des dénominateurs nulle.
