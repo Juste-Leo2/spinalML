@@ -43,18 +43,10 @@ class BramAdapter(
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))
   }
 
-  // Write port (Host/UART -> BRAM). The byte strobes are expanded to the
-  // bit-level mask expected by Mem.write, so a partial-word host write only
-  // touches the enabled bytes.
-  val wrBitMask = Bits(axiConfig.dataWidth bits)
-  wrBitMask := 0
-  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
-    wrBitMask(byte * 8 + bit) := io.wrStrb(byte)
-  }
-
-  when(io.wrEnable) {
-    mem.write(mapIndex(io.wrAddr), io.wrData, mask = wrBitMask)
-  }
+  // Host write byte strobes are passed straight to Mem.write as the byte-level
+  // mask: the mask width drives the Mem symbol width, so one mask bit per
+  // byte yields byte-wide memory symbols (which pack into full-width block
+  // RAMs) instead of one single-bit RAM per data bit.
 
   // ------------------------------------------------------------------
   // AXI4 read response machine
@@ -117,16 +109,23 @@ class BramAdapter(
     wAddrR     := io.axi.aw.payload.addr
   }
 
-  io.axi.w.ready := awPending && !bValidR
+  io.axi.w.ready := awPending && !bValidR && !io.wrEnable
 
-  val wBeatMask = Bits(axiConfig.dataWidth bits)
-  wBeatMask := 0
-  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
-    wBeatMask(byte * 8 + bit) := io.axi.w.payload.strb(byte)
+  // Single physical write port shared by the host loader and the accelerator
+  // write-back (host priority; the accelerator beat is stalled, never
+  // dropped). A 1-read + 1-write Mem maps to block RAM on every target
+  // (Gowin SDP/DPB, Xilinx BRAM, ASIC 1R1W macros); a second write port
+  // would prevent BRAM inference and expand the whole memory to flip-flops.
+  val wrFire    = io.wrEnable || (io.axi.w.valid && io.axi.w.ready)
+  val wrAddrSel = Mux(io.wrEnable, io.wrAddr, wAddrR)
+  val wrDataSel = Mux(io.wrEnable, io.wrData, io.axi.w.payload.data)
+  val wrMaskSel = Mux(io.wrEnable, io.wrStrb, io.axi.w.payload.strb)
+
+  when(wrFire) {
+    mem.write(mapIndex(wrAddrSel), wrDataSel, mask = wrMaskSel)
   }
 
   when(io.axi.w.valid && io.axi.w.ready) {
-    mem.write(mapIndex(wAddrR), io.axi.w.payload.data, mask = wBeatMask)
     wAddrR := wAddrR + bytePerBeat
     when(wRemaining === 1) {
       awPending := False

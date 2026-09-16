@@ -46,17 +46,10 @@ class SramAsicAdapter(
     Mux(clamped, U(memoryWords - 1, idxBits bits), raw(idxBits - 1 downto 0))
   }
 
-  // Write port (Host loader -> SRAM). Byte strobes expanded to the bit-level
-  // mask of Mem.write so partial-word writes preserve the untouched bytes.
-  val wrBitMask = Bits(axiConfig.dataWidth bits)
-  wrBitMask := 0
-  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
-    wrBitMask(byte * 8 + bit) := io.wrStrb(byte)
-  }
-
-  when(io.wrEnable) {
-    sramCore.write(mapIndex(io.wrAddr), io.wrData, mask = wrBitMask)
-  }
+  // Host write byte strobes are passed straight to Mem.write as the byte-level
+  // mask: the mask width drives the Mem symbol width, so one mask bit per
+  // byte yields byte-wide memory symbols (which pack into full-width SRAM
+  // macros) instead of one single-bit RAM per data bit.
 
   // ------------------------------------------------------------------
   // AXI4 read response machine
@@ -118,16 +111,23 @@ class SramAsicAdapter(
     wAddrR     := io.axi.aw.payload.addr
   }
 
-  io.axi.w.ready := awPending && !bValidR
+  io.axi.w.ready := awPending && !bValidR && !io.wrEnable
 
-  val wBeatMask = Bits(axiConfig.dataWidth bits)
-  wBeatMask := 0
-  for (byte <- 0 until bytePerBeat; bit <- 0 until 8) {
-    wBeatMask(byte * 8 + bit) := io.axi.w.payload.strb(byte)
+  // Single physical write port shared by the host loader and the accelerator
+  // write-back (host priority; the accelerator beat is stalled, never
+  // dropped). A 1-read + 1-write memory maps to a compiled 1R1W SRAM macro;
+  // a second write port would prevent macro mapping and expand the memory to
+  // flip-flops.
+  val wrFire    = io.wrEnable || (io.axi.w.valid && io.axi.w.ready)
+  val wrAddrSel = Mux(io.wrEnable, io.wrAddr, wAddrR)
+  val wrDataSel = Mux(io.wrEnable, io.wrData, io.axi.w.payload.data)
+  val wrMaskSel = Mux(io.wrEnable, io.wrStrb, io.axi.w.payload.strb)
+
+  when(wrFire) {
+    sramCore.write(mapIndex(wrAddrSel), wrDataSel, mask = wrMaskSel)
   }
 
   when(io.axi.w.valid && io.axi.w.ready) {
-    sramCore.write(mapIndex(wAddrR), io.axi.w.payload.data, mask = wBeatMask)
     wAddrR := wAddrR + bytePerBeat
     when(wRemaining === 1) {
       awPending := False
