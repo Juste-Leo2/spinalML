@@ -530,6 +530,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 6. Réseau Séquentiel, DAG & Accélérateur
 
 ### BUG-NN-01 : Violation du protocole AXI/Stream et boucle combinatoire sur les requêtes de poids
+- **Statut** : corrigé (durcissement protocolaire) — `reqW.ready` / `reqB.ready` retirés de l'équation `valid` (weights l.381-383 et bias l.469-471) : `valid` est désormais une pure fonction d'état (requête sticky × capacité loader), maintenue jusqu'à acceptation et auto-effacée par `reqW.fire`. Pas de repro runtime possible : le « esclave » de ces requêtes est le `DMAReader` interne dont `cmd.ready = baseReady && gearboxEmpty` est purement étatique (`DMAReader.scala:70-75`), donc aucune boucle n'existe aujourd'hui — violation latente uniquement (le prochain consommateur qui dériverait `ready` de `valid` créerait la boucle). Non-régression : `StreamDoubleBufferTest` ✅, formel `StreamDoubleBufferPrefetchFormal` ✅, `AcceleratorTest` ✅, `SequentialTest` ✅ (le chemin eager reste sans test end-to-end dans l'arbre, `WeightPrefetchChainTest` retiré).
 - **Fichier** : `spinalML/src/spinalML/nn/Sequential.scala` (lignes 381-383 et 470-471)
 - **Code concerné** :
   ```scala

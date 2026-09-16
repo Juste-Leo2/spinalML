@@ -378,9 +378,12 @@ case class Sequential(
       val fetchNowW = !fetchedOnceW || !residentMode || reloadPendingW || residentRise
       val startPathW = startTriggers(triggerIdx).valid && fetchNowW
       val reqW = Stream(FetchRequest(axiConfig.addressWidth))
+      // NN-01: `valid` must never depend on `ready`. The eager fetch is a pure
+      // state function (sticky request x loader capacity); it holds until the
+      // DMA accepts it and self-clears on `reqW.fire`.
       reqW.valid := startPathW ||
         (prefetchWorldW && (reloadPendingW || residentRise) &&
-          reqW.ready && wDoubleBuffer.io.loadCanAccept && !startPathW)
+          wDoubleBuffer.io.loadCanAccept && !startPathW)
       startTriggers(triggerIdx).ready := Mux(fetchNowW, reqW.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqW.address := io.weightsBaseAddress + currentMemoryOffset
@@ -466,9 +469,11 @@ case class Sequential(
       val fetchNowB = !fetchedOnceB || !residentMode || reloadPendingB || residentRise
       val startPathB = startTriggers(triggerIdx).valid && fetchNowB
       val reqB = Stream(FetchRequest(axiConfig.addressWidth))
+      // NN-01: `valid` must never depend on `ready` (bias mirror of the weight
+      // eager-fetch site above).
       reqB.valid := startPathB ||
         (prefetchWorldB && (reloadPendingB || residentRise) &&
-          reqB.ready && bDoubleBuffer.io.loadCanAccept && !startPathB)
+          bDoubleBuffer.io.loadCanAccept && !startPathB)
       startTriggers(triggerIdx).ready := Mux(fetchNowB, reqB.ready, True)
       currentMemoryOffset = alignToBeat(currentMemoryOffset)
       reqB.address := io.weightsBaseAddress + currentMemoryOffset
