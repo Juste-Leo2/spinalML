@@ -140,6 +140,54 @@ async def cocotb_avgpool1d_bf16(dut):
     log_msg = log_true_math_error("AvgPool1D", "BF16", BF16, True, collect["out"], collect["true"], details=details)
     dut._log.info(log_msg)
 
+async def run_avgpool1d_residue_test(dut, dtype_name, dtype, frames, poolSize, stride):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+    dut.reset.value = 1
+    await RisingEdge(dut.clk)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+
+    dut.io_a_stream_valid.value = 0
+    dut.io_c_stream_ready.value = 0
+
+    L_in = len(frames[0])
+    channels = len(frames[0][0])
+    L_out = (L_in - poolSize) // stride + 1
+
+    is_floatml = getattr(dtype, 'is_floatml', False)
+
+    async def send_frames():
+        for frame in frames:
+            await send_tensor(dut, "io_a_stream", frame, (L_in, channels), channels, dtype, is_floatml)
+
+    send_task = cocotb.start_soon(send_frames())
+
+    for fi, frame in enumerate(frames):
+        Y_bits, Y_out = await recv_tensor(dut, "io_c_stream", (L_out, channels), dtype, is_floatml, lanes=channels)
+        Y_expected = avgpool1d_hw(frame, poolSize, stride, dtype)
+        for m in range(L_out):
+            for n in range(channels):
+                exp_bits = dtype.from_float(Y_expected[m][n])
+                assert Y_bits[m][n] == exp_bits, (
+                    f"frame {fi} HW Mismatch at Y[{m}][{n}]: got {Y_out[m][n]} "
+                    f"(bits {Y_bits[m][n]}) instead of {dtype.to_float(exp_bits)} (bits {exp_bits})"
+                )
+
+    await send_task
+
+@cocotb.test()
+async def cocotb_avgpool1d_residue_i8(dut):
+    # ACT-01: L=7, pool=2, stride=2 -> L_out=3, one tail element per frame.
+    # Two contiguous frames must not shift the second one.
+    setattr(I8, 'is_floatml', False)
+    setattr(I8, 'signed', True)
+    frames = [
+        [[1, 10], [3, 30], [5, 50], [7, 70], [9, 90], [11, 110], [13, 130]],
+        [[2, 20], [4, 40], [6, 60], [8, 80], [10, 100], [12, 120], [14, 140]],
+    ]
+    await run_avgpool1d_residue_test(dut, "I8", I8, frames, 2, 2)
+
 def run_pool_sim(layer_name, dtype_filter, testcase_name, toplevel, request=None):
     v_file = run_mill(f"spinalML.poolings.{layer_name}Test", dtype_filter, toplevel)
     build_dir = f"sim_build/{layer_name.lower()}_{toplevel.lower()}_{dtype_filter.lower()}"
@@ -162,3 +210,4 @@ def test_pytest_avgpool1d_i8(request): run_pool_sim("AvgPool1D", "I8", "cocotb_a
 def test_pytest_avgpool1d_fp8(request): run_pool_sim("AvgPool1D", "FP8", "cocotb_avgpool1d_fp8", "AvgPool1DTestComp", request)
 def test_pytest_avgpool1d_i16(request): run_pool_sim("AvgPool1D", "I16", "cocotb_avgpool1d_i16", "AvgPool1DTestComp", request)
 def test_pytest_avgpool1d_bf16(request): run_pool_sim("AvgPool1D", "BF16", "cocotb_avgpool1d_bf16", "AvgPool1DTestComp", request)
+def test_pytest_avgpool1d_residue_i8(request): run_pool_sim("AvgPool1D", "residue", "cocotb_avgpool1d_residue_i8", "AvgPool1DResidueTestComp", request)

@@ -21,6 +21,17 @@ case class AvgPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component
   io.c <> spinalML.poolings.avgpool1d(io.a, poolSize = 2, stride = 2)
 }
 
+// ACT-01 repro: L=7, pool=2, stride=2 -> L_out=3 leaves one tail element per
+// frame that must be drained before the next frame starts.
+case class AvgPool1DResidueTestComp[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(7, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(3, 2), lanes = 2))
+  }
+
+  io.c <> spinalML.poolings.avgpool1d(io.a, poolSize = 2, stride = 2)
+}
+
 class AvgPool1DTest extends AnyFunSuite {
   test("Test streaming AvgPool1D operation on I8 tensors") {
     SimConfig.withWave.compile(AvgPool1DTestComp(I8())).doSim { dut =>
@@ -78,5 +89,9 @@ class AvgPool1DTest extends AnyFunSuite {
 
   test("Test AvgPool1D compilation on BF16") {
     SpinalConfig().generateVerilog(AvgPool1DTestComp(BF16()))
+  }
+
+  test("Test AvgPool1D residue compilation on I8") {
+    SpinalConfig().generateVerilog(AvgPool1DResidueTestComp(I8()))
   }
 }

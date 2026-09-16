@@ -423,6 +423,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ## 4. Fonctions d'Activation & Poolings
 
 ### BUG-ACT-01 : Désynchronisation de séquence dans `MaxPool1D` et `AvgPool1D` sur résidus de pas
+- **Statut** : corrigé — état `statePurge` ajouté dans `maxpool1d.scala` et `avgpool1d.scala` : après la dernière fenêtre, les `(L - poolSize) % stride` battements résiduels (constante d'élaboration) sont consommés avant le clear des compteurs ; l'état n'est pas construit si le résidu est nul. Rouges avant : nouveaux `MaxPool1DResidueTestComp` / `AvgPool1DResidueTestComp` (I8, L=7, K=2, stride=2, 2 frames contigus) + cas cocotb `cocotb_maxpool1d_residue_i8` / `cocotb_avgpool1d_residue_i8` (frame 2 décalée : `got 8` au lieu de `9`). Tests : pytest 1D 10/10, Scala `MaxPool1DTest`/`AvgPool1DTest` ✅, formels `MaxPool1DFormal`/`AvgPool1DFormal` ✅.
 - **Fichier** : `spinalML/src/spinalML/poolings/maxpool1d.scala` & `spinalML/src/spinalML/poolings/avgpool1d.scala`
 - **Description** :
   Lorsque $(L - poolSize) \pmod{stride} \ne 0$, il reste des éléments en queue de séquence non consommés par la dernière fenêtre de pooling. L'état `stateDone` reboucle directement vers `stateFill` sans purger ces échantillons résiduels.

@@ -14,6 +14,10 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
   
   val L_out = (L - poolSize) / stride + 1
   val shift = log2Up(poolSize)
+  // ACT-01: elements left unconsumed by the last window. They belong to the
+  // current frame and MUST be drained before the next frame starts, otherwise
+  // every following sequence is shifted by `residue` elements.
+  val residue = (L - poolSize) % stride
   
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(L, channels), lanes = channels))
@@ -101,7 +105,7 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
         when(io.c.stream.ready) {
           windowCount.increment()
           when(windowCount.willOverflowIfInc) {
-             goto(stateDone)
+             if (residue > 0) goto(statePurge) else goto(stateDone)
           } otherwise {
              goto(stateSlide)
           }
@@ -134,6 +138,22 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
       }
     }
     
+    // Drain the per-frame tail ignored by the last window (ACT-01). Number of
+    // beats is an elaboration-time constant, so the state is not even built
+    // when the stride divides the window span (legacy aligned shapes).
+    val purgeCounter = Counter(residue max 1)
+    val statePurge: State = if (residue > 0) new State {
+      whenIsActive {
+        io.a.stream.ready := True
+        when(io.a.stream.valid) {
+          purgeCounter.increment()
+          when(purgeCounter.willOverflowIfInc) {
+            goto(stateDone)
+          }
+        }
+      }
+    } else null
+
     val stateDone: State = new State {
        whenIsActive {
          elementCount.clear()
