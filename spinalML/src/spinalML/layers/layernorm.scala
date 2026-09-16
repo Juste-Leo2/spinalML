@@ -13,6 +13,9 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
     val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
     val gamma = slave(Tensor(dataType, Seq(channels), lanes = channels))
     val beta = slave(Tensor(dataType, Seq(channels), lanes = channels))
+    // Command-boundary re-arm: restart the gamma/beta load sequence so a new
+    // weight generation can be accepted (LAY-01).
+    val reArm = in Bool()
     val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
   
@@ -23,7 +26,13 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   val state = RegInit(U"00")
   io.gamma.stream.ready := state === 0
   io.beta.stream.ready := state === 1
-  
+
+  // LAY-01: a command boundary restarts the load sequence so a new gamma/beta
+  // generation is accepted. Placed before the fire assignments so a same-cycle
+  // valid beat of the new generation still wins.
+  when(io.reArm) {
+    state := 0
+  }
   when(io.gamma.stream.fire) {
     gammaReg := io.gamma.stream.payload
     state := 1
@@ -226,7 +235,7 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
 }
 
 object layernorm {
-  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T], outLanes: Int = -1): Tensor[T] = {
+  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T], outLanes: Int = -1, reArm: Option[Bool] = None): Tensor[T] = {
     val seqLen = x.shape(0)
     val channels = if (x.shape.length > 1) x.shape(1) else 1
     val inX = if (x.lanes != channels) repack(x, channels) else x
@@ -234,6 +243,7 @@ object layernorm {
     val inBeta = if (beta.lanes != channels) repack(beta, channels) else beta
 
     val comp = LayerNorm1D(inX.dataType, channels, seqLen)
+    comp.io.reArm := reArm.getOrElse(False)
     comp.io.x <> inX
     comp.io.gamma <> inGamma
     comp.io.beta <> inBeta

@@ -560,7 +560,7 @@ case class Sequential(
       case bn: BatchNorm1D =>
         val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
         val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
-        val bnOut = batchnorm(inRepacked, layerWeights, layerBias)
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias, reArm = Option(weightDmaFire))
         if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
@@ -571,6 +571,7 @@ case class Sequential(
         comp.io.x <> inRepacked
         comp.io.gamma <> layerWeights
         comp.io.beta <> layerBias
+        comp.io.reArm := weightDmaFire
         val lnOut = comp.io.y
         if (lnOut.lanes != targetLanes) repack(lnOut, targetLanes) else lnOut
 
