@@ -545,6 +545,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-NN-02 : Écrasement et extinction prématurée de `ioBusy` lors de trames consécutives
+- **Statut** : corrigé (durcissement) — priorité `when(io.start.fire){ioBusy:=True} elsewhen(clear){ioBusy:=False}` dans `Sequential.scala`. Le conflit est hors contrat pour un START manuel pendant busy (le mode RUN enregistre `startPending` sur `frameDone`, donc le START y arrive ≥1 cycle après), mais le flag doit rester correct. Rouge avant : nouveau test Scala `SequentialTest` « busy survives a START accepted on the final-beat cycle (NN-02) » (modèle frameSize=1, dernier beat gelé par `ready=0`, START + `ready` armés dans le même delta → `busyAfter was false`) ; discriminateur vérifié en ré-appliquant temporairement le code buggé. Formel : invariant « `past(startEventFire) ⇒ model.io.busy` » ajouté à `AcceleratorFormal` (BMC 6 cvc4) ; la collision profonde n'est pas atteignable en BMC (sonde `frameDone` négative jusqu'à 64 pas) — le test Scala reste le repro. Non-régression : `SequentialTest` complet ✅, `AcceleratorTest` ✅, `test-all-python -k accelerator` ✅, `AcceleratorFormal`+`MLAcceleratorFormal` ✅.
 - **Fichier** : `spinalML/src/spinalML/nn/Sequential.scala` (lignes 710-715)
 - **Code concerné** :
   ```scala

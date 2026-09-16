@@ -707,10 +707,11 @@ case class Sequential(
     frameCounter.increment()
   }
   val ioBusy = RegInit(False)
+  // NN-02: a START accepted on the same cycle as the final-beat clear must win
+  // (last-assignment-wins would drop busy while a new inference just began).
   when(io.start.fire) {
     ioBusy := True
-  }
-  when(ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc) {
+  } elsewhen(ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc) {
     ioBusy := False
   }
   io.busy := ioBusy
