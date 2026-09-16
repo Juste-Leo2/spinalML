@@ -495,6 +495,8 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-LAY-04 : Annulation de l'epsilon par underflow dans `LayerNorm1D` (division par zéro sur FP8/FP4/entiers)
+- **Statut** : faux positif — la conséquence alléguée (sortie corrompue sur vecteur constant) est réfutée par simulation sur le RTL non modifié. Le LUT `rsqrt` reçoit bien `1/sqrt(0+1e-9)=31623` (fini) et sature (`127` en I8, pattern infini en FP8), mais pour un vecteur constant la variance est nulle **et** chaque `(x−μ)` vaut exactement 0 (somme/division exactes pour les entiers, μ exact pour une ligne constante en FP), donc `mul(0, invStd)=0` puis `y=β`. Preuve empirique : deux tests sim ajoutés à `LayerNormTest.scala` (« constant frame (LAY-04) » I8 et FP8, 16 beats constants, γ=1, β=7/2.0) passent sans aucun patch : sortie = β exactement. Note : ε=1 pour les entiers aurait au contraire dégradé la précision des petites variances (ex. var=4 : `1/sqrt(5)`→0 au lieu de `1/sqrt(4)`→1), et un ε non nul pour FP8 reste une amélioration de robustesse à part (voir note ci-dessous) ; aucun changement appliqué.
+- **Limitation résiduelle distincte (non couverte par LAY-04)** : en FP8, si `diff²` sous-flue alors que `diff≠0` (ex. x=[4.0, 4.125, 4.0, 4.0] : somme arrondie à 16.0, μ=4.0, var=2^-8→0), `invStd` diverge (pattern infini) et `norm = 0.125×256 = 32` au lieu d'environ 2. C'est un bug de sous-flux distinct (epsilon représentable requis), à ouvrir séparément si souhaité.
 - **Fichier** : `spinalML/src/spinalML/layers/layernorm.scala` (lignes 180-189)
 - **Code concerné** :
   ```scala
