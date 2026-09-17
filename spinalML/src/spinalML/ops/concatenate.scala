@@ -9,22 +9,36 @@ import spinalML.tensors.Tensor
 
 case class ConcatenateAxis0Op[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int) extends Component {
   require(shapeA.tail == shapeB.tail, "Tensors must have the same shape except for the concatenation axis (axis 0)")
-  
+
+  // OPS-04 contract: the FSM counts streamed beats, not axis-0 cells.
+  // Row-major, one axis-0 cell = tailProduct elements = beatsPerRow beats.
+  // 1D legacy: shape.head counts beats directly (all existing benches drive
+  // `head` beats of `lanes` elements). Rows must be beat-aligned
+  // (tailProduct % lanes == 0): a beat straddling two rows belongs to both
+  // and is unrecoverable — same fail-fast rationale as OPS-07.
+  private def beatsPerRow(shape: Seq[Int]): Int =
+    if (shape.tail.isEmpty) 1
+    else {
+      val tailProduct = shape.tail.product
+      require(tailProduct % lanes == 0,
+        s"ConcatenateAxis0Op: tail shape ${shape.tail} ($tailProduct elements) is not a multiple of lanes=$lanes — rows would straddle beats (OPS-04: repack to a divisor of the tail product first)")
+      tailProduct / lanes
+    }
+
   val L_A = shapeA.head
   val L_B = shapeB.head
   val L_out = L_A + L_B
+  val beatsA = L_A * beatsPerRow(shapeA)
+  val beatsB = L_B * beatsPerRow(shapeB)
 
-  // The FSM counts per-axis cells (each beat carries `lanes` elements). The
-  // Sequential Concat node repacks its inputs so each beat == one concatenated
-  // cell -> shape.head == the real streamed beat count.
   val io = new Bundle {
     val a = slave(Tensor(dataType, shapeA, lanes))
     val b = slave(Tensor(dataType, shapeB, lanes))
     val c = master(Tensor(dataType, Seq(L_out) ++ shapeA.tail, lanes))
   }
 
-  val countA = Counter(L_A)
-  val countB = Counter(L_B)
+  val countA = Counter(beatsA)
+  val countB = Counter(beatsB)
   
   io.a.stream.ready := False
   io.b.stream.ready := False

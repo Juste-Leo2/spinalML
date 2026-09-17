@@ -11,24 +11,42 @@ case class SliceAxis0Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
   val L_in = shape.head
   val L_out = end - start
   require(start >= 0 && end <= L_in && start < end, s"Invalid slice range [$start:$end] for length $L_in")
-  
+
+  // OPS-04 contract: start/end are axis-0 cell indices; one cell =
+  // beatsPerRow beats on the wire (same beat-counting as ConcatenateAxis0Op).
+  // 1D legacy: shape.head counts beats directly. Rows must be beat-aligned.
+  val beatsPerRow: Int =
+    if (shape.tail.isEmpty) 1
+    else {
+      val tailProduct = shape.tail.product
+      require(tailProduct % lanes == 0,
+        s"SliceAxis0Op: tail shape ${shape.tail} ($tailProduct elements) is not a multiple of lanes=$lanes — rows would straddle beats (OPS-04: repack to a divisor of the tail product first)")
+      tailProduct / lanes
+    }
+  val totalBeats = L_in * beatsPerRow
+  val keepStart = start * beatsPerRow
+  val keepEnd = end * beatsPerRow // may equal totalBeats
+
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
     val c = master(Tensor(dataType, Seq(L_out) ++ shape.tail, lanes))
   }
-  
-  val counter = Counter(L_in)
-  val startU = U(start, log2Up(L_in) bits)
+
+  val counter = Counter(totalBeats)
+  // Threshold widths match the counter width (log2Up(totalBeats)), exactly
+  // like the legacy code: keepEnd == totalBeats is never elaborated as a
+  // literal (first branch), so it always fits.
+  val startU = U(keepStart, log2Up(totalBeats) bits)
   
   io.a.stream.ready := False
   io.c.stream.valid := False
   io.c.stream.payload := io.a.stream.payload
   
   // `end` may equal L_in: everything from start onward is then kept.
-  val inRange = if (end >= L_in) {
+  val inRange = if (keepEnd >= totalBeats) {
     counter.value >= startU
   } else {
-    counter.value >= startU && counter.value < U(end, log2Up(L_in) bits)
+    counter.value >= startU && counter.value < U(keepEnd, log2Up(totalBeats) bits)
   }
   
   when(counter.value < startU) {
