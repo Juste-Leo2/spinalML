@@ -11,7 +11,7 @@ import numpy as np
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
 from golden_models.ops import batchnorm_hw
-from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
+from utils.tb_utils import run_mill, copy_roms, seed_random, rounding_mode, SEED
 from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, DEFAULT_NUM_TRIALS
 
 seed_random()
@@ -62,8 +62,8 @@ async def run_batchnorm1d_test(dut, op_name, dtype_name, dtype, X, gamma, beta, 
         log_msg = log_true_math_error(op_name, dtype_name, dtype, is_floatml, Y_out, Y_true)
         dut._log.info(log_msg)
     
-    # Exact HW Math
-    Y_expected = batchnorm_hw(X, gamma, beta, dtype)
+    # Exact HW Math (LAY-05: saturation + mode-aware shift rounding)
+    Y_expected = batchnorm_hw(X, gamma, beta, dtype, rounding=rounding_mode())
     
     bit_width = getattr(dtype, 'bit_width', getattr(dtype, 'exp_bits', 0) + getattr(dtype, 'mant_bits', 0))
     for m in range(len(X)):
@@ -99,6 +99,15 @@ async def cocotb_batchnorm1d_i8(dut):
     dut._log.info(log_msg)
 
 @cocotb.test()
+async def cocotb_batchnorm1d_i8_sat(dut):
+    # LAY-05: the MAC (up to 200) must saturate to 127, not wrap to -56.
+    # Lanes: 127*1=127 exact, 100*2=200 -> 127, -127*1=-127 exact, 43*3=129 -> 127.
+    X = [[127.0, 100.0, -127.0, 43.0] for _ in range(16)]
+    gamma = [[1.0], [2.0], [1.0], [3.0]]
+    beta = [[0.0], [0.0], [0.0], [0.0]]
+    await run_batchnorm1d_test(dut, "BatchNorm1D", "I8", I8, X, gamma, beta, False)
+
+@cocotb.test()
 async def cocotb_batchnorm1d_fp8(dut):
     collect = {"out": [], "true": []}
     for _ in range(DEFAULT_NUM_TRIALS):
@@ -130,9 +139,9 @@ async def cocotb_batchnorm1d_bf16(dut):
 
 
 # ----------------- PYTEST RUNNERS -----------------
-def run_batchnorm1d_sim(dtype_filter, testcase_name, request=None):
+def run_batchnorm1d_sim(dtype_filter, testcase_name, request=None, build_suffix=""):
     v_file = run_mill("spinalML.layers.BatchNormTest", dtype_filter, "BatchNormTestComp")
-    build_dir = f"sim_build/batchnorm_batchnormtestcomp_{dtype_filter.lower()}"
+    build_dir = f"sim_build/batchnorm_batchnormtestcomp_{dtype_filter.lower()}{build_suffix}"
     copy_roms(build_dir)
     debug_flag = "1" if request and request.config.getoption("--debug-math") else "0"
     run(
@@ -149,6 +158,7 @@ def run_batchnorm1d_sim(dtype_filter, testcase_name, request=None):
     )
 
 def test_pytest_batchnorm1d_i8(request): run_batchnorm1d_sim("I8", "cocotb_batchnorm1d_i8", request)
+def test_pytest_batchnorm1d_i8_sat(request): run_batchnorm1d_sim("I8", "cocotb_batchnorm1d_i8_sat", request, build_suffix="_sat")
 def test_pytest_batchnorm1d_fp8(request): run_batchnorm1d_sim("FP8", "cocotb_batchnorm1d_fp8", request)
 def test_pytest_batchnorm1d_i16(request): run_batchnorm1d_sim("I16", "cocotb_batchnorm1d_i16", request)
 def test_pytest_batchnorm1d_bf16(request): run_batchnorm1d_sim("BF16", "cocotb_batchnorm1d_bf16", request)

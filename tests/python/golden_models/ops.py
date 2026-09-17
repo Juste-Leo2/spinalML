@@ -908,7 +908,14 @@ def adder_tree_hw(vals, dtype):
         current = next_sums
     return current[0]
 
-def batchnorm_hw(X, gamma, beta, dtype):
+def batchnorm_hw(X, gamma, beta, dtype, shift=0, rounding=None):
+    """Golden model of BatchNorm1D.
+
+    Integer path (LAY-05): exact MAC in a 2N+1-bit accumulator, then the shared
+    RequantizeOp semantics (shift + RNE/trunc + saturation). Legacy behavior was
+    a 2's-complement wrap; the saturation is now unconditional (rounding mode
+    only affects the shift). Float path unchanged.
+    """
     is_float = hasattr(dtype, 'exp_bits')
     Y = []
     for row in X:
@@ -924,9 +931,9 @@ def batchnorm_hw(X, gamma, beta, dtype):
                 vx = sign_extend(dtype.from_float(row[i]), dtype.bit_width)
                 vg = sign_extend(dtype.from_float(gamma[i][0]), dtype.bit_width)
                 vb = sign_extend(dtype.from_float(beta[i][0]), dtype.bit_width)
-                res = (vx * vg) + vb
-                out_bits = res & ((1 << dtype.bit_width) - 1)
-                y_row.append(dtype.to_float(out_bits))
+                sat = requantize_hw((vx * vg) + vb, dtype.bit_width * 2 + 1,
+                                    dtype.bit_width, shift, rounding)
+                y_row.append(dtype.to_float(sat & ((1 << dtype.bit_width) - 1)))
         Y.append(y_row)
     return Y
 

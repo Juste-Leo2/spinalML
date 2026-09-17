@@ -518,6 +518,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-LAY-05 : Troncature arithmétique sans saturation dans `BatchNorm1D` sur entiers `SInt`
+- **Statut** : corrigé (Wave 4 commit 8) — le MAC `SInt` instancie `RequantizeOp` (shift + RNE/tronc + saturation) au lieu de `.resized` ; `shift`/`rounding` plombés depuis `batchnorm(...)`, `LayerSpec.BatchNorm1D(shift, rounding)` et `Sequential`. Changement de sémantique volontaire (wrap → saturation, saturation inconditionnelle : le mode n'affecte que l'arrondi du shift). Golden `ops.py::batchnorm_hw` re-baseliné (2's-complement wrap → `requantize_hw`). Rouge avant : test Scala « LAY-05 BatchNorm1D SInt saturates instead of wrapping » (100×100 → `got ArrayBuffer(16)` au lieu de 127) ; non-régression : `BatchNormTest` ✅, `test_batchnorm1d.py` avec nouveau cas `cocotb_batchnorm1d_i8_sat` (200→127, 129→127) ✅, formel `BatchNormFormal` (flux uniquement) ✅, lane `SPINALML_ROUNDING=trunc` ✅.
 - **Fichier** : `spinalML/src/spinalML/layers/batchnorm.scala` (lignes 46-49)
 - **Code concerné** :
   ```scala

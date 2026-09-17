@@ -125,7 +125,12 @@ case class Softmax(lanes: Int = 1) extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class BatchNorm1D(features: Int, lanes: Int = -1) extends LayerSpec {
+case class BatchNorm1D(
+  features: Int,
+  lanes: Int = -1,
+  shift: Int = 0,
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(features) // gamma
   override def getBiasShape(): Seq[Int] = Seq(features) // beta

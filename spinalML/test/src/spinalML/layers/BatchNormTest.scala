@@ -33,6 +33,68 @@ case class BatchNormReArmTestComp[T <: Data](dataType: HardType[T]) extends Comp
 }
 
 class BatchNormTest extends AnyFunSuite {
+  // LAY-05 red test: the SInt MAC (100*100+0 = 10000) must saturate to 127,
+  // not wrap to 16. Bounded waits throughout: a stall is a clean failure.
+  test("LAY-05 BatchNorm1D SInt saturates instead of wrapping") {
+    SimConfig.withWave.compile(BatchNormTestComp(I8())).doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      dut.gamma.stream.valid #= false
+      dut.beta.stream.valid #= false
+      dut.x.stream.valid #= false
+      dut.y.stream.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      // Concurrent output collector (LAY-01 idiom): the layer streams its
+      // frame while the stimulus is sent; slice per frame afterwards.
+      val yCollected = scala.collection.mutable.ArrayBuffer[Int]()
+      fork {
+        while (true) {
+          if (dut.y.stream.valid.toBoolean && dut.y.stream.ready.toBoolean) {
+            for (i <- 0 until 4) yCollected += dut.y.stream.payload(i).toInt
+          }
+          dut.clockDomain.waitSampling()
+        }
+      }
+
+      def sendBeat(valid: Bool, ready: Bool, payload: Int => Unit): Unit = {
+        payload(0)
+        valid #= true
+        var cycles = 0
+        while (!ready.toBoolean && cycles < 200) {
+          dut.clockDomain.waitSampling()
+          cycles += 1
+        }
+        assert(ready.toBoolean, "beat never accepted")
+        dut.clockDomain.waitSampling()
+        valid #= false
+      }
+
+      // gamma = [100]*4, beta = [0]*4 (one beat each)
+      sendBeat(dut.gamma.stream.valid, dut.gamma.stream.ready, _ =>
+        for (i <- 0 until 4) dut.gamma.stream.payload(i) #= 100)
+      sendBeat(dut.beta.stream.valid, dut.beta.stream.ready, _ =>
+        for (i <- 0 until 4) dut.beta.stream.payload(i) #= 0)
+
+      // 16 beats of x = [100]*4
+      for (_ <- 0 until 16) {
+        sendBeat(dut.x.stream.valid, dut.x.stream.ready, _ =>
+          for (i <- 0 until 4) dut.x.stream.payload(i) #= 100)
+      }
+
+      // Drain 16 output beats
+      var cycles = 0
+      while (yCollected.length < 64 && cycles < 1000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      val y = yCollected.toSeq
+      assert(y.length == 64, s"only ${y.length}/64 outputs after $cycles cycles")
+      assert(y.forall(_ == 127), s"expected all 127 (saturated), got ${y.distinct}")
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
   val compileTypes = Seq(
     ("I8", () => I8()),
     ("FP8", () => FP8_E4M3()),

@@ -566,7 +566,9 @@ case class Sequential(
       case bn: BatchNorm1D =>
         val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
         val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
-        val bnOut = batchnorm(inRepacked, layerWeights, layerBias, reArm = Option(weightDmaFire))
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias,
+          reArm = Option(weightDmaFire), shift = bn.shift,
+          rounding = bn.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
