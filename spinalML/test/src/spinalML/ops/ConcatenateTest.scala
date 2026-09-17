@@ -33,6 +33,39 @@ case class ConcatenateTest2D[T <: Data](dataType: HardType[T]) extends Component
   io.c <> spinalML.ops.concatenate(io.a, io.b, axis = 0)
 }
 
+// OPS-05: axis-1 joins whole rows side-by-side per beat.
+case class ConcatenateAxis1_2D[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 2), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(2, 2), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 4), lanes = 4))
+  }
+
+  io.c <> spinalML.ops.concatenate(io.a, io.b, axis = 1)
+}
+
+// OPS-05: sub-row lanes would interleave half-rows instead of joining rows.
+case class ConcatenateAxis1SubRow[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
+    val b = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 8), lanes = 4))
+  }
+
+  io.c <> spinalML.ops.concatenate(io.a, io.b, axis = 1)
+}
+
+// OPS-05: unequal lanes deadlock the lockstep StreamJoin (beat counts differ).
+case class ConcatenateAxis1LanesMismatch[T <: Data](dataType: HardType[T]) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataType, Seq(2, 4), lanes = 4))
+    val b = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
+    val c = master(Tensor(dataType, Seq(2, 8), lanes = 6))
+  }
+
+  io.c <> spinalML.ops.concatenate(io.a, io.b, axis = 1)
+}
+
 class ConcatenateTest extends AnyFunSuite {
   test("Test streaming Concatenate operation on Axis 0") {
     SimConfig.withWave.compile(ConcatenateTestComp(I8())).doSim { dut =>
@@ -118,6 +151,54 @@ class ConcatenateTest extends AnyFunSuite {
       val expected = aData ++ bData
       assert(got == expected, s"expected $expected, got $got")
       dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  // OPS-05: the row-wise geometry (lanes == row width) joins rows correctly.
+  test("OPS-05 Concatenate axis1 2D lanes=rowWidth joins rows side-by-side") {
+    SimConfig.withWave.compile(ConcatenateAxis1_2D(I8())).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.b.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      // NOTE: the join is lockstep (both beats each cycle); valids drop for
+      // one cycle between rows so each output beat is sampled exactly once.
+      // Bounded waits throughout: a stall becomes a clean failure.
+      val rowsA = Seq(Seq(1, 2), Seq(3, 4))
+      val rowsB = Seq(Seq(5, 6), Seq(7, 8))
+      var got = Vector.empty[Seq[Int]]
+      for ((ra, rb) <- rowsA.zip(rowsB)) {
+        dut.io.a.stream.payload(0) #= ra(0)
+        dut.io.a.stream.payload(1) #= ra(1)
+        dut.io.b.stream.payload(0) #= rb(0)
+        dut.io.b.stream.payload(1) #= rb(1)
+        dut.io.a.stream.valid #= true
+        dut.io.b.stream.valid #= true
+        assert(!dut.clockDomain.waitSamplingWhere(100)(dut.io.c.stream.valid.toBoolean),
+          s"row $ra ++ $rb never joined")
+        got = got :+ (0 until 4).map(i => dut.io.c.stream.payload(i).toInt)
+        dut.io.a.stream.valid #= false
+        dut.io.b.stream.valid #= false
+        dut.clockDomain.waitSampling()
+      }
+      val expected = Seq(Seq(1, 2, 5, 6), Seq(3, 4, 7, 8))
+      assert(got == expected, s"expected $expected, got $got")
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  test("OPS-05 Concatenate axis1 rejects lanes != row width and lanesA != lanesB") {
+    // [2,4] at lanes=2: beats hold half-rows; the per-beat join would emit
+    // interleaved half-joins instead of concatenated rows. Repack first.
+    assertThrows[IllegalArgumentException] {
+      spinal.core.SpinalVerilog(ConcatenateAxis1SubRow(I8()))
+    }
+    // lanes 4 vs 2 on the same shape: different beat counts deadlock the
+    // lockstep StreamJoin (one side runs dry).
+    assertThrows[IllegalArgumentException] {
+      spinal.core.SpinalVerilog(ConcatenateAxis1LanesMismatch(I8()))
     }
   }
 

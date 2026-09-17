@@ -87,6 +87,10 @@ case class ConcatenateAxis0Op[T <: Data](dataType: HardType[T], shapeA: Seq[Int]
 }
 
 case class ConcatenateAxis1Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanesA: Int, lanesB: Int) extends Component {
+  // OPS-05: the join pairs input beats lockstep, one output beat per input
+  // beat pair. Correct if and only if each beat holds exactly one full row
+  // on both sides (enforced by `concatenate.apply` below): sub-row lanes
+  // would emit interleaved half-joins, unequal lanes deadlock StreamJoin.
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanesA))
     val b = slave(Tensor(dataType, shape, lanesB))
@@ -114,6 +118,16 @@ object concatenate {
       comp.io.c
     } else if (axis == 1) {
       require(a.shape == b.shape, "Tensors must have same temporal shape for axis 1 concatenation")
+      // OPS-05 contract: the per-beat lane join is a row-wise concat only
+      // when each beat carries exactly one full row on both sides. Anything
+      // else is silently wrong (sub-row lanes interleave half-rows) or hangs
+      // (unequal lanes => unequal beat counts => StreamJoin starves).
+      require(a.shape.length > 1,
+        s"Concatenate axis=1 needs a row dimension (2D+ tensors), got shape ${a.shape}")
+      require(a.lanes == b.lanes,
+        s"Concatenate axis=1 needs equal lanes (lockstep beat pairing): lanesA=${a.lanes} != lanesB=${b.lanes}")
+      require(a.lanes == a.shape(1),
+        s"Concatenate axis=1 needs lanes == row width ${a.shape(1)} (one full row per beat): got lanes=${a.lanes} (repack first)")
       val newShape = if (a.shape.length > 1) {
         a.shape.updated(1, a.shape(1) + b.shape(1))
       } else {
