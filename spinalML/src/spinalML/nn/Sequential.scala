@@ -431,6 +431,12 @@ case class Sequential(
 
       layerWeights = Tensor(wType, wShape, requiredLanes)
       layerWeights.stream << wStreamer.io.streamOut
+      // OPS-07: this weight stream is dense (exactly `elements` values, no
+      // padding beats). It satisfies the MatMulOp per-line padded-group
+      // contract iff the beat framing divides K: Linear enforces lanes | K
+      // (`LayerSpec` require on weightLanes), so dense beats == column groups
+      // and no padding is needed. Any future producer with K % lanes != 0
+      // must zero-pad each line BEFORE this point, or the B buffer starves.
       auditWeightLanes += requiredLanes
       auditWeightElements += elements
       auditWeightBeats += beats

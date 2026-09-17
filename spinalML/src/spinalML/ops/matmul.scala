@@ -10,8 +10,19 @@ import spinalML.memory.StreamDoubleBuffer
 
 /**
  * MatmulOp: Matrix-Matrix multiplication using Double-Buffering (Ping-Pong).
- * A is [M, K], B is [K, N]. 
+ * A is [M, K], B is [K, N].
  * Output C is [M, N].
+ *
+ * Streaming contract (OPS-07 / OPS-09): both inputs arrive in per-line padded
+ * groups of exactly chunksK = ceil(K / lanes) full beats — per ROW for A,
+ * per COLUMN (column-major) for B. The tail lanes of a partial group are
+ * don't-care: the compute datapath masks them to zero (`validLane`), so
+ * zero-padding and garbage-padding behave identically. A densely packed
+ * stream (exactly K elements per line, no padding beats) is OUT of contract
+ * when K % lanes != 0: its beats straddle line boundaries, the B buffer
+ * starves and the op deadlocks. Producers pad (cf. `test_matmul.py` driver,
+ * Sequential Dense paths with lanes | K); partial-K handling inside the op
+ * is deliberately absent — padding at the producer is the contract.
  */
 case class MatmulOp[T <: Data, TAcc <: Data](
   dataType: HardType[T],
