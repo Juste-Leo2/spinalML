@@ -38,15 +38,26 @@ class FloatML:
         sign_bit = 1 if value < 0 else 0
         value = abs(value)
         
-        # Handle infinity and overflow
-        max_exp = ((1 << self.exp_bits) - 2)
-        max_mant = ((1 << self.mant_bits) - 1)
-        max_val = (1.0 + max_mant / (1 << self.mant_bits)) * (2 ** (max_exp - self.bias))
-        
+        # Handle infinity and overflow (DTYPE-07: same formula as Scala
+        # doubleToFields). E4M3 has no infinity: it tops out at max finite
+        # 448 (exp field 15, mantissa 6); the mantissa-7 slot is NaN.
+        is_e4m3 = self.exp_bits == 4 and self.mant_bits == 3
+        if is_e4m3:
+            max_val = 448.0
+        else:
+            max_exp = ((1 << self.exp_bits) - 2)
+            max_mant = ((1 << self.mant_bits) - 1)
+            max_val = (1.0 + max_mant / (1 << self.mant_bits)) * (2 ** (max_exp - self.bias))
+
         if value > max_val or np.isinf(value):
-            # Saturate to infinity as per Scala logic
-            exp_val = (1 << self.exp_bits) - 1
-            mant_val = 0
+            # Saturate as per Scala logic (DTYPE-07): 448 for E4M3, canonical
+            # infinity (exp all-ones, mant 0) for other formats.
+            if is_e4m3:
+                exp_val = (1 << self.exp_bits) - 1
+                mant_val = (1 << self.mant_bits) - 2
+            else:
+                exp_val = (1 << self.exp_bits) - 1
+                mant_val = 0
             return (sign_bit << (self.exp_bits + self.mant_bits)) | (exp_val << self.mant_bits) | mant_val
             
         # Extract mantissa and exponent
@@ -66,10 +77,20 @@ class FloatML:
             mant_val = 0
             exp_val += 1
             
-        # NOW check for Saturation / Underflow
-        if exp_val >= ((1 << self.exp_bits) - 1):
-            exp_val = (1 << self.exp_bits) - 1
-            mant_val = 0
+        # NOW check for Saturation / Underflow. E4M3 keeps finite field-15
+        # values (256..448); only past-the-max or the NaN slot saturates.
+        exp_max = (1 << self.exp_bits) - 1
+        if is_e4m3:
+            needs_sat = exp_val > exp_max or (exp_val == exp_max and mant_val == (1 << self.mant_bits) - 1)
+        else:
+            needs_sat = exp_val >= exp_max
+        if needs_sat:
+            if is_e4m3:
+                exp_val = (1 << self.exp_bits) - 1
+                mant_val = (1 << self.mant_bits) - 2
+            else:
+                exp_val = (1 << self.exp_bits) - 1
+                mant_val = 0
         elif exp_val <= 0:
             exp_val = 0
             mant_val = 0

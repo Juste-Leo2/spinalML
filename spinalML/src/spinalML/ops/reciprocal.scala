@@ -72,7 +72,10 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
       val expUnderflow = RegNextWhen(newExpSInt <= 0, io.a.stream.ready)
       val expOverflow = RegNextWhen(newExpSInt >= ((1 << expBits) - 1), io.a.stream.ready)
       val regNewExp = RegNextWhen(newExp.resize(expBits), io.a.stream.ready)
-      
+      // Saturation encoding (448 for E4M3, infinity otherwise; no-op here for
+      // the >8-bit algebraic path, kept uniform with Float.mul/add/roundTo)
+      val (satExp, satMant) = spinalML.utils.Float.satEncoding(expBits, mantBits)
+
       when(expIsZero) {
         outX.exponent := ((1 << expBits) - 1) // 1/0 = Inf
         outX.mantissa := 0
@@ -80,8 +83,8 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
         outX.exponent := 0
         outX.mantissa := 0
       } elsewhen (expOverflow) {
-        outX.exponent := ((1 << expBits) - 1)
-        outX.mantissa := 0
+        outX.exponent := satExp
+        outX.mantissa := satMant
       } otherwise {
         outX.exponent := regNewExp
         outX.mantissa := readMant.asUInt

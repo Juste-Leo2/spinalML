@@ -77,9 +77,10 @@ object MathLUTs {
   def floatEncodeFn(expBits: Int, mantBits: Int): Double => BigInt = y => {
     if (y.isNaN) BigInt(0)
     else if (y.isInfinity) {
-      // Canonical IEEE-like infinity: exponent all ones, mantissa zero
+      // No infinity in E4M3: saturate to max finite (448, sign-preserved).
+      val (satExp, satMant) = Float.satEncoding(expBits, mantBits)
       val sign = if (y < 0) 1 else 0
-      BigInt((sign << (expBits + mantBits)) | (((1 << expBits) - 1) << mantBits))
+      BigInt((sign << (expBits + mantBits)) | (satExp << mantBits) | satMant)
     }
     else if (y == 0.0) BigInt(0)
     else {
@@ -97,10 +98,18 @@ object MathLUTs {
          mantEnc = 0
          expEnc += 1
       }
-      
-      if (expEnc >= (1 << expBits)) { // Overflow (Saturate to canonical infinity)
-        expEnc = (1 << expBits) - 1
-        mantEnc = 0
+
+      // E4M3 keeps finite field-15 values (256..448); only past-the-max or
+      // the NaN slot (mantissa 7 at field 15) saturates to 448.
+      val expMax = (1 << expBits) - 1
+      val needsSat = if (Float.isE4M3(expBits, mantBits))
+        expEnc > expMax || (expEnc == expMax && mantEnc == (1 << mantBits) - 1)
+      else
+        expEnc >= expMax
+      if (needsSat) { // Overflow (saturate: 448 for E4M3, canonical infinity otherwise)
+        val (satExp, satMant) = Float.satEncoding(expBits, mantBits)
+        expEnc = satExp
+        mantEnc = satMant
       } else if (expEnc <= 0) { // Underflow
         expEnc = 0
         mantEnc = 0

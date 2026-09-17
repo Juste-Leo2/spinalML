@@ -6,7 +6,48 @@ import spinal.core._
 import spinalML.dtypes.FloatML
 
 object Float {
-  
+
+  /**
+   * E4M3 (`fn`) is the only format in this project without infinity
+   * (IEEE-style bias 7: finite values use the exponent field 15 up to
+   * 448, mantissa 7 at field 15 is the single NaN).
+   */
+  def isE4M3(expBits: Int, mantBits: Int): Boolean = expBits == 4 && mantBits == 3
+
+  /**
+   * Saturation encoding for float overflow (Wave 4 DTYPE-07, compile-time).
+   *
+   * E4M3 saturates to its max finite value 448 (exponent field 15, mantissa
+   * 6), per the `float8_e4m3fn` convention (no infinity). Every other format
+   * saturates to canonical infinity (exponent all-ones, mantissa zero).
+   *
+   * NaN (`e4m3fn` mantissa 7 at field 15, decoded 480 by the goldens) is
+   * never emitted here: full NaN propagation is Wave 5
+   * (see `docs/rounding_policy.md` §5).
+   */
+  def satEncoding(expBits: Int, mantBits: Int): (Int, Int) = {
+    if (isE4M3(expBits, mantBits)) (15, 6)
+    else ((1 << expBits) - 1, 0)
+  }
+
+  /**
+   * Saturation predicate for float overflow (Wave 4 DTYPE-07, elaborated).
+   *
+   * Returns True when the computed exponent/mantissa pair is at or past the
+   * last finite value. E4M3 keeps finite values on the field 15
+   * (256..448) and only saturates past it, or on the NaN slot
+   * (mantissa all-ones at field 15). Other formats saturate on any
+   * all-ones exponent field.
+   */
+  def saturates(expBits: Int, mantBits: Int, expSInt: SInt, mantissa: UInt): Bool = {
+    val expMax = (1 << expBits) - 1
+    val mantMax = (1 << mantBits) - 1
+    if (isE4M3(expBits, mantBits))
+      (expSInt > expMax) || (expSInt === expMax && mantissa === mantMax)
+    else
+      expSInt >= expMax
+  }
+
   /**
    * Hardware combinatorial circuit to multiply two FloatML types.
    * This logic will be synthesized into DSP blocks and LUTs.
@@ -66,15 +107,16 @@ object Float {
       mantOvM.asUInt.intoSInt.resized                 // rounding carry adjusts the exponent
 
     // 5. Overflow / Underflow Checks and Final Assignment
+    val (satExpM, satMantM) = satEncoding(expBits, mantBits)
     when(a_is_zero || b_is_zero || expSumSInt <= 0) {
       // Underflow or Zero
       c.exponent := 0
       c.mantissa := 0
       c.sign := False
-    } elsewhen(expSumSInt >= ((1 << expBits) - 1)) {
-      // Overflow (Saturate to Infinity)
-      c.exponent := ((1 << expBits) - 1)
-      c.mantissa := 0
+    } elsewhen(saturates(expBits, mantBits, expSumSInt, finalMantM)) {
+      // Overflow (saturate: 448 for E4M3, infinity otherwise)
+      c.exponent := satExpM
+      c.mantissa := satMantM
     } otherwise {
       // Normal range
       c.exponent := expSumSInt.asUInt.resized
@@ -199,7 +241,8 @@ object Float {
     // 5. Pack result
     c.sign := larger.sign
     val sumIsZero = mantSumExt === 0
-    
+    val (satExpA, satMantA) = satEncoding(expBits, mantBits)
+
     when(a_zero && b_zero) {
       c.exponent := 0
       c.mantissa := 0
@@ -208,9 +251,9 @@ object Float {
       c.exponent := 0
       c.mantissa := 0
       c.sign := False
-    } elsewhen(newExpSInt >= ((1 << expBits) - 1)) {
-      c.exponent := ((1 << expBits) - 1)
-      c.mantissa := 0
+    } elsewhen(saturates(expBits, mantBits, newExpSInt, finalMantA)) {
+      c.exponent := satExpA
+      c.mantissa := satMantA
     } otherwise {
       c.exponent := newExpSInt.asUInt.resized
       c.mantissa := finalMantA
@@ -223,10 +266,11 @@ object Float {
    * Pure elaboration-time logic converting a Double into FloatML fields
    * (sign, biased exponent, mantissa). Mirrors the Python golden model
    * `FloatML.from_float` bit-exactly (banker's rounding on the mantissa,
-   * overflow -> infinity encoding, underflow -> zero).
+   * overflow -> saturation encoding, underflow -> zero).
    */
   def doubleToFields(value: Double, expBits: Int, mantBits: Int): (Boolean, Int, Long) = {
     val bias = (1 << (expBits - 1)) - 1
+    val (satExp, satMant) = satEncoding(expBits, mantBits)
 
     if (value == 0.0 || value.isNaN) {
       return (false, 0, 0)
@@ -235,13 +279,18 @@ object Float {
     val signBit = value < 0
     val absVal = math.abs(value)
 
-    // Saturation check (same formula as the golden model)
-    val maxExp = (1 << expBits) - 2
-    val maxMant = (1 << mantBits) - 1
-    val maxVal = (1.0 + maxMant.toDouble / (1 << mantBits)) * math.pow(2, maxExp - bias)
+    // Saturation check (same formula as the golden model). E4M3 tops out at
+    // the max finite 448 (field 15, mantissa 6); the mantissa-7 slot is NaN.
+    val (maxExp, maxMant, maxVal) = if (isE4M3(expBits, mantBits)) {
+      (15, 6, 448.0)
+    } else {
+      val me = (1 << expBits) - 2
+      val mm = (1 << mantBits) - 1
+      (me, mm, (1.0 + mm.toDouble / (1 << mantBits)) * math.pow(2, me - bias))
+    }
 
     if (value.isInfinity || absVal > maxVal) {
-      return (signBit, (1 << expBits) - 1, 0)
+      return (signBit, satExp, satMant)
     }
 
     // frexp equivalent: m in [1, 2), e = floor(log2(absVal))
@@ -259,10 +308,16 @@ object Float {
       expVal += 1
     }
 
-    // THEN saturation / underflow (subnormals are omitted in hardware)
-    if (expVal >= ((1 << expBits) - 1)) {
-      expVal = (1 << expBits) - 1
-      mantVal = 0
+    // THEN saturation / underflow (subnormals are omitted in hardware).
+    // E4M3 keeps finite field-15 values (256..448); only past-the-max or
+    // the NaN slot (mantissa 7 at field 15) saturates to 448.
+    val needsSat = if (isE4M3(expBits, mantBits))
+      expVal > 15 || (expVal == 15 && mantVal == 7)
+    else
+      expVal >= ((1 << expBits) - 1)
+    if (needsSat) {
+      expVal = satExp
+      mantVal = satMant
     } else if (expVal <= 0) {
       expVal = 0
       mantVal = 0
@@ -315,13 +370,14 @@ object Float {
     val mantissa = paddedVal(W_padded - 2 downto W_padded - 1 - mantBits)
     
     // 5. Final assignment
+    val (satExpS, satMantS) = satEncoding(expBits, mantBits)
     when(isZero) {
       c.exponent := 0
       c.mantissa := 0
       c.sign := False
-    } elsewhen(expSInt >= ((1 << expBits) - 1)) {
-      c.exponent := ((1 << expBits) - 1)
-      c.mantissa := 0
+    } elsewhen(saturates(expBits, mantBits, expSInt, mantissa)) {
+      c.exponent := satExpS
+      c.mantissa := satMantS
     } otherwise {
       c.exponent := expSInt.asUInt.resized
       c.mantissa := mantissa
@@ -374,8 +430,8 @@ object Float {
    * Runtime round-to-nearest-even of a FloatML into a narrower format
    * (expBits not necessarily smaller, mantBits can shrink). Mirrors the
    * golden model's dtype.from_float rounding: mantissa overflow carries
-   * into the exponent, underflow yields zero, overflow saturates to
-   * inf-encoding (exponent all-ones, mantissa zero).
+   * into the exponent, underflow yields zero, overflow saturates to the
+   * saturation encoding (448 for E4M3, inf-encoding otherwise).
    */
   def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int): FloatML = {
     val c = FloatML(outExpBits, outMantBits)
@@ -383,6 +439,7 @@ object Float {
     // The exponent sum must hold the input exponent plus the bias delta (which
     // can be large when widening towards a bigger exponent bias, e.g. FP4 -> FP32)
     val expSIntWidth = (a.expBits max outExpBits) + 4
+    val (satExpR, satMantR) = satEncoding(outExpBits, outMantBits)
 
     val aZero = a.exponent === 0 && a.mantissa === 0
 
@@ -407,9 +464,10 @@ object Float {
           biasDelta +
           mantOv.asUInt.intoSInt.resized
 
-        when(expSInt >= ((1 << outExpBits) - 1)) {
-          c.exponent := ((1 << outExpBits) - 1)
-          c.mantissa := 0
+        when(saturates(outExpBits, outMantBits, expSInt,
+            Mux(mantOv, U(0, outMantBits bits), mantRnd(outMantBits - 1 downto 0)))) {
+          c.exponent := satExpR
+          c.mantissa := satMantR
         } elsewhen(expSInt <= 0) {
           c.exponent := 0
           c.mantissa := 0
@@ -422,9 +480,9 @@ object Float {
         // Exact widening path: fraction stays normalized, left-justified.
         c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
         val expSInt = a.exponent.intoSInt.resize(expSIntWidth bits) + biasDelta
-        when(expSInt >= ((1 << outExpBits) - 1)) {
-          c.exponent := ((1 << outExpBits) - 1)
-          c.mantissa := 0
+        when(saturates(outExpBits, outMantBits, expSInt, c.mantissa)) {
+          c.exponent := satExpR
+          c.mantissa := satMantR
         } elsewhen(expSInt <= 0) {
           c.exponent := 0
           c.mantissa := 0
