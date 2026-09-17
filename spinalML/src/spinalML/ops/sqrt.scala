@@ -15,7 +15,10 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
     val c = master(Tensor(dataType, shape, lanes))
   }
 
-  val mathFn = (x: Double) => Math.sqrt(Math.abs(x))
+  // OPS-02: negative inputs saturate to +0 (no NaN in the fabric). The LUT
+  // and PWL ROMs encode this directly (no segment ever mixes signs, so every
+  // negative entry evaluates to exactly 0); the algebraic path muxes below.
+  val mathFn = (x: Double) => if (x < 0.0) 0.0 else Math.sqrt(x)
 
   if (bitWidth <= 8 && !forceAlg) {
     val isFloat = dataType().isInstanceOf[FloatML]
@@ -79,7 +82,10 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
       val readVal = sqrtLuts(i).readSync(lutIndex, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)
-      outX.sign := RegNextWhen(x.sign, io.a.stream.ready)
+      // OPS-02: a sqrt output is never negative (non-negative inputs yield
+      // non-negative results). A negative input — including -0, since the
+      // fabric has no signed zero — saturates to +0 via expIsNeg below.
+      outX.sign := False
       
       val newExpSInt = (expSInt >> 1)
       val e_adj_bit = readVal(mantBits)
@@ -92,8 +98,12 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
       val expUnderflow = RegNextWhen(finalExpSInt <= 0, io.a.stream.ready)
       val expOverflow = RegNextWhen(finalExpSInt >= ((1 << expBits) - 1), io.a.stream.ready)
       val expIsZero = RegNextWhen(isZero, io.a.stream.ready)
-      
-      when(expIsZero) {
+      val expIsNeg = RegNextWhen(x.sign, io.a.stream.ready)
+
+      when(expIsNeg) {
+        outX.exponent := 0
+        outX.mantissa := 0
+      } elsewhen(expIsZero) {
         outX.exponent := 0
         outX.mantissa := 0
       } elsewhen (expUnderflow) {

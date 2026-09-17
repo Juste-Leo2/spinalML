@@ -15,6 +15,11 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     val c = master(Tensor(dataType, shape, lanes))
   }
 
+  // OPS-02: negative inputs saturate to +0 (no NaN in the fabric). The LUT
+  // and PWL ROMs encode this directly (no segment ever mixes signs, so every
+  // negative entry evaluates to exactly 0); the algebraic path muxes below.
+  val negToZeroFn = (x: Double) => if (x < 0.0) 0.0 else 1.0 / Math.sqrt(x + 1e-9)
+
   if (bitWidth <= 8 && !forceAlg) {
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
@@ -24,7 +29,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
     }
     
-    val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9))
+    val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, negToZeroFn)
     lutOp.io.a <> io.a
     io.c <> lutOp.io.c
   } else if (dataType().isInstanceOf[FloatML]) {
@@ -80,7 +85,10 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       val readVal = rsqrtLuts(i).readSync(lutIndex, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)
-      outX.sign := RegNextWhen(x.sign, io.a.stream.ready)
+      // OPS-02: an rsqrt output is never negative. A negative input —
+      // including -0, since the fabric has no signed zero — saturates to +0
+      // via expIsNeg below.
+      outX.sign := False
       
       val newExpSInt = - (expSInt >> 1)
       val e_adj_bit = readVal(mantBits)
@@ -93,8 +101,12 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       val expUnderflow = RegNextWhen(finalExpSInt <= 0, io.a.stream.ready)
       val expOverflow = RegNextWhen(finalExpSInt >= ((1 << expBits) - 1), io.a.stream.ready)
       val expIsZero = RegNextWhen(isZero, io.a.stream.ready)
-      
-      when(expIsZero) {
+      val expIsNeg = RegNextWhen(x.sign, io.a.stream.ready)
+
+      when(expIsNeg) {
+        outX.exponent := 0
+        outX.mantissa := 0
+      } elsewhen(expIsZero) {
         outX.exponent := ((1 << expBits) - 1)
         outX.mantissa := 0
       } elsewhen (expUnderflow) {
@@ -124,7 +136,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       x.asBits(bitWidth - 1 downto bitWidth - indexBits).asUInt
     }
     
-    val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9)
+    val mathFn = (x: Double) => negToZeroFn(x)
     val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
     
     val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)

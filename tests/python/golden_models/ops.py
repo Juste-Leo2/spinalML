@@ -371,13 +371,15 @@ def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8) -> int:
     return res
 
 def pwl_rsqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-9)
+        return 0.0 if x < 0 else 1.0 / np.sqrt(x + 1e-9)
     return pwl_int(x_val, bit_width, rsqrt_fn, index_bits)
 
 def pwl_sqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def sqrt_fn(x):
-        return np.sqrt(abs(x))
+        return 0.0 if x < 0 else np.sqrt(x)
     return pwl_int(x_val, bit_width, sqrt_fn, index_bits)
 
 def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
@@ -553,13 +555,15 @@ def pwl_exp_float(x_val: float, dtype, index_bits: int = 8) -> int:
     return floatml_algebraic_pack(dtype, 0, newExpSInt, readMant)
 
 def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-9)
+        return 0.0 if x < 0 else 1.0 / np.sqrt(x + 1e-9)
     return pwl_float(x_val, dtype, rsqrt_fn, index_bits)
 
 def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def sqrt_fn(x):
-        return np.sqrt(abs(x))
+        return 0.0 if x < 0 else np.sqrt(x)
     return pwl_float(x_val, dtype, sqrt_fn, index_bits)
 
 def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:

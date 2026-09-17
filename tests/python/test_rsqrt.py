@@ -23,25 +23,25 @@ def true_rsqrt(val):
 async def cocotb_rsqrt_i8(dut):
     def expected_fn(val):
         return I8.from_float(rsqrt(I8.to_float(I8.from_float(val)), I8))
-    await run_unary_test(dut, "Rsqrt", "I8", I8, [4.0, 7.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[7.0])
+    await run_unary_test(dut, "Rsqrt", "I8", I8, [4.0, 7.0, -1.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[7.0])
 
 @cocotb.test()
 async def cocotb_rsqrt_fp8(dut):
     def expected_fn(val):
         return FP8_E4M3.from_float(rsqrt(FP8_E4M3.to_float(FP8_E4M3.from_float(val)), FP8_E4M3))
-    await run_unary_test(dut, "Rsqrt", "FP8", FP8_E4M3, [4.0, 7.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[7.0])
+    await run_unary_test(dut, "Rsqrt", "FP8", FP8_E4M3, [4.0, 7.0, -4.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[7.0])
 
 @cocotb.test()
 async def cocotb_rsqrt_i16(dut):
     def expected_fn(val):
         return pwl_rsqrt_int(val, 16, index_bits=8)
-    await run_unary_test(dut, "Rsqrt", "I16", I16, [4.0, 314.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[314.0])
+    await run_unary_test(dut, "Rsqrt", "I16", I16, [4.0, 314.0, -9.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[314.0])
 
 @cocotb.test()
 async def cocotb_rsqrt_bf16(dut):
     def expected_fn(val):
         return BF16.from_float(true_rsqrt(val))
-    await run_unary_test(dut, "Rsqrt", "BF16", BF16, [2.0, 100.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[100.0])
+    await run_unary_test(dut, "Rsqrt", "BF16", BF16, [2.0, 100.0, -2.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[100.0])
 
 # =========================================================================
 # Pytest Launchers

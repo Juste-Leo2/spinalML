@@ -20,7 +20,8 @@ class RsqrtFormal_FP4 extends Component {
   assume(dut.io.a.stream.valid)
   assume(dut.io.c.stream.ready)
 
-  val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9)
+  // OPS-02: mirrors RsqrtOp.negToZeroFn (negative inputs saturate to +0).
+  val mathFn = (x: Double) => if (x < 0.0) 0.0 else 1.0 / Math.sqrt(x + 1e-9)
   val valFn = MathLUTs.floatValFn(2, 1)
   val encodeFn = MathLUTs.floatEncodeFn(2, 1)
   val romContent = for(i <- 0 until 16) yield {
@@ -66,7 +67,8 @@ class RsqrtFormal_FP9 extends Component {
   assume(dut.io.a.stream.valid)
   assume(dut.io.c.stream.ready)
 
-  val mathFn = (x: Double) => 1.0 / Math.sqrt(Math.abs(x) + 1e-9)
+  // OPS-02: mirrors RsqrtOp.negToZeroFn (negative inputs saturate to +0).
+  val mathFn = (x: Double) => if (x < 0.0) 0.0 else 1.0 / Math.sqrt(x + 1e-9)
   val valFn = MathLUTs.floatValFn(4, 4)
   val encodeFn = MathLUTs.floatEncodeFn(4, 4)
   val romContent = for(i <- 0 until 512) yield {
