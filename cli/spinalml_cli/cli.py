@@ -151,7 +151,8 @@ def compile(
     out_count: Optional[int] = typer.Option(None, "--out-count", help="Number of output stream bytes/logits (auto-detected from model if omitted)"),
     word_width: Optional[int] = typer.Option(None, "--word-width", help="AXI data bus width in bits (auto-detected from model if omitted)"),
     bram_words: Optional[int] = typer.Option(None, "--bram-words", help="BRAM capacity in 64-bit words (default: from board or 4096)"),
-    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)")
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)"),
+    rounding: str = typer.Option("rne", "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact)")
 ):
     """
     Compile a Scala file into Verilog by running it within the workspace module,
@@ -179,6 +180,7 @@ def compile(
     word_width = _unwrap(word_width, None)
     bram_words = _unwrap(bram_words, None)
     no_dsp = _unwrap(no_dsp, False)
+    rounding = _unwrap(rounding, "rne")
 
     if not file.exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
@@ -202,6 +204,15 @@ def compile(
     elif "SPINALML_NO_DSP" in os.environ:
         del os.environ["SPINALML_NO_DSP"]
 
+    # Rounding policy for elaboration (mirrors RoundingConfig.current):
+    # explicit flag wins, otherwise a pre-set SPINALML_ROUNDING is kept.
+    if rounding is not None and str(rounding).strip().lower() in ("trunc", "truncate", "floor"):
+        os.environ["SPINALML_ROUNDING"] = "trunc"
+        rounding_label = "Truncate (legacy bit-exact)"
+    else:
+        os.environ["SPINALML_ROUNDING"] = "rne"
+        rounding_label = "RNE (default, unbiased)"
+
     model_params = detect_model_parameters(file)
     final_clk = parse_frequency(clk) if clk else board_cfg["clk_freq"]
     final_baud = baud if baud is not None else board_cfg["baud_rate"]
@@ -212,6 +223,7 @@ def compile(
     dsp_status = "Disabled (LUTs only)" if no_dsp else f"Enabled ({vendor} DSP mapping)"
     typer.echo(f"Target Board   : {board_cfg['name']} ({board_cfg.get('fpga', 'FPGA')})")
     typer.echo(f"DSP Policy     : {dsp_status}")
+    typer.echo(f"Rounding       : {rounding_label}")
     typer.echo(f"Hardware Clock : {final_clk/1e6:.2f} MHz | UART: {final_baud} baud (CLK_PER_BIT = {final_clk // final_baud})")
     typer.echo(f"Model Protocol : {final_out_count} output bytes | {final_word_width}-bit AXI | {final_bram_words} words BRAM")
 
@@ -694,13 +706,21 @@ def build(
     synth_only: bool = typer.Option(False, "--synth-only", "--yosys", help="Stop after Yosys synthesis (quick resource check)"),
     pnr_only: bool = typer.Option(False, "--pnr-only", "--nextpnr", help="Stop after nextpnr place-and-route (skip bitstream pack)"),
     clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
-    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)")
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)"),
+    rounding: str = typer.Option("rne", "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact)")
 ):
     """
     Synthesize, place & route and package FPGA bitstream (Yosys -> nextpnr -> gowin_pack).
     Accepts a Verilog directory, single .v file, or a .scala model file (auto-compiles to Verilog first).
     """
     from .build_runner import run_build
+    import os as _os
+    if rounding is not None and str(rounding).strip().lower() in ("trunc", "truncate", "floor"):
+        _os.environ["SPINALML_ROUNDING"] = "trunc"
+        typer.echo("Rounding       : Truncate (legacy bit-exact)")
+    else:
+        _os.environ["SPINALML_ROUNDING"] = "rne"
+        typer.echo("Rounding       : RNE (default, unbiased)")
     code = run_build(
         src=src,
         out_dir=out,

@@ -1010,9 +1010,29 @@ def layernorm_hw(X, gamma, beta, dtype):
     return Y
 
 
-def requantize_hw(x, in_bits, out_bits, shift):
-    """Golden model of RequantizeOp: arithmetic shift right then saturation clamp."""
-    shifted = x >> shift
+def requantize_hw(x, in_bits, out_bits, shift, rounding=None):
+    """Golden model of RequantizeOp: shift (RNE by default, trunc legacy) then saturation clamp.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    RNE on an arithmetic shift: guard = dropped bit shift-1, sticky = OR of the
+    lower dropped bits, round-up on tie goes to even. Bit-exact with RequantizeOp.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    if rounding != "trunc" and shift > 0:
+        import math
+        truncated = math.floor(x / (1 << shift))
+        rem = x - truncated * (1 << shift)
+        half = 1 << (shift - 1)
+        if rem > half or (rem == half and (truncated & 1) != 0):
+            truncated += 1
+        shifted = truncated
+    else:
+        # Legacy path: arithmetic shift right (floor for negatives in Python)
+        import math as _math
+        shifted = _math.floor(x / (1 << shift)) if shift > 0 else x
     max_val = (1 << (out_bits - 1)) - 1
     min_val = -(1 << (out_bits - 1))
     return max(min_val, min(max_val, shifted))

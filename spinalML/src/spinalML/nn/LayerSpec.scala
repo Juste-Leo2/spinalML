@@ -227,7 +227,11 @@ case class Flatten() extends LayerSpec {
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Requantize(shift: Int, targetType: HardType[Data]) extends LayerSpec {
+case class Requantize(
+  shift: Int,
+  targetType: HardType[Data],
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)

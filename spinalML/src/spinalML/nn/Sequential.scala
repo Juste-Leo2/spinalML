@@ -636,7 +636,7 @@ case class Sequential(
         if (linOut.lanes != l.lanes) repack(linOut, l.lanes) else linOut
 
       case rq: Requantize =>
-        spinalML.ops.requantize(inTensor, rq.targetType, rq.shift)
+        spinalML.ops.requantize(inTensor, rq.targetType, rq.shift, rq.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case rp: Repack =>
         repack(inTensor, rp.newLanes)

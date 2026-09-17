@@ -29,15 +29,17 @@ class RequantizeTest extends AnyFunSuite {
       dut.io.a.stream.valid #= false
       dut.clockDomain.waitSampling(5)
       
-      // I32 inputs
+      // I32 inputs (default rounding = RNE since Wave 4 commit 0:
+      // -10 >> 2 = -2.5, tie rounds to even -2; legacy truncation gave -3,
+      // which is still covered bit-exact by RoundingPolicyTest in Truncate mode)
       val inputData = Array(
         Array(100, -100, 1000, -1000), // Expected (shift=2): 25, -25, 250->127, -250->-128
-        Array(0, 10, -10, 508)         // Expected (shift=2): 0, 2, -3, 127
+        Array(0, 10, -10, 508)         // Expected (shift=2, RNE): 0, 2, -2, 127
       )
       
       val expectedOutputs = Array(
         Array(25, -25, 127, -128),
-        Array(0, 2, -3, 127)
+        Array(0, 2, -2, 127)
       )
       
       var outputIndex = 0

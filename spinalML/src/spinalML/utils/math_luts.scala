@@ -7,6 +7,16 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 
 object MathLUTs {
+  /**
+   * Elaboration-time round-to-nearest-even (Wave 4 `SemanticsRounding`).
+   * Bit-exact counterpart of Python `round()` / numpy / torch (half-to-even),
+   * unlike `Math.round` (half-up). Intended for LUT/ROM constant generation
+   * (mantissa ROMs, `intEncodeFn`); call sites switch over in the Wave 4
+   * commits that own their re-baseline (one semantic per commit).
+   */
+  def roundRNE(x: Double): Long =
+    BigDecimal(x).setScale(0, BigDecimal.RoundingMode.HALF_EVEN).toLongExact
+
   def generateROM(bitWidth: Int, valFn: Int => Double, encodeFn: Double => BigInt, mathFn: Double => Double): Mem[Bits] = {
     val states = 1 << bitWidth
     val romContent = for (i <- 0 until states) yield {
