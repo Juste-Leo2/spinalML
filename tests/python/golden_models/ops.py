@@ -1042,9 +1042,17 @@ def requantize_hw(x, in_bits, out_bits, shift, rounding=None):
     return max(min_val, min(max_val, shifted))
 
 
-def cast_hw(x, in_bits, out_dtype):
+def cast_hw(x, in_bits, out_dtype, rounding=None):
     """Golden model of CastOp (SInt -> FloatML), bit-exact with Float.fromSInt.
-    Replicates the LZD normalization and truncated mantissa rounding."""
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    RNE rounds the dropped mantissa bits (guard + sticky, tie-to-even) with
+    carry into the exponent; 'trunc' keeps the legacy truncated window.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
     exp_bits = out_dtype.exp_bits
     mant_bits = out_dtype.mant_bits
     bias = (1 << (exp_bits - 1)) - 1
@@ -1061,12 +1069,22 @@ def cast_hw(x, in_bits, out_dtype):
     width = max(in_bits, mant_bits + 1)
     aligned = absv << (lz + (width - in_bits))  # MSB (leading 1) now at bit width-1
 
+    drop = width - 1 - mant_bits               # bits below the mantissa window
+    mant_out = (aligned >> drop) & ((1 << mant_bits) - 1)
+    if rounding != "trunc" and drop > 0:
+        guard = (aligned >> (drop - 1)) & 1
+        sticky = (aligned & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if guard and (sticky or (mant_out & 1)):
+            mant_out += 1
+            if mant_out >= (1 << mant_bits):
+                mant_out = 0
+                exp_val += 1
+
     if exp_val >= ((1 << exp_bits) - 1):
         exp_out = (1 << exp_bits) - 1
         mant_out = 0
     else:
         exp_out = exp_val
-        mant_out = (aligned >> (width - 1 - mant_bits)) & ((1 << mant_bits) - 1)
 
     return (sign << (exp_bits + mant_bits)) | (exp_out << mant_bits) | mant_out
 

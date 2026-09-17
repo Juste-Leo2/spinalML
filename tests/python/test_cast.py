@@ -8,7 +8,7 @@ import random
 
 from golden_models.dtypes import BF16, I8, I16, I32
 from golden_models.ops import cast_hw
-from utils.tb_utils import run_mill, copy_roms, seed_random
+from utils.tb_utils import run_mill, copy_roms, seed_random, rounding_mode
 
 seed_random()
 
@@ -44,7 +44,7 @@ async def run_cast_test(dut, op_name, dtype_name, in_dtype, lanes=4):
         dut.io_a_stream_valid.value = 0
         await Timer(1, units="ns")
 
-    expected = [cast_hw(x, in_bits, BF16) for x in flat_in]
+    expected = [cast_hw(x, in_bits, BF16, rounding=rounding_mode()) for x in flat_in]
     for i, (out_bits, exp_bits) in enumerate(zip(flat_out, expected)):
         assert out_bits == exp_bits, f"HW Mismatch for {op_name} at element {i}: got bits {out_bits} instead of {exp_bits}"
 

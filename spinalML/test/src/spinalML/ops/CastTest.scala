@@ -7,8 +7,9 @@ import spinal.core.sim._
 import spinal.lib._
 import spinal.lib.sim._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{BF16, FloatML, I8, I16, I32}
+import spinalML.dtypes.{BF16, FloatML, FP8_E4M3, I8, I16, I32}
 import spinalML.dtypes.BF16Sim
+import spinalML.RoundingMode
 import org.scalatest.funsuite.AnyFunSuite
 
 case class CastTestComp[TIn <: Data](dataTypeIn: HardType[TIn]) extends Component {
@@ -32,7 +33,100 @@ case class CastDequantTestComp[TIn <: Data](dataTypeIn: HardType[TIn], shape: Se
   io.c <> casted
 }
 
+// DTYPE-06: narrow-float targets where the mantissa window drops bits.
+case class CastFP8TestComp[TIn <: Data](dataTypeIn: HardType[TIn], rounding: RoundingMode = RoundingMode.Rne) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(dataTypeIn, Seq(4), lanes = 4))
+    val c = master(Tensor(FP8_E4M3(), Seq(4), lanes = 4))
+  }
+
+  io.c <> cast(io.a, FP8_E4M3(), rounding = rounding)
+}
+
+case class CastI16BF16TestComp(rounding: RoundingMode = RoundingMode.Rne) extends Component {
+  val io = new Bundle {
+    val a = slave(Tensor(I16(), Seq(4), lanes = 4))
+    val c = master(Tensor(BF16(), Seq(4), lanes = 4))
+  }
+
+  io.c <> cast(io.a, BF16(), rounding = rounding)
+}
+
 class CastTest extends AnyFunSuite {
+  // DTYPE-06: I8 127 -> FP8 rounds up with mantissa carry: 1.111111 x 2^6
+  // garde 111, dropped 111 (guard=1, sticky=1) -> 10.000000 x 2^6 = 128.
+  test("DTYPE-06 Cast I8 127 to FP8 rounds up with carry to 128 (RNE)") {
+    SimConfig.withWave.compile(CastFP8TestComp(I8(), RoundingMode.Rne)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      dut.io.a.stream.payload(0).asInstanceOf[SInt] #= 127
+      dut.io.a.stream.valid #= true
+      // Combinational op: bounded wait, never an infinite load.
+      assert(!dut.clockDomain.waitSamplingWhere(20)(dut.io.c.stream.valid.toBoolean),
+        "no output for cast input")
+      val o = dut.io.c.stream.payload(0).asInstanceOf[FloatML]
+      assert(!o.sign.toBoolean && o.exponent.toInt == 14 && o.mantissa.toInt == 0,
+        s"expected +128 (exp=14 mant=0), got sign=${o.sign.toBoolean} exp=${o.exponent.toInt} mant=${o.mantissa.toInt}")
+      dut.io.a.stream.valid #= false
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  // DTYPE-06: same input under Truncate keeps the legacy window (120).
+  test("DTYPE-06 Cast I8 127 to FP8 truncates to 120 (Truncate legacy)") {
+    SimConfig.withWave.compile(CastFP8TestComp(I8(), RoundingMode.Truncate)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      dut.io.a.stream.payload(0).asInstanceOf[SInt] #= 127
+      dut.io.a.stream.valid #= true
+      assert(!dut.clockDomain.waitSamplingWhere(20)(dut.io.c.stream.valid.toBoolean),
+        "no output for cast input")
+      val o = dut.io.c.stream.payload(0).asInstanceOf[FloatML]
+      assert(!o.sign.toBoolean && o.exponent.toInt == 13 && o.mantissa.toInt == 7,
+        s"expected 120 (exp=13 mant=7), got sign=${o.sign.toBoolean} exp=${o.exponent.toInt} mant=${o.mantissa.toInt}")
+      dut.io.a.stream.valid #= false
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  // DTYPE-06: tie-to-even (I16 1036 -> BF16 1040, kept LSB odd rounds up)
+  // and carry into the exponent (I16 32767 -> BF16 32768).
+  test("DTYPE-06 Cast I16 to BF16 rounds ties to even with carry (RNE)") {
+    SimConfig.withWave.compile(CastI16BF16TestComp(RoundingMode.Rne)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.io.a.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      def convert(v: Int): (Boolean, Int, Int) = {
+        dut.io.a.stream.payload(0).asInstanceOf[SInt] #= v
+        dut.io.a.stream.valid #= true
+        assert(!dut.clockDomain.waitSamplingWhere(20)(dut.io.c.stream.valid.toBoolean),
+          s"no output for cast input $v")
+        val o = dut.io.c.stream.payload(0).asInstanceOf[FloatML]
+        dut.io.a.stream.valid #= false
+        dut.clockDomain.waitSampling(2)
+        (o.sign.toBoolean, o.exponent.toInt, o.mantissa.toInt)
+      }
+
+      val tie = convert(1036)
+      assert(tie == (false, 137, 2), s"tie 1036 -> 1040 (exp=137 mant=2), got $tie")
+      // Guard 0 with odd kept LSB stays put (off-by-one guard selection
+      // would wrongly round this up to 1040).
+      val down = convert(1032)
+      assert(down == (false, 137, 1), s"1032 exact (exp=137 mant=1), got $down")
+      val ovf = convert(32767)
+      assert(ovf == (false, 142, 0), s"32767 -> 32768 (exp=142 mant=0), got $ovf")
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
   test("Test streaming Cast operation SInt -> BF16") {
     SimConfig.withWave.compile(CastTestComp(I8())).doSim { dut =>
       

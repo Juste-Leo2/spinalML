@@ -4,6 +4,7 @@ package spinalML.utils
 
 import spinal.core._
 import spinalML.dtypes.FloatML
+import spinalML.{RoundingMode, RoundingConfig}
 
 object Float {
 
@@ -341,8 +342,14 @@ object Float {
 
   /**
    * Hardware circuit to convert an SInt into a FloatML.
+   *
+   * DTYPE-06: the mantissa window rounds to nearest-even (guard + sticky on
+   * the dropped bits, increment with carry into the exponent) under [[Rne]];
+   * [[Truncate]] keeps the legacy truncation bit-exact. Elaboration-only
+   * switch: the RNE increment is not built in truncate mode (0 LUT).
    */
-  def fromSInt(inValue: SInt, expBits: Int, mantBits: Int): FloatML = {
+  def fromSInt(inValue: SInt, expBits: Int, mantBits: Int,
+               rounding: RoundingMode = RoundingConfig.current): FloatML = {
     val W = inValue.getBitsWidth
     val c = FloatML(expBits, mantBits)
     
@@ -368,19 +375,38 @@ object Float {
     
     val W_padded = W + paddingBits
     val mantissa = paddedVal(W_padded - 2 downto W_padded - 1 - mantBits)
-    
-    // 5. Final assignment
+
+    // DTYPE-06 rounding: the window above truncates `dropBits` low bits
+    // (window bottom = bit dropBits, guard = bit dropBits-1, sticky = OR of
+    // the rest). RNE rounds up on guard && (sticky || tie-to-even); the
+    // increment can overflow the mantissa and carry into the exponent
+    // (e.g. I8 127 -> FP8 128). Truncate keeps the legacy window bit-exact.
+    val dropBits = W_padded - 1 - mantBits
+    val roundUp = if (rounding == RoundingMode.Rne && dropBits > 0) {
+      val guard = paddedVal(dropBits - 1)
+      val sticky = if (dropBits > 1) (paddedVal(dropBits - 2 downto 0) =/= 0) else False
+      guard && (sticky || mantissa.lsb)
+    } else False
+    val mantRndExt = mantissa +^ roundUp.asUInt
+    val mantOv = mantRndExt.msb
+    val mantRnd = Mux(mantOv, U(0, mantBits bits), mantRndExt(mantBits - 1 downto 0))
+    // Same carry-into-exponent pattern as mul (Spinal widens SInt `+`, and
+    // intoSInt is value-preserving, so no wrap on the carry).
+    val expRndSInt = expSInt + mantOv.asUInt.intoSInt.resized
+
+    // 5. Final assignment (saturation sees the ROUNDED pair: rounding can
+    // push E4M3 onto the NaN slot, which saturates back to 448).
     val (satExpS, satMantS) = satEncoding(expBits, mantBits)
     when(isZero) {
       c.exponent := 0
       c.mantissa := 0
       c.sign := False
-    } elsewhen(saturates(expBits, mantBits, expSInt, mantissa)) {
+    } elsewhen(saturates(expBits, mantBits, expRndSInt, mantRnd)) {
       c.exponent := satExpS
       c.mantissa := satMantS
     } otherwise {
-      c.exponent := expSInt.asUInt.resized
-      c.mantissa := mantissa
+      c.exponent := expRndSInt.asUInt.resized
+      c.mantissa := mantRnd
     }
     
     c

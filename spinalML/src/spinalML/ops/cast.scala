@@ -6,6 +6,7 @@ import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
+import spinalML.{RoundingMode, RoundingConfig}
 
 /**
  * CastOp: SInt -> FloatML conversion (with optional weight dequantization),
@@ -26,7 +27,10 @@ case class CastOp[TIn <: Data, TOut <: Data](
   shape: Seq[Int],
   lanes: Int,
   scales: Seq[Double] = Seq(1.0),
-  runtimeScale: Boolean = false
+  runtimeScale: Boolean = false,
+  // DTYPE-06: per-op rounding override (default = RoundingConfig.current,
+  // i.e. env decides). Explicit Truncate keeps the legacy bit-exact cast.
+  rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
 
   val io = new Bundle {
@@ -78,7 +82,7 @@ case class CastOp[TIn <: Data, TOut <: Data](
   for (i <- 0 until lanes) {
     (io.a.stream.payload(i), io.c.stream.payload(i)) match {
       case (valIn: SInt, valOut: FloatML) =>
-        val converted = spinalML.utils.Float.fromSInt(valIn, valOut.expBits, valOut.mantBits)
+        val converted = spinalML.utils.Float.fromSInt(valIn, valOut.expBits, valOut.mantBits, rounding)
         val result = if (useScale) {
           spinalML.utils.Float.mul(converted, scaleHw.get)
         } else {
@@ -106,10 +110,11 @@ object cast {
     a: Tensor[TIn],
     dataTypeOut: HardType[TOut],
     scales: Seq[Double] = Seq(1.0),
-    runtimeScalePort: Option[Bits] = None
+    runtimeScalePort: Option[Bits] = None,
+    rounding: RoundingMode = RoundingConfig.current
   ): Tensor[TOut] = {
     val useRuntime = runtimeScalePort.isDefined
-    val castComp = CastOp(a.dataType, dataTypeOut, a.shape, a.lanes, scales, runtimeScale = useRuntime)
+    val castComp = CastOp(a.dataType, dataTypeOut, a.shape, a.lanes, scales, runtimeScale = useRuntime, rounding = rounding)
     castComp.io.a <> a
     if (useRuntime) {
       castComp.io.runtimeScaleVal := runtimeScalePort.get
