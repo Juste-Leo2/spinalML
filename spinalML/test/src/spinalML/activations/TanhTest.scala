@@ -18,16 +18,13 @@ case class TanhTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class TanhTest extends AnyFunSuite {
-  test("Tanh compilation on I8") {
-    SpinalConfig().generateVerilog(TanhTestComp(I8()))
+  test("OPS-03 Tanh integer types are rejected at elaboration") {
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(TanhTestComp(I8())) }
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(TanhTestComp(spinalML.dtypes.I16())) }
   }
 
   test("Tanh compilation on FP8") {
     SpinalConfig().generateVerilog(TanhTestComp(FP8_E4M3()))
-  }
-
-  test("Tanh compilation on I16") {
-    SpinalConfig().generateVerilog(TanhTestComp(spinalML.dtypes.I16()))
   }
 
   test("Tanh compilation on BF16") {

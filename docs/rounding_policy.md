@@ -73,7 +73,12 @@ object RoundingConfig {
 - **CLI** : `--rounding {rne|trunc}` sur `generate`/`build` (miroir de
   `--no-dsp`, `cli/spinalml_cli/cli.py:199-203`), affiché dans le bandeau.
 - **Harness de test** : `tests/python/utils/tb_utils.py` lit `SPINALML_ROUNDING`
-  pour sélectionner le golden (défaut RNE).
+  pour sélectionner le golden (défaut RNE). Le replica Scala du moteur
+  universel (`spinalML.replica.HWArithmetic.fromSInt/fromDouble/fmul/fadd`,
+  `LayerReplicas.requantizeInt/castIntToFloat`) suit la même config : il élit
+  RNE par défaut et retombe sur la troncature legacy en mode trunc, comme le
+  RTL (`TransformHandlers` transmet en plus le `rounding` par-layer de
+  `Cast`/`Requantize`).
 - **Garantie legacy** : le chemin trunc reste **bit-identique** à l'existant —
   échappatoire pour les utilisateurs après le changement de sémantique par
   défaut (le défaut RNE change les sorties bit-exactes des modèles actuels,

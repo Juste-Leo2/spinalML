@@ -12,7 +12,7 @@ All operations process data through the `Tensor[T]` abstraction, which wraps har
 | :--- | :--- | :--- | :--- |
 | **Add / Sub** | `add(a, b)` / `sub(a, b)` | Element-wise addition and subtraction | Fully pipelined, saturating or wrapping |
 | **Mul** | `mul(a, b)` | Element-wise multiplication | Inferred multipliers (LUT or pipelined DSP) |
-| **Div** | `div(a, b)` | Element-wise division | Radix-2 / iterative shift-divider |
+| **Div** | `div(a, b)` | Element-wise division | FloatML only (LUT/PWL reciprocal). Integer types refused at elaboration (OPS-12), Q-format division in Wave 5 |
 | **Abs** | `abs(a)` | Absolute value | Combinational sign inversion |
 | **BiasAdd** | `bias_add(a, bias)` | Broadcast add of a 1D vector over the inner dimension | Zero-overhead streaming broadcast |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b` | Single-cycle fused arithmetic |
@@ -75,8 +75,8 @@ Non-linear functions for `FloatML` use piece-wise linear (PWL) and algebraic sep
 | :--- | :--- | :--- | :--- |
 | **ReLU** | `ReLU()` | $\max(0, x)$ | Sign-bit masking (0 LUTs) |
 | **LeakyReLU** | `LeakyReLU(alpha)` | $\max(\alpha x, x)$ | Conditional arithmetic shift |
-| **Sigmoid** | `Sigmoid()` | $1 / (1 + e^{-x})$ | Pipelined Exp $\to$ Add 1 $\to$ Reciprocal |
-| **Tanh** | `Tanh()` | $2\sigma(2x) - 1$ | Fused Sigmoid composition |
+| **Sigmoid** | `Sigmoid()` | $1 / (1 + e^{-x})$ | Pipelined Exp $\to$ Add 1 $\to$ Reciprocal. FloatML only (OPS-03) |
+| **Tanh** | `Tanh()` | $2\sigma(2x) - 1$ | Fused Sigmoid composition. FloatML only (OPS-03) |
 | **Softmax** | `Softmax1D()` | Normalizes inputs to probability distribution | Streaming Exp + accumulator + Reciprocal |
 | **BatchNorm** | `BatchNorm()` | Batch normalization | Folded scale & shift for inference |
 | **LayerNorm** | `LayerNorm()` | Dynamic mean & variance normalization | Online 2-pass accumulator + Rsqrt |

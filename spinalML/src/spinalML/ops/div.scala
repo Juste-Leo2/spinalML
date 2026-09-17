@@ -8,6 +8,11 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 
 case class DivOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+  require(dataType().isInstanceOf[FloatML],
+    "DivOp only supports FloatML inputs. Integer division is not implemented: ReciprocalOp has no " +
+    "Qm.n fixed-point scale, so any divisor >= 3 would return 0. Pending Wave 5 (Q-format division); " +
+    "see docs/rounding_policy.md section 7.")
+
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
     val b = slave(Tensor(dataType, shape, lanes))

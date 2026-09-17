@@ -14,7 +14,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
-| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
+| `Div` | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). Integer types refused at elaboration (OPS-12: no Qm.n scale, `1/b` collapses to 0 for `|b| >= 3`); Q-format division planned for Wave 5. |
 | `BiasAdd` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Broadcast add of a bias vector over the last dimension (columns). |
 | `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
 | `Log` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Element-wise logarithm, compile-time base (default `e` = ln, `10` = log10). Domain `x <= 0 -> 0` (industry convention, like `Rsqrt`). |
@@ -69,14 +69,14 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Rectified Linear Unit. |
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
-| `Sigmoid` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). Composition of Negation -> Exp -> +1 -> Reciprocal (ints ⚠️: PWL chain, degenerate for large |x|). |
-| `Tanh` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition of Mul(×2) -> Sigmoid -> ×2 - 1. |
+| `Sigmoid` | ❌ | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). Composition of Negation -> Exp -> +1 -> Reciprocal. Integer types refused at elaboration (OPS-03: `1/(1+e^-x)` collapses to 0/saturation without a Qm.n scale); quantized sigmoid planned for Wave 5. |
+| `Tanh` | ❌ | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition of Mul(×2) -> Sigmoid -> ×2 - 1. Integer types refused at elaboration (OPS-03, same Qm.n reason as Sigmoid). |
 | `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). |
+| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). Integer path requantizes via `RequantizeOp` (shift + RNE + saturation, LAY-05). |
 | `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. |
 
 ## Pooling Operations

@@ -179,6 +179,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-03 : Division et activation Sigmoid/Tanh nulles sur entiers `SInt`
+- **Statut** : corrigé (Wave 4 commit 9) — refus explicite à l'élaboration (`require` avec message clair) sur `DivOp`/`SigmoidOp`/`TanhOp` pour tout type non-`FloatML` ; la sémantique Qm.n (division + sigmoïde quantifiée, scales TFLite) devient un chantier Wave 5 tracé dans `docs/full_roadmap.md` §3 et `docs/rounding_policy.md` §7. Rouges avant : `DivTest`/`SigmoidTest`/`TanhTest` « integer types are rejected at elaboration » (`Expected exception ... but no exception was thrown`). Fallout re-baseliné : tests I8/I16 convertis en tests de rejet, goldens Python int retirés (`test_div.py`/`test_sigmoid.py`/`test_tanh.py`), formels `DivFormal_I8`/`SigmoidFormal_I8`/`_I10`/`TanhFormal_I8`/`_I10` retirés (variantes FP4/FP9 conservées), `Sequential2DTest` activations int déplacées en BF16 via `Cast`. Non-régression : suites Scalas 4/4 ✅ (12 tests), pytest div/sigmoid/tanh FP 6/6 ✅, formels Div/Sigmoid/Tanh FP PASS ✅, suite universelle 10/10 en RNE ✅ et lane trunc revalidée ✅ (le replica oracle, resté en troncature, a été re-baseliné RNE/switch-aware dans le commit transverse : `UniversalMixed2DDemo` et `UniversalResidualDemo` étaient rouges à cause de lui, pas du RTL).
 - **Fichier** : `spinalML/src/spinalML/ops/div.scala`, `spinalML/src/spinalML/activations/sigmoid.scala`, `spinalML/src/spinalML/activations/tanh.scala`
 - **Description** :
   `DivOp` est implémenté via `ReciprocalOp` suivi d'une multiplication. Pour les types entiers bruts non normalisés (`SInt`), `ReciprocalOp` calcule `round(1.0 / x)`. Pour tout entier $x \ge 2$, `1.0 / x < 0.5`, ce qui est arrondi à `0`.
@@ -313,6 +314,7 @@ Ce document recense l'ensemble des bugs potentiels, comportements anormaux, rég
 ---
 
 ### BUG-OPS-12 : Division entière (`DivOp`) mathématiquement nulle pour les types `SInt` / `UInt`
+- **Statut** : corrigé (Wave 4 commit 9) — `DivOp` refuse tout type non-`FloatML` à l'élaboration (`require` explicite, message orientant vers la Wave 5). Preuve rouge/verte, fallout tests/formels et backlog Q-format : voir OPS-03 (même commit).
 - **Fichier** : `spinalML/src/spinalML/ops/div.scala` (lignes 21-23, 43-47)
 - **Code concerné** :
   ```scala

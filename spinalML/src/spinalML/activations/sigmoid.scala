@@ -15,6 +15,11 @@ import spinalML.ops.{ExpOp, ReciprocalOp}
  *   sign-negation -> ExpOp -> +1 -> ReciprocalOp
  */
 case class SigmoidOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+  require(dataType().isInstanceOf[FloatML],
+    "SigmoidOp only supports FloatML inputs. Integer sigmoid needs a Qm.n fixed-point scale " +
+    "(1/(1+e^-x) collapses to 0 or saturates without it). Pending Wave 5; see " +
+    "docs/rounding_policy.md section 7.")
+
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
     val c = master(Tensor(dataType, shape, lanes))

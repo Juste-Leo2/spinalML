@@ -54,6 +54,13 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
 
 - **CI** : défaut RNE sur toutes les suites.
 - **Lane trunc** : `SPINALML_ROUNDING=trunc` sur requantize/cast/batchnorm.
+- **Moteur universel** : le replica oracle (`spinalML.replica.*`) n'avait pas
+  suivi les commits RNE — `HWArithmetic.fromSInt` tronquait la mantisse
+  (27→26 au lieu de 28 en FP8) et `LayerReplicas.requantizeInt` faisait un
+  shift sec (235>>1=117 au lieu de 118) ; les démos `UniversalMixed2DDemo` et
+  `UniversalResidualDemo` échouaient donc en RNE (vertes sur `main`). Re-baseline
+  switch-aware (voir `rounding_policy.md` §3) : suite universelle 10/10 en RNE,
+  lane trunc revalidée sur Residual/Mixed2D.
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un

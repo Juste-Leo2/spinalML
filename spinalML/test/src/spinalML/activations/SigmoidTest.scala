@@ -18,16 +18,13 @@ case class SigmoidTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class SigmoidTest extends AnyFunSuite {
-  test("Sigmoid compilation on I8") {
-    SpinalConfig().generateVerilog(SigmoidTestComp(I8()))
+  test("OPS-03 Sigmoid integer types are rejected at elaboration") {
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(SigmoidTestComp(I8())) }
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(SigmoidTestComp(spinalML.dtypes.I16())) }
   }
 
   test("Sigmoid compilation on FP8") {
     SpinalConfig().generateVerilog(SigmoidTestComp(FP8_E4M3()))
-  }
-
-  test("Sigmoid compilation on I16") {
-    SpinalConfig().generateVerilog(SigmoidTestComp(spinalML.dtypes.I16()))
   }
 
   test("Sigmoid compilation on BF16") {

@@ -3,6 +3,7 @@
 package spinalML.replica
 
 import scala.collection.mutable.ArrayBuffer
+import spinalML.{RoundingConfig, RoundingMode}
 
 /**
  * Universal bit-exact software replica of the hardware arithmetic in SpinalML.
@@ -56,8 +57,11 @@ object HWArithmetic {
       (if (overflow) 1 else 0) + (if (mantOv) 1 else 0)
 
     if (aZero || bZero || expSum <= 0) PZERO
-    else if (expSum >= (1 << expBits) - 1) F(sign, (1 << expBits) - 1, 0)
-    else F(sign, expSum, finalMant)
+    else {
+      val (satExp, satMant) = satFields(expBits, mantBits)
+      if (needsSat(expBits, mantBits, expSum, finalMant)) F(sign, satExp, satMant)
+      else F(sign, expSum, finalMant)
+    }
   }
 
   /**
@@ -100,8 +104,11 @@ object HWArithmetic {
     val newExp = larger.e + 1 - lz + (if (mantOvA) 1 else 0)
 
     if (newExp <= 0) PZERO
-    else if (newExp >= (1 << expBits) - 1) F(larger.s, (1 << expBits) - 1, 0)
-    else F(larger.s, newExp, finalMantA)
+    else {
+      val (satExp, satMant) = satFields(expBits, mantBits)
+      if (needsSat(expBits, mantBits, newExp, finalMantA)) F(larger.s, satExp, satMant)
+      else F(larger.s, newExp, finalMantA)
+    }
   }
 
   def gt(a: F, b: F): Boolean = {
@@ -117,31 +124,66 @@ object HWArithmetic {
 
   def fmax(a: F, b: F, expBits: Int, mantBits: Int): F = if (gt(a, b)) a else b
 
-  /** Mantissa truncation from integer (mirroring spinalML.utils.Float.fromSInt). */
-  def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int): F = {
+  /** Saturation encoding/predicate mirroring spinalML.utils.Float (DTYPE-07). */
+  private def satFields(expBits: Int, mantBits: Int): (Int, Int) =
+    spinalML.utils.Float.satEncoding(expBits, mantBits)
+
+  private def needsSat(expBits: Int, mantBits: Int, expVal: Int, mant: Int): Boolean =
+    if (spinalML.utils.Float.isE4M3(expBits, mantBits))
+      expVal > 15 || (expVal == 15 && mant == 7)
+    else
+      expVal >= ((1 << expBits) - 1)
+
+  /**
+   * Mantissa conversion from integer, mirroring spinalML.utils.Float.fromSInt.
+   *
+   * DTYPE-06: under [[Rne]] the dropped mantissa window rounds to nearest-even
+   * (guard + sticky on the dropped bits, increment with carry into the
+   * exponent); [[Truncate]] keeps the legacy truncation bit-exact. Saturation
+   * uses the RTL encoding (DTYPE-07: E4M3 -> 448, others -> inf).
+   */
+  def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int,
+               rounding: RoundingMode = RoundingConfig.current): F = {
     val neg = v < 0
     val abs = math.abs(v) & ((1L << w) - 1)
     if (abs == 0) return PZERO
     val p = 63 - java.lang.Long.numberOfLeadingZeros(abs)
     val bias = (1 << (expBits - 1)) - 1
-    val expS = bias + p
-    if (expS >= (1 << expBits) - 1) return F(neg, (1 << expBits) - 1, 0)
+    var expS = bias + p
     val padding = math.max(0, mantBits + 1 - w)
     val wp = w + padding
     val padded = abs << ((w - 1 - p) + padding)
-    val mant = ((padded >> (wp - 1 - mantBits)) & ((1 << mantBits) - 1)).toInt
-    F(neg, expS, mant)
+    var mant = ((padded >> (wp - 1 - mantBits)) & ((1 << mantBits) - 1)).toInt
+
+    if (rounding == RoundingMode.Rne) {
+      val dropBits = wp - 1 - mantBits
+      if (dropBits > 0) {
+        val guard = (padded >> (dropBits - 1)) & 1L
+        val sticky = if (dropBits > 1) (padded & ((1L << (dropBits - 1)) - 1)) != 0 else false
+        if (guard == 1L && (sticky || (mant & 1) == 1)) {
+          if (mant + 1 >= (1 << mantBits)) { mant = 0; expS += 1 } else mant += 1
+        }
+      }
+    }
+
+    val (satExp, satMant) = satFields(expBits, mantBits)
+    if (needsSat(expBits, mantBits, expS, mant)) F(neg, satExp, satMant)
+    else F(neg, expS, mant)
   }
 
   def fromDouble(value: Double, expBits: Int, mantBits: Int): F = {
     val bias = (1 << (expBits - 1)) - 1
+    val (satExp, satMant) = satFields(expBits, mantBits)
     if (value == 0.0 || value.isNaN) return PZERO
     val signBit = value < 0
     val absVal = math.abs(value)
-    val maxExp = (1 << expBits) - 2
-    val maxMant = (1 << mantBits) - 1
-    val maxVal = (1.0 + maxMant.toDouble / (1 << mantBits)) * math.pow(2, maxExp - bias)
-    if (value.isInfinity || absVal > maxVal) return F(signBit, (1 << expBits) - 1, 0)
+    val maxVal = if (spinalML.utils.Float.isE4M3(expBits, mantBits)) 448.0
+    else {
+      val me = (1 << expBits) - 2
+      val mm = (1 << mantBits) - 1
+      (1.0 + mm.toDouble / (1 << mantBits)) * math.pow(2, me - bias)
+    }
+    if (value.isInfinity || absVal > maxVal) return F(signBit, satExp, satMant)
 
     val e = Math.getExponent(absVal)
     val m = java.lang.Math.scalb(absVal, -e)
@@ -155,9 +197,9 @@ object HWArithmetic {
       expVal += 1
     }
 
-    if (expVal >= ((1 << expBits) - 1)) {
-      expVal = (1 << expBits) - 1
-      mantVal = 0
+    if (needsSat(expBits, mantBits, expVal, mantVal.toInt)) {
+      expVal = satExp
+      mantVal = satMant
     } else if (expVal <= 0) {
       expVal = 0
       mantVal = 0

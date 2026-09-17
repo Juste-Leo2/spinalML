@@ -19,8 +19,11 @@ case class DivTestComp[T <: Data](dataType: HardType[T]) extends Component {
 }
 
 class DivTest extends AnyFunSuite {
-  test("Div LUT compilation on I8") { SpinalConfig().generateVerilog(DivTestComp(I8())) }
+  test("OPS-12 Div integer types are rejected at elaboration") {
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(DivTestComp(I8())) }
+    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(DivTestComp(I16())) }
+  }
+
   test("Div LUT compilation on FP8") { SpinalConfig().generateVerilog(DivTestComp(FP8_E4M3())) }
-  test("Div PWL compilation on I16") { SpinalConfig().generateVerilog(DivTestComp(I16())) }
   test("Div PWL compilation on BF16") { SpinalConfig().generateVerilog(DivTestComp(BF16())) }
 }

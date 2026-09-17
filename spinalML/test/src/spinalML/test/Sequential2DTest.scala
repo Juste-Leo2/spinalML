@@ -34,7 +34,9 @@ class Sequential2DTest extends AnyFunSuite {
   }
 
   test("Sequential with Tanh/Sigmoid activations compilation") {
-    // Exercises the activation layers after a multi-channel AvgPool2D (lanes repack C->1)
+    // Exercises the float-domain activation layers after a multi-channel
+    // AvgPool2D (lanes repack C->1). OPS-03: integer Tanh/Sigmoid is rejected
+    // at elaboration (no Qm.n scale yet), so the tail casts to BF16 first.
     SpinalConfig().generateVerilog(
       Sequential(
         globalDataType = I8(),
@@ -44,6 +46,7 @@ class Sequential2DTest extends AnyFunSuite {
           Requantize(shift = 4, targetType = I8()),
           ReLU(),
           AvgPool2D(poolSize = 2, stride = 2),
+          Cast(targetType = BF16()),
           Tanh(),
           Sigmoid(),
           Flatten()

@@ -19,7 +19,8 @@ object TransformHandlers {
           val fType = targetData.asInstanceOf[spinalML.dtypes.FloatML]
           val tExp = fType.expBits
           val tMant = fType.mantBits
-          val converted = LayerReplicas.castIntToFloat(it.asInts, it.bitWidth, tExp, tMant, c.scales)
+          val rounding = c.rounding.getOrElse(spinalML.RoundingConfig.current)
+          val converted = LayerReplicas.castIntToFloat(it.asInts, it.bitWidth, tExp, tMant, c.scales, rounding)
           FloatTensor(curShape, converted, tExp, tMant)
         } else {
           IntTensor(curShape, it.asInts, targetData.getBitsWidth)
@@ -59,7 +60,8 @@ object TransformHandlers {
     val outBits = rq.targetType().getBitsWidth
     val nextTensor: ReplicaTensor = curTensor match {
       case it: IntTensor =>
-        val req = LayerReplicas.requantizeInt(it.asInts, rq.shift, outBits)
+        val rounding = rq.rounding.getOrElse(spinalML.RoundingConfig.current)
+        val req = LayerReplicas.requantizeInt(it.asInts, rq.shift, outBits, rounding)
         IntTensor(curShape, req, outBits)
       case _ =>
         throw new UnsupportedOperationException("Requantize is supported in integer domain only")

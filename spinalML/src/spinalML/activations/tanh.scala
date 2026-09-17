@@ -16,6 +16,11 @@ import spinalML.ops.MulOp
  * 3. Combinational ×2 - 1 on the output (same style as Softmax1D's final multiply)
  */
 case class TanhOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+  require(dataType().isInstanceOf[FloatML],
+    "TanhOp only supports FloatML inputs. Integer tanh needs a Qm.n fixed-point scale " +
+    "(it is built on SigmoidOp, which collapses to 0 or saturates without it). Pending Wave 5; " +
+    "see docs/rounding_policy.md section 7.")
+
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
     val c = master(Tensor(dataType, shape, lanes))

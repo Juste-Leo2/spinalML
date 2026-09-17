@@ -3,6 +3,7 @@
 package spinalML.replica
 
 import scala.collection.mutable.ArrayBuffer
+import spinalML.{RoundingConfig, RoundingMode}
 import spinalML.nn._
 import HWArithmetic._
 
@@ -281,12 +282,13 @@ object LayerReplicas {
     inWidth: Int,
     outExp: Int,
     outMant: Int,
-    scales: Seq[Double]
+    scales: Seq[Double],
+    rounding: RoundingMode = RoundingConfig.current
   ): Seq[F] = {
     val useScale = scales.nonEmpty && !(scales.length == 1 && scales.head == 1.0)
     val scaleLits = if (useScale) scales.map(s => fromDouble(s, outExp, outMant)) else Nil
     input.zipWithIndex.map { case (v, idx) =>
-      val converted = fromSInt(v, inWidth, outExp, outMant)
+      val converted = fromSInt(v, inWidth, outExp, outMant, rounding)
       if (useScale) {
         val scaleLit = if (scaleLits.length == 1) scaleLits.head else scaleLits(idx % scaleLits.length)
         fmul(converted, scaleLit, outExp, outMant)
@@ -540,11 +542,26 @@ object LayerReplicas {
   }
 
   // --- Requantize ---
-  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int): Seq[Long] = {
+  /**
+   * Mirror of RequantizeOp: shift (RNE by default, trunc legacy) then
+   * saturation. RNE on an arithmetic shift rounds guard/sticky ties to even;
+   * the switch follows [[spinalML.RoundingConfig]] like the elaborated RTL.
+   */
+  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int,
+                    rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
     val maxVal = (1L << (outBits - 1)) - 1
     val minVal = -(1L << (outBits - 1))
+    val useRne = rounding == RoundingMode.Rne
     input.map { v =>
-      val shifted = v >> shift
+      val shifted =
+        if (shift <= 0) v
+        else if (!useRne) v >> shift
+        else {
+          val truncated = v >> shift
+          val rem = v - (truncated << shift)
+          val half = 1L << (shift - 1)
+          if (rem > half || (rem == half && (truncated & 1L) != 0)) truncated + 1 else truncated
+        }
       math.max(minVal, math.min(maxVal, shifted))
     }
   }
