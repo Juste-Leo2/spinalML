@@ -532,6 +532,7 @@ def run_selftest(port=None, save_results=None, selftest_only=False):
         print("-" * 66)
         print(f" HW==NumPy : {'yes' if row['agree'] else 'NO'}"
               f"   |  logits bit-exact : {'yes' if row['exact'] else 'no'}")
+        print(" HW logits : " + " ".join(f"{v:+.2f}" for v in hw_logits))
     else:
         print(f" {'digit':>5} | {'NumPy':>5} {'conf':>6} | {'expected':>8}")
         print("-" * 40)
