@@ -413,6 +413,7 @@ def _prepare_sources_and_constraints(
     board_cfg: Dict[str, Any],
     clk_override: Optional[str],
     no_dsp: bool,
+    rounding: Optional[str],
     top_name: Optional[str],
     cst_override: Optional[Path],
     log_file: Any,
@@ -460,7 +461,8 @@ def _prepare_sources_and_constraints(
                 out_count=None,
                 word_width=None,
                 bram_words=None,
-                no_dsp=no_dsp
+                no_dsp=no_dsp,
+                rounding=rounding
             )
         except typer.Exit as te:
             if te.exit_code != 0:
@@ -744,7 +746,8 @@ def run_build(
     synth_only: bool = False,
     pnr_only: bool = False,
     clk_override: Optional[str] = None,
-    no_dsp: bool = False
+    no_dsp: bool = False,
+    rounding: Optional[str] = None
 ) -> int:
     """
     Orchestrates the entire hardware build pipeline:
@@ -787,6 +790,7 @@ def run_build(
         board_cfg=board_cfg,
         clk_override=clk_override,
         no_dsp=no_dsp,
+        rounding=rounding,
         top_name=top_name,
         cst_override=cst_override,
         log_file=log_file
