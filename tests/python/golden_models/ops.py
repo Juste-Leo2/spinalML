@@ -1089,6 +1089,115 @@ def cast_hw(x, in_bits, out_dtype, rounding=None):
     return (sign << (exp_bits + mant_bits)) | (exp_out << mant_bits) | mant_out
 
 
+def _is_e4m3(exp_bits, mant_bits):
+    return exp_bits == 4 and mant_bits == 3
+
+
+def cast_float_to_float_hw(bits_in, in_dtype, out_dtype, rounding=None):
+    """Golden model of CastOp (FloatML -> FloatML), bit-exact with Float.roundTo.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    Same-format is a passthrough; narrowing rounds the dropped mantissa bits
+    (guard + sticky, tie-to-even, carry into exponent); widening is exact.
+    Overflow saturates (448 for E4M3, inf-encoding otherwise), underflow -> +0.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    ie, im = in_dtype.exp_bits, in_dtype.mant_bits
+    oe, om = out_dtype.exp_bits, out_dtype.mant_bits
+    in_bias = (1 << (ie - 1)) - 1
+    out_bias = (1 << (oe - 1)) - 1
+
+    sign = (bits_in >> (ie + im)) & 1
+    exp = (bits_in >> im) & ((1 << ie) - 1)
+    mant = bits_in & ((1 << im) - 1)
+
+    if exp == 0 and mant == 0:
+        return 0
+
+    if im > om:
+        drop = im - om
+        mant_ext = (1 << im) | mant
+        kept = (mant_ext >> drop) & ((1 << (om + 1)) - 1)
+        guard = (mant_ext >> (drop - 1)) & 1
+        sticky = (mant_ext & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if rounding != "trunc" and guard and (sticky or (kept & 1)):
+            kept += 1
+        if kept >= (1 << (om + 1)):
+            mant_ov, mant_out = 1, 0
+        else:
+            mant_ov, mant_out = 0, kept & ((1 << om) - 1)
+        exp_s = exp + (out_bias - in_bias) + mant_ov
+    else:
+        mant_out = (mant << (om - im)) & ((1 << om) - 1) if om > 0 else 0
+        exp_s = exp + (out_bias - in_bias)
+
+    exp_max = (1 << oe) - 1
+    if _is_e4m3(oe, om):
+        sat = exp_s > exp_max or (exp_s == exp_max and mant_out == (1 << om) - 1)
+        sat_exp, sat_mant = 15, 6
+    else:
+        sat = exp_s >= exp_max
+        sat_exp, sat_mant = exp_max, 0
+    if sat:
+        return (sign << (oe + om)) | (sat_exp << om) | sat_mant
+    if exp_s <= 0:
+        return 0
+    return (sign << (oe + om)) | (exp_s << om) | mant_out
+
+
+def cast_float_to_sint_hw(bits_in, in_dtype, out_bits, rounding=None):
+    """Golden model of CastOp (FloatML -> SInt), bit-exact with Float.toSInt.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    Round-then-saturate into the two's-complement range; exponent-zero flushes
+    to +0; the exact -2^(W-1) is preserved. Returns unsigned bit pattern.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    ie, im = in_dtype.exp_bits, in_dtype.mant_bits
+    bias = (1 << (ie - 1)) - 1
+
+    sign = (bits_in >> (ie + im)) & 1
+    exp = (bits_in >> im) & ((1 << ie) - 1)
+    mant = bits_in & ((1 << im) - 1)
+
+    if exp == 0:
+        return 0
+
+    e = exp - bias
+    full = (1 << im) | mant
+    shift = e - im
+    rounded_up = False
+    if shift >= 0:
+        mag = full << shift
+    else:
+        drop = min(-shift, im + 1)
+        kept = full >> drop
+        guard = (full >> (drop - 1)) & 1 if drop >= 1 else 0
+        sticky = (full & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if rounding != "trunc" and guard and (sticky or (kept & 1)):
+            kept += 1
+            rounded_up = True
+        mag = kept
+
+    max_pos = (1 << (out_bits - 1)) - 1
+    max_neg = 1 << (out_bits - 1)
+    pos_sat = e >= out_bits - 1 or mag > max_pos
+    neg_sat = e > out_bits - 1 or \
+        (e == out_bits - 1 and not (mant == 0 and not rounded_up)) or \
+        mag > max_neg
+    if sign:
+        v = -max_neg if neg_sat else -mag
+    else:
+        v = max_pos if pos_sat else mag
+    return v & ((1 << out_bits) - 1)
+
+
 def bias_add_hw(a_elements, bias, dtype):
     """Golden model of BiasAddOp: broadcast add of a bias vector (lanes=1 input)
     over A. A is a flat row-major list of elements; col(i) = i % len(bias)."""

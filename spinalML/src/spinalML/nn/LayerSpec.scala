@@ -209,7 +209,8 @@ case class Tanh() extends LayerSpec {
 case class Cast(
   targetType: HardType[Data],
   scales: Seq[Double] = Seq(1.0),
-  runtimeScale: Boolean = false
+  runtimeScale: Boolean = false,
+  rounding: Option[spinalML.RoundingMode] = None
 ) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)

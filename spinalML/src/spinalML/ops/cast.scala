@@ -92,9 +92,23 @@ case class CastOp[TIn <: Data, TOut <: Data](
       case (valIn: SInt, valOut: SInt) =>
         require(!useScale, "CastOp SInt -> SInt does not support scales")
         io.c.stream.payload(i).assignFrom(valIn.resize(valOut.getWidth).asInstanceOf[TOut])
-      // More cases can be added here if needed in the future (e.g. UInt -> Float, Float -> SInt, etc.)
+      case (valIn: FloatML, valOut: FloatML) =>
+        // OPS-10: same format is a bit-identical passthrough; otherwise
+        // Float.roundTo (narrowing, switch-aware) or exact widening.
+        require(!useScale, "CastOp FloatML -> FloatML does not support scales")
+        val converted =
+          if (valIn.expBits == valOut.expBits && valIn.mantBits == valOut.mantBits)
+            valIn.asInstanceOf[TOut]
+          else
+            spinalML.utils.Float.roundTo(valIn, valOut.expBits, valOut.mantBits, rounding).asInstanceOf[TOut]
+        io.c.stream.payload(i).assignFrom(converted)
+      case (valIn: FloatML, valOut: SInt) =>
+        // OPS-10: round-then-saturate into the SInt range (switch-aware).
+        require(!useScale, "CastOp FloatML -> SInt does not support scales")
+        io.c.stream.payload(i).assignFrom(
+          spinalML.utils.Float.toSInt(valIn, valOut.getWidth, rounding).asInstanceOf[TOut])
       case _ =>
-        throw new Exception("Type de cast non supporté (SInt -> FloatML et SInt -> SInt sont gérés)")
+        throw new Exception("Type de cast non supporté (SInt <-> FloatML et SInt -> SInt sont gérés)")
     }
   }
 

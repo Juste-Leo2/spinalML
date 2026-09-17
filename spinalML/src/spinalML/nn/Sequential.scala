@@ -611,7 +611,8 @@ case class Sequential(
 
       case c: Cast =>
         val scalePort = if (c.runtimeScale) io.dequantScale else None
-        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort)
+        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort,
+          rounding = c.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case _: Flatten =>
         reshape(flatten(inTensor), Seq(1, inTensor.shape.product))

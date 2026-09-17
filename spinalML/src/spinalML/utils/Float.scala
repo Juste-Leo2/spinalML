@@ -405,10 +405,94 @@ object Float {
       c.exponent := satExpS
       c.mantissa := satMantS
     } otherwise {
-      c.exponent := expRndSInt.asUInt.resized
+    c.exponent := expRndSInt.asUInt.resized
       c.mantissa := mantRnd
     }
-    
+
+    c
+  }
+
+  /**
+   * Hardware circuit to convert a FloatML into an SInt (OPS-10).
+   *
+   * Value = significand x 2^e (e = unbiased exponent). The binary point is
+   * shifted by (e - mantBits): left shifts are exact, right shifts drop
+   * fraction bits rounded to nearest-even (guard + sticky, tie-to-even)
+   * under [[Rne]] or truncated under [[Truncate]] (elaboration-only switch,
+   * RNE logic not built in truncate mode). The rounded magnitude saturates
+   * to the SInt range (round-then-saturate: e.g. 127.5 -> 127 on I8);
+   * -0 and exponent-zero flush to +0. The exact -2^(W-1) is preserved.
+   */
+  def toSInt(a: FloatML, outWidth: Int,
+             rounding: RoundingMode = RoundingConfig.current): SInt = {
+    require(outWidth >= 2, "toSInt needs at least 2 bits (sign + 1)")
+    val mantBits = a.mantBits
+    val bias = a.bias
+    val c = SInt(outWidth bits)
+
+    val aZero = a.exponent === 0
+    // Unbiased exponent, widened so (e - mantBits) never wraps.
+    val eW = a.expBits + 6
+    val eSInt = a.exponent.intoSInt.resize(eW bits) - S(bias, eW bits)
+    // Significand with hidden 1: full >= 2^mantBits, width mantBits+1.
+    val full = (B"1" ## a.mantissa).asUInt
+
+    // Binary-point shift relative to the significand LSB (may be negative).
+    val shiftS = eSInt - S(mantBits, eW + 1 bits)
+    // Left-shift amount, clamped: over-clamping only grows an already
+    // saturating magnitude (saturation is decided by eSInt, exactly).
+    val shiftW = log2Up(outWidth + 1)
+    val leftAmt = Mux(shiftS <= 0, U(0, shiftW bits),
+      Mux(shiftS > outWidth, U(outWidth, shiftW bits),
+        shiftS.asUInt.resize(shiftW bits)))
+    // Right-shift (fractional) amount, clamped so all selects stay in range;
+    // over-clamping only zeroes an already-zero result.
+    val dropW = log2Up(mantBits + 2)
+    val dropC = Mux(shiftS >= 0, U(0, dropW bits),
+      Mux(-shiftS > mantBits + 1, U(mantBits + 1, dropW bits),
+        (-shiftS).asUInt.resize(dropW bits)))
+
+    // Common magnitude width: covers full << outWidth.
+    val magW = mantBits + 1 + outWidth
+    val leftMag = (full << leftAmt).resize(magW bits)
+    val kept = full >> dropC
+    // Dynamic selects require exactly log2Up(vectorWidth) index bits.
+    val guardIdxW = log2Up(mantBits + 1)
+    val guardIdx = Mux(dropC === 0, U(0, guardIdxW bits), (dropC - 1).resize(guardIdxW bits))
+    val guard = Mux(dropC === 0, False, full(guardIdx))
+    val roundUp: Bool = if (rounding == RoundingMode.Rne) {
+      // Sticky = OR of full(0) .. full(guardIdx-1): dynamic bound, static
+      // unroll (static selects only, no dynamic-select hazards).
+      var stickyAcc: Bool = False
+      for (b <- 0 until mantBits + 1) {
+        stickyAcc = stickyAcc || (full(b) && U(b, guardIdxW bits) < guardIdx)
+      }
+      guard && (stickyAcc || kept.lsb)
+    } else False
+    val fracMag = (kept +^ roundUp.asUInt).resize(magW bits)
+    val isLeft = shiftS >= 0
+    val magR = Mux(isLeft, leftMag, fracMag)
+
+    // Saturation (exact, from eSInt + the rounded magnitude):
+    // |value| < 2^(e+1), so e >= W-1 always saturates positive; negative
+    // allows the exact -2^(W-1) (significand 1.0, no round-up). Rounding can
+    // still push a magnitude to 2^(W-1): clamp (pos) / keep (neg, = min).
+    val maxPosU = U((BigInt(1) << (outWidth - 1)) - 1, magW bits)
+    val maxNegU = U(BigInt(1) << (outWidth - 1), magW bits)
+    val posSat = (eSInt >= (outWidth - 1)) || (magR > maxPosU)
+    val negSat = (eSInt > (outWidth - 1)) ||
+      ((eSInt === (outWidth - 1)) && !(a.mantissa === 0 && !roundUp)) ||
+      (magR > maxNegU)
+    val maxPosS = S((BigInt(1) << (outWidth - 1)) - 1, outWidth bits)
+    val minNegS = S(-(BigInt(1) << (outWidth - 1)), outWidth bits)
+
+    when(aZero) {
+      c := S(0, outWidth bits)
+    } otherwise {
+      c := Mux(a.sign,
+        Mux(negSat, minNegS, (-magR.asSInt).resize(outWidth bits)),
+        Mux(posSat, maxPosS, magR.asSInt.resize(outWidth bits)))
+    }
     c
   }
 
@@ -458,8 +542,12 @@ object Float {
    * golden model's dtype.from_float rounding: mantissa overflow carries
    * into the exponent, underflow yields zero, overflow saturates to the
    * saturation encoding (448 for E4M3, inf-encoding otherwise).
+   *
+   * OPS-10: switch-aware (elaboration-only). [[Truncate]] drops the
+   * increment and keeps the legacy window bit-exact.
    */
-  def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int): FloatML = {
+  def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int,
+              rounding: RoundingMode = RoundingConfig.current): FloatML = {
     val c = FloatML(outExpBits, outMantBits)
     val biasDelta = ((1 << (outExpBits - 1)) - 1) - a.bias
     // The exponent sum must hold the input exponent plus the bias delta (which
@@ -480,9 +568,9 @@ object Float {
         val mantExt = (B"1" ## a.mantissa).asUInt           // hidden 1 + mantBits
         val kept = mantExt(a.mantBits downto drop)          // outMantBits + 1 bits
         val guard = mantExt(drop - 1)
-        val sticky = mantExt(drop - 2 downto 0) =/= 0
+        val sticky = if (drop > 1) (mantExt(drop - 2 downto 0) =/= 0) else False
 
-        val roundUp = guard && (sticky || kept.lsb)
+        val roundUp = if (rounding == RoundingMode.Rne) guard && (sticky || kept.lsb) else False
         val mantRnd = kept +^ roundUp.asUInt
         val mantOv = mantRnd.msb
 
