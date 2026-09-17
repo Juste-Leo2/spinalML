@@ -418,6 +418,12 @@ input[type="range"], .brush-size, [aria-label="Brush size"] {
 # A single 5x7 digit bitmap (0/1 only, no font dependency) upscaled x4 and
 # centred in the 28x28 network input. Enough to A/B two bitstreams (RNE vs
 # trunc); --save-results dumps the logits. See build_selftest_input().
+#
+# Note: on this W4A8 model RNE and trunc bitstreams legitimately produce the
+# same output on almost every input - the Cast rounds the integer to FP8 and
+# then multiplies by the runtime scale (a second rounding), which absorbs the
+# difference, and the FP8 Linear accumulation absorbs the rest. Identical
+# self-test results across builds are therefore expected, not a flash failure.
 # ---------------------------------------------------------------------------
 
 # A single 5x7 bitmap digit ('3'), upscaled x4 and centred in the 28x28 network
