@@ -5,14 +5,34 @@ from cocotb_test.simulator import run
 import pytest
 import math
 
-from golden_models.dtypes import FP8_E4M3, BF16
+from golden_models.dtypes import I8, FP8_E4M3, BF16
 from golden_models.ops import floatml_div, pwl_reciprocal_float, floatml_mul, reciprocal
 from utils.tb_utils import run_mill, copy_roms
 from utils.cocotb_helpers import run_binary_test
 
-# OPS-12: DivOp rejects integer types at elaboration (no Qm.n scale yet);
-# the I8/I16 goldens (lut/pwl_reciprocal_int) and testcases were removed here
-# in the same commit. Only the FloatML paths below are covered.
+# Integer division follows ONNX `Div`: exact truncation toward zero, same
+# dtype, saturating on div-by-zero / INT_MIN/-1 (never wrapping). Wave 5
+# step A covers <=8-bit; the >8-bit iterative divider is step B.
+
+def i8_div_bits(a, b):
+    va = int(I8.to_float(I8.from_float(a)))
+    vb = int(I8.to_float(I8.from_float(b)))
+    if vb == 0:
+        q = 0 if va == 0 else (I8.max_val if va > 0 else I8.min_val)
+    else:
+        q = math.trunc(va / vb)  # ONNX: rounding toward zero
+    q = max(I8.min_val, min(I8.max_val, q))
+    return q & ((1 << I8.bit_width) - 1)
+
+@cocotb.test()
+async def cocotb_div_i8(dut):
+    def expected_fn(a, b): return i8_div_bits(a, b)
+    def true_math(a, b): return a / b if b != 0 else float('inf')
+    await run_binary_test(dut, "Div", "I8", I8,
+                          [(-7.0, 2.0), (7.0, -2.0), (-7.0, -2.0), (10.0, 4.0),
+                           (-128.0, -1.0), (5.0, 0.0), (0.0, 0.0)],
+                          is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_math,
+                          edge_cases=[(-128.0, -1.0), (5.0, 0.0), (0.0, 0.0)])
 
 @cocotb.test()
 async def cocotb_div_fp8(dut):
@@ -50,5 +70,6 @@ def run_div_sim(dtype_filter, testcase_name, request=None):
         extra_env={"DEBUG_MATH": debug_flag}
     )
 
+def test_div_i8(request): run_div_sim("I8", "cocotb_div_i8", request)
 def test_div_fp8(request): run_div_sim("FP8", "cocotb_div_fp8", request)
 def test_div_bf16(request): run_div_sim("BF16", "cocotb_div_bf16", request)

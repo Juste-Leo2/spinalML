@@ -108,6 +108,16 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   flushé → `invStd` saturait à 448, y=28.0) ; vert y=0.5 avec eps. Vérifs :
   `LayerNormTest` ✅, suite universelle 10/10 ✅ (`UniversalPoolNormDemo`
   LayerNorm FP8 via le réplica), `test_layernorm1d.py` ✅.
+- **Division entière ONNX (step 5A, ≤8 bits)** : `IntDiv` (restoring divider
+  déroulé sur magnitudes + signe) dans `ops/div.scala` ; `DivOp` dispatche
+  float (chemin historique **inchangé bit-exact**) / int, SInt **et** UInt
+  ≤8 bits, troncature vers zéro, saturation div0 (`+max`/`-min`/`0`) et
+  `INT_MIN/-1` → max, jamais de wrap ; étage de sortie registré (clk + timing).
+  I16/I32 encore refusés avec message pointant le step B. Rouges : `DivTest`
+  I8/U8 (ancien `require` OPS-12), vert après. Vérifs : `DivTest` ✅ (Scala
+  SInt/UInt/FP8/BF16), `test_div.py` I8+FP8+BF16 ✅, `SoftmaxTest|AttentionTest|
+  RequantizeTest` 6/6 ✅, `DivFormal` ✅. Décision docs : **ONNX normatif**,
+  TFLite réservé aux LUT activations (step C).
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un
@@ -119,11 +129,14 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
 
 Ordre proposé :
 
-1. **Division Q-format + sigmoid/tanh quantifiés** (~3–4 j, PR dédiée) :
-   `fracBits`/scales, d'abord I8 en Q15 (LUT réciproque + RNE + saturation),
-   diviseur itératif si > 8 bits ; sémantique de probabilité quantifiée alignée
-   TFLite (`LOGISTIC scale=1/256 zp=−128`, `TANH scale=1/128 zp=0`) ; change
-   `LayerSpec` + goldens.
+1. **Division entière ONNX + sigmoid/tanh quantifiés** (~3 j) — **référence
+   changée de Q15 à ONNX** (spec stable : `QuantizeLinear` en RNE comme notre
+   défaut, `Div` exact ; TFLite diverge sur l'arrondi et n'a pas de Div int8
+   runtime) : `DivOp` int = troncature vers zéro exacte, I/O même dtype,
+   saturation div0/`INT_MIN/-1` ; divider restoring ≤8 bits, itératif >8 bits ;
+   sigmoïde/tanh quantifiés = LUT TFLite (seul manque ONNX core). **Fait
+   (step 5A)** : ≤8 bits SInt/UInt + goldens ; reste >8 bits (step B) et
+   activations quantifiées (step C).
 2. **NaN `e4m3fn` complet — fait (step 1)** : propagation seule dans
    mul/add/gt/roundTo + formel dédié, docs `rounding_policy.md` §5.
 3. **Test de conformité générique `LayerSpec` ↔ IO HW — fait (step 2)** :

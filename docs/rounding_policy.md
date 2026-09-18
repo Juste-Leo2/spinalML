@@ -166,11 +166,16 @@ dominant du projet reste la table de registres MatMul.
 
 ## 7. Backlog lié
 
-1. **Division Q-format + sigmoid/tanh quantifiés** (OPS-03/12) : `require`
-   explicite sur les types entiers en Wave 4 ; vraie sémantique Qm.n et scales
-   TFLite en Wave 5 (PR dédiée).
-2. **Propagation NaN e4m3fn** (mant=111) : comparateur + mux dans mul/add/gt/
-   roundTo (~1 j + goldens), pendant de DTYPE-07.
+1. **Division entière — sémantique ONNX (fait, Wave 5 step 5A ≤8 bits)** :
+   `DivOp` int = `Div` ONNX **exact** (troncature vers zéro, I/O même dtype,
+   saturation sur diviseur 0 et `INT_MIN/-1`), divider restoring déroulé
+   ≤8 bits (`IntDiv`), float inchangé. Décision actée : **ONNX est la
+   référence normative** (RNE pour `QuantizeLinear` comme notre défaut, div
+   exacte) ; TFLite ne sert que là où ONNX n'a rien (LUT sigmoïde/tanh). Reste :
+   divider itératif >8 bits (step B) et Sigmoid/Tanh quantifiés TFLite (step C,
+   `LOGISTIC 1/256 zp=-128`, `TANH 1/128 zp=0`). Q15 LUT abandonné (ONNX ne
+   définit pas de division quantifiée, TFLite n'a pas d'op runtime standard).
+2. **Propagation NaN e4m3fn — fait (Wave 5 step 1)** : voir §5.
 3. **Sous-normaux** : uniquement si un modèle le justifie ; FTZ reste le défaut.
 4. **Rounding avgpool int — fait (Wave 5 step 3)** : RNE via le switch,
    `RequantizeMath` partagé avec `RequantizeOp` (SInt `shiftSaturate`, UInt
@@ -178,4 +183,6 @@ dominant du projet reste la table de registres MatMul.
    réplica `LayerReplicas.avgPool*Int(outBits, rounding)` via `requantizeScalar`,
    goldens `avgpool1d_hw`/`avgpool2d_hw` paramétrés par mode, tests RNE + lane
    trunc.
-5. **Résiduel FP8 LAY-04** : eps min-normal représentable (décision + golden).
+5. **Résiduel FP8 LAY-04 — fait (Wave 5 step 4)** : eps = `enc(1e-5)` si
+   représentable sinon plus petit normal (E4M3 `2^-6`, E2M1 `1.0`), réplica +
+   golden alignés.

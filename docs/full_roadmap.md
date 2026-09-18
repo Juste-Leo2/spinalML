@@ -25,7 +25,7 @@ This document provides the exhaustive technical implementation history, backlog,
 - [x] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
 - [x] Implement Normalization layers (BatchNorm, LayerNorm).
 - [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
-- [ ] **Q-format division & quantized Sigmoid/Tanh scales (Wave 5, ex-OPS-03/12)**: integer `Div`/`Sigmoid`/`Tanh` are refused at elaboration since Wave 4 commit 9 (`require`: no fixed-point scale, `1/b` collapses to 0 for `|b| >= 3`). Wave 5 lands the Qm.n integer path: reciprocal LUT + RNE + saturation first in Q15/I8, iterative divider above 8 bits, and probability scales aligned with TFLite (`LOGISTIC scale=1/256 zp=-128`, `TANH scale=1/128 zp=0`), with `LayerSpec`/goldens updates. See `docs/rounding_policy.md` §7 and `docs/wave4_wave5_plan.md` §4.
+- [ ] **ONNX integer Div & quantized Sigmoid/Tanh (Wave 5, ex-OPS-03/12)**: reference switched from Q15 to **ONNX** — the only stable quantized contract (`QuantizeLinear` is round-nearest-even like our default; TFLite kernels diverge on tie rounding and define no runtime int8 `Div`). Integer `Div` semantics = ONNX exact truncation toward zero, saturating on div-by-zero and `INT_MIN/-1`, same dtype. DONE (step 5A): `DivOp` SInt/UInt ≤8 bits via the `IntDiv` restoring divider, Scala + Python exact goldens. Remaining: >8-bit iterative divider (step B, I16/I32 still refused) and quantized Sigmoid/Tanh with TFLite LUT scales (`LOGISTIC 1/256 zp=-128`, `TANH 1/128 zp=0`, step C). See `docs/rounding_policy.md` §7 and `docs/wave4_wave5_plan.md` §4.
 
 ## 4. System Integration & Advanced Improvements (Future Work)
 

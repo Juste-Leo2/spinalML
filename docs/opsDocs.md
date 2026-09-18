@@ -12,7 +12,7 @@ All operations process data through the `Tensor[T]` abstraction, which wraps har
 | :--- | :--- | :--- | :--- |
 | **Add / Sub** | `add(a, b)` / `sub(a, b)` | Element-wise addition and subtraction | Fully pipelined, saturating or wrapping |
 | **Mul** | `mul(a, b)` | Element-wise multiplication | Inferred multipliers (LUT or pipelined DSP) |
-| **Div** | `div(a, b)` | Element-wise division | FloatML only (LUT/PWL reciprocal). Integer types refused at elaboration (OPS-12), Q-format division in Wave 5 |
+| **Div** | `div(a, b)` | Element-wise division | FloatML: Mul + Reciprocal (LUT/PWL). Integers ≤8 bits: exact ONNX `Div` (trunc toward zero, saturating; Wave 5 step 5A) |
 | **Abs** | `abs(a)` | Absolute value | Combinational sign inversion |
 | **BiasAdd** | `bias_add(a, bias)` | Broadcast add of a 1D vector over the inner dimension | Zero-overhead streaming broadcast |
 | **ScaleAdd** | `scale_add(x, a, b)` | Fused MAC `a * x + b` | Single-cycle fused arithmetic |
