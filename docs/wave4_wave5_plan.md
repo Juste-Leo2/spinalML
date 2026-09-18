@@ -71,6 +71,19 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   universel softmax/activations en RNE et lane trunc ; preuve MNIST inchangé
   (`md5sum` builds RNE/trunc identiques — aucun de ces générateurs n'alimente
   son datapath).
+- **Garde générique LAY-02 (conformité `LayerSpec` ↔ IO HW, step 2)** :
+  `LayerSpecTest` « LayerSpec metadata matches hardware ports (LAY-02) »
+  (`LayerSpecConformanceComp`) compare à l'élaboration les ports d'un composant
+  par famille de spec (Linear, Conv1D/2D, BatchNorm1D, LayerNorm1D,
+  ClassicalAttention) aux `getWeightShape()/getBiasShape()/getOutShape()` —
+  relations non tautologiques (Conv reconstruit depuis K/inC/outC, attention
+  = somme des 4 ports `[embedDim, embedDim]` sans biais). Second test
+  « weightless LayerSpecs declare no weight/bias region (LAY-02) » verrouille
+  le trigger DMA `Sequential.scala:204` (`head > 0`). Test-only, aucun
+  changement RTL ; sensibilité prouvée en rouge par injection temporaire de
+  `Seq(4,1)` (`IllegalArgumentException: LAY-02 conformance …`).
+  Non-régression : `test-all -k "LayerSpecTest|SequentialTest|AcceleratorTest"`
+  4/4 ✅.
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un
