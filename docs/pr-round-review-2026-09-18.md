@@ -139,7 +139,7 @@ Statut : `[V]` = vérifié personnellement (code relu et/ou exécution),
 | 3.6 | `tests/python/golden_models/ops.py:1090,1118,1170,1224` | Bloc de résolution `SPINALML_ROUNDING` copié 4× au lieu d'appeler `resolve_rounding` → risque de drift. | `[A]` |
 | 3.7 | `tests/python/utils/tb_utils.py:15-22` | Docstring dit refléter la propriété JVM `spinalml.rounding`, mais seule l'env var est lue ; logique dupliquée. | `[A]` |
 | 3.8 | `tests/python/test_cast_float.py:88` + imports | `run_cast_float_sim(..., request=None)` ignore `request` ; `pytest` importé inutilisé ; `cleanup_verilog` non importé → fixture autouse absente. | `[A]` |
-| 3.9 | `ops.py:1093-1100` vs `RequantizeMath.shiftSaturate` | Cas `shift >= in_bits` sur un tie `INT_MIN` : golden 0, Scala −1. Non exercé par les tests. | `[A]` |
+| 3.9 | `ops.py:1093-1100` vs `RequantizeMath.shiftSaturate` | ~~Cas `shift >= in_bits` sur un tie `INT_MIN` : golden 0, Scala −1.~~ **CORRIGÉ (2026-09-18)** : la branche RNE `shift >= inW` était fausse pour *tous* les positifs non nuls (→ 1) et pour le tie `INT_MIN` (→ −1) ; elle retourne désormais `S(0)` (RNE de `\|x\|/2^shift <= 1/2`). Test Scala ajouté, `test-all -k RequantizeTest`, `RoundingPolicyTest` et `test-all-python -k requantize` verts. | `[V]` |
 | 3.10 | `SigmoidTest.scala:117`, `TanhTest.scala:117` | « is still refused » faux pour I16 (accepté sur `main`) ; commentaires formels `I8 suite re-added` trompeurs (les suites I10 sont supprimées). | `[A]` |
 | 3.11 | `MatmulTest.scala:242-283` | Le deadlock « dense unpadded B ne produit jamais » est figé comme contrat attendu (pas d'`assertThrows` à l'élaboration, contrairement à Concatenate/Slice/Attention). | `[A]` |
 | 3.12 | `cli.py` `build` | `import os as _os` local alors qu'`os` est déjà importé en tête ; `_resolve_rounding` accepte toute valeur inconnue comme RNE sans validation/erreur. | `[V]` |
@@ -160,6 +160,9 @@ Statut : `[V]` = vérifié personnellement (code relu et/ou exécution),
 1. ~~**1.1 `Float.toSInt`**~~ : **corrigé et vérifié** (RTL + golden, suites
    Scala et Python vertes). Reste à committer.
 2. ~~**1.2 `flash_runner`**~~ : **accepté par design** (décision mainteneur).
+2b. ~~**3.9 requantize `shift >= inW`**~~ : **corrigé et vérifié** (branche RNE
+   fausse pour tous les positifs non nuls et le tie `INT_MIN` ; test Scala
+   ajouté, suites Requantize/RoundingPolicy/Python vertes). Reste à committer.
 3. **2.5 DivFormal** : soit restaurer une preuve formelle I8 sur le nouveau
    diviseur, soit ticketer explicitement (la réécriture est le plus gros
    changement du lot).

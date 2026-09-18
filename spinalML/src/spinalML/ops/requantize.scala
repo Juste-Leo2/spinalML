@@ -31,10 +31,10 @@ object RequantizeMath {
     } else {
       val truncated = (value >> shift).resize(inW)
       if (shift >= inW) {
-        // All magnitude bits dropped: exact result is in (-1, 1).
-        // Only value == 0 is exact; +/- tie rounds to even (0).
-        val roundUp = (value =/= 0) && (value(inW - 1) === False || (value(inW - 2 downto 0) =/= 0))
-        (truncated + Mux(roundUp, S(1, inW bits), S(0, inW bits))).resize(inW)
+        // All magnitude bits dropped: |value| / 2^shift <= 1/2 (tie only for
+        // Int.MinValue when shift == inW), so RNE always rounds to 0 (ties to
+        // even). NOT `truncated`, whose floor is -1 for any negative input.
+        S(0, inW bits)
       } else {
         val guard = value(shift - 1)
         val sticky: Bool = if (shift >= 2) (value(shift - 2 downto 0) =/= 0) else False
