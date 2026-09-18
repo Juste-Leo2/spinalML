@@ -118,9 +118,10 @@ class CastTest extends AnyFunSuite {
     }
   }
 
-  // OPS-10: BF16 -> I8 with RNE ties (43.5 -> 44), saturation (1032 -> 127),
-  // negatives (-43.5 -> -44) and the exact minimum (-128.0 -> -128).
-  test("OPS-10 Cast BF16 to I8 rounds ties and saturates (RNE)") {
+  // OPS-10: BF16 -> I8 with RNE ties (43.5 -> 44), saturation (1152.0 -> 127),
+  // negatives (-43.5 -> -44), the exact minimum (-128.0 -> -128) and
+  // below-0.5 magnitudes (RNE rounds to 0, not 1).
+  test("OPS-10 Cast BF16 to I8 rounds ties, below-half and saturates (RNE)") {
     SimConfig.withWave.compile(CastF2ITestComp(RoundingMode.Rne)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.io.a.stream.valid #= false
@@ -132,7 +133,13 @@ class CastTest extends AnyFunSuite {
         (false, 132, 46, 44),    // 43.5 -> 44 (tie, even up)
         (false, 137, 16, 127),   // 1152.0 -> saturate 127
         (true, 132, 46, -44),    // -43.5 -> -44
-        (true, 134, 0, -128)     // -128.0 exact minimum
+        (true, 134, 0, -128),    // -128.0 exact minimum
+        (false, 125, 64, 0),     // 0.375 -> 0 (below 0.5)
+        (false, 125, 26, 0),     // 0.3008 -> 0
+        (true, 125, 64, 0),      // -0.375 -> 0
+        (false, 125, 0, 0),      // 0.25 exact quarter -> 0
+        (false, 126, 0, 0),      // 0.5 tie -> 0 (even)
+        (false, 126, 64, 1)      // 0.75 -> 1
       )
       for ((s, e, m, expected) <- vectors) {
         val in = dut.io.a.stream.payload(0).asInstanceOf[FloatML]

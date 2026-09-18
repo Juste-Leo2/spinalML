@@ -1242,10 +1242,14 @@ def cast_float_to_sint_hw(bits_in, in_dtype, out_bits, rounding=None):
         mag = full << shift
     else:
         drop = min(-shift, im + 1)
+        # When the binary point lies further left than the clamp (-shift > im+1,
+        # i.e. |value| < 0.5), the clamped guard is the hidden bit, not the true
+        # guard: RNE of |value| < 0.5 is zero, so the increment must be gated.
+        tiny = -shift > im + 1
         kept = full >> drop
         guard = (full >> (drop - 1)) & 1 if drop >= 1 else 0
         sticky = (full & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
-        if rounding != "trunc" and guard and (sticky or (kept & 1)):
+        if rounding != "trunc" and not tiny and guard and (sticky or (kept & 1)):
             kept += 1
             rounded_up = True
         mag = kept

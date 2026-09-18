@@ -497,12 +497,18 @@ object Float {
     val leftAmt = Mux(shiftS <= 0, U(0, shiftW bits),
       Mux(shiftS > outWidth, U(outWidth, shiftW bits),
         shiftS.asUInt.resize(shiftW bits)))
-    // Right-shift (fractional) amount, clamped so all selects stay in range;
-    // over-clamping only zeroes an already-zero result.
+    // Right-shift (fractional) amount, clamped so all selects stay in range.
+    // The clamped window is exact for |value| >= 0.5; below that `tooSmall`
+    // disables the RNE increment (see below).
     val dropW = log2Up(mantBits + 2)
     val dropC = Mux(shiftS >= 0, U(0, dropW bits),
       Mux(-shiftS > mantBits + 1, U(mantBits + 1, dropW bits),
         (-shiftS).asUInt.resize(dropW bits)))
+    // True when the binary point lies further left than the clamp
+    // (-shiftS > mantBits + 1, i.e. |value| < 0.5): the clamped guard is then
+    // the hidden bit, not the true guard, so the RNE increment must be
+    // disabled -- RNE of |value| < 0.5 is zero.
+    val tooSmall = shiftS < S(-(mantBits + 1), eW + 1 bits)
 
     // Common magnitude width: covers full << outWidth.
     val magW = mantBits + 1 + outWidth
@@ -519,7 +525,7 @@ object Float {
       for (b <- 0 until mantBits + 1) {
         stickyAcc = stickyAcc || (full(b) && U(b, guardIdxW bits) < guardIdx)
       }
-      guard && (stickyAcc || kept.lsb)
+      guard && (stickyAcc || kept.lsb) && !tooSmall
     } else False
     val fracMag = (kept +^ roundUp.asUInt).resize(magW bits)
     val isLeft = shiftS >= 0

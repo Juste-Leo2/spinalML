@@ -74,9 +74,12 @@ async def cocotb_cast_f2f(dut):
 
 @cocotb.test()
 async def cocotb_cast_f2i(dut):
-    # 43.5 tie, 1152.0 sat, -43.5, -128.0 exact min, +0.0, 4.0 exact, 0.5 -> 0.
+    # 43.5 tie, 1152.0 sat, -43.5, -128.0 exact min, +0.0, 4.0 exact,
+    # below-0.5 magnitudes (0.375, 0.3008, -0.375 -> 0) and the 0.25/0.5/0.75
+    # boundaries (RNE: 0, 0, 1).
     vectors = [(0, 132, 46), (0, 137, 16), (1, 132, 46), (1, 134, 0),
-               (0, 0, 0), (0, 129, 0), (0, 126, 0)]
+               (0, 0, 0), (0, 129, 0), (0, 125, 64), (0, 125, 26),
+               (1, 125, 64), (0, 125, 0), (0, 126, 0), (0, 126, 64)]
     got = await sample_f2i(dut, vectors)
     mode = rounding_mode()
     for (v, out) in zip(vectors, got):
