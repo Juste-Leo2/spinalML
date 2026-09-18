@@ -252,6 +252,49 @@ def ensure_apycula_patched():
             except Exception:
                 pass
 
+def patch_gowin_cin_from_logic(pnr_json: Path) -> int:
+    """Backport of nextpnr commit 6030081a15 ("gowin: fix carry-in adapter
+    table for CIN from logic").
+
+    The head ALU inserted for a carry chain whose CIN comes from logic takes
+    that signal on I0 and leaves CIN unconnected. The buggy table made it
+    output COUT = I0 | CIN, so the injected carry depended on the carry state
+    at the *placed* location (neighbouring active carry chain); 0x000a gives
+    COUT = I0. The latent corruption only shows up for the layouts unlucky
+    enough to chain such a head ALU onto an active carry chain (observed as
+    saturated MNIST logits on the RNE + explicit DSP build). Applied to the
+    routed pnr.json just before gowin_pack. No-op once nextpnr is updated.
+
+    TODO(tech-debt): relocate this toolchain backport (and
+    ensure_apycula_patched) into a dedicated cli/spinalml_cli/patches module
+    so it can be deleted in one place once the bundled tools are up to date.
+    See docs/bugs/2026-09-gowin-rne-dsp-lut-saturation.md §8.
+    """
+    bad16 = "0101000001011010"   # RAW_ALU_LUT 0x505a
+    good16 = "0000000000001010"  # RAW_ALU_LUT 0x000a
+    try:
+        with open(pnr_json, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return 0
+    patched = 0
+    for mod in data.get("modules", {}).values():
+        for cell in mod.get("cells", {}).values():
+            if cell.get("type") != "ALU":
+                continue
+            parms = cell.get("parameters", {})
+            if parms.get("CIN_NETTYPE") != "LOGIC":
+                continue
+            raw = parms.get("RAW_ALU_LUT", "")
+            if len(raw) >= 16 and raw[-16:] == bad16:
+                parms["RAW_ALU_LUT"] = raw[:-16] + good16
+                patched += 1
+    if patched:
+        with open(pnr_json, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    return patched
+
+
 def adapt_constraints_for_ports(original_cst: Optional[Path], ports: List[str], target_cst: Path):
     """
     Creates an adapted Gowin CST file mapping the board's pins to the actual top module port names.
@@ -699,6 +742,11 @@ def _execute_bitstream_packing(
     pack_tool_name = board_cfg.get("build", {}).get("pack_tool", "gowin_pack")
     if pack_tool_name == "gowin_pack":
         ensure_apycula_patched()
+        n_cin = patch_gowin_cin_from_logic(pnr_json)
+        if n_cin:
+            console.print(
+                f" [yellow]Patched {n_cin} CIN-from-logic head ALU(s) "
+                f"(nextpnr 6030081a15 backport).[/yellow]")
 
     pack_bin = get_bin_path(pack_tool_name)
     bitstream_name = board_cfg.get("build", {}).get("bitstream_name", "top.fs")

@@ -173,6 +173,13 @@ Ordre proposé :
 7. **Petites dettes** : références de docs périmées, généricité, messages
    d'erreur d'élaboration.
 
+**Validation silicium (2026-09-18)** : lane RNE + 25 `MULT18X18` explicites
+(MNIST W4A8) bit-exact vs réplique NumPy sur Tang Primer 20K, après backport du
+fix nextpnr `6030081a15` (« CIN from logic » : head-ALU `RAW_ALU_LUT`
+`0x505a` → `0x000a`, appliqué au `pnr.json` avant `gowin_pack`). Détails et
+matrice de repro : `bugs/2026-09-gowin-rne-dsp-lut-saturation.md`. La Wave 5 est
+donc validée avec les DSP matériels.
+
 ## 5. Risques / garde-fous
 
 - Le switch **ne doit jamais** être un signal runtime (coût LUT partout) —
