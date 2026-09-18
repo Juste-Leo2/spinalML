@@ -105,12 +105,25 @@ Statut : `[V]` = vérifié personnellement (code relu et/ou exécution),
 - `SqrtOp`/`RsqrtOp` : tests compile-only + négatif→0, aucun golden positif
   RNE/trunc.
 
-### 2.5 Preuve formelle du diviseur entier supprimée `[A]`
+### 2.5 Preuve formelle du diviseur entier supprimée `[A]` — **CORRIGÉ**
 
-- `DivFormal.scala` : `DivFormal_I8` + `doVerify("div_i8")` supprimés alors que
-  `div.scala` est réécrit (~290 lignes, chemins comb + sériel, 4 largeurs).
-  Remplacés par 5 vecteurs de simulation.
-- Voir aussi §4 : la revue fonctionnelle de `div.scala` n'a pas été faite.
+> **Correctif (2026-09-18)** : `DivFormal_I8` restauré dans
+> `symbolicTest/ops/DivFormal.scala` (et `doVerify("div_i8")` ré-ajouté au
+> `main`). La preuve ne réutilise pas l'ancien golden « reciprocal ROM +
+> multiply » (obsolète) mais vérifie la **caractérisation** de la division
+> tronquée pour tous les couples d'entrées symboliques :
+> `r = a - q*b`, `|r| < |b|`, `sign(r) ∈ {0, sign(a)}`, plus les deux cas
+> saturants (`b == 0` sign-aware, `INT_MIN / -1 → +max`). Non-vacuité validée
+> par mutation (assertion rendue fausse → la preuve échoue) puis restauration
+> à l'identique. `test-all-formal -k DivFormal` : **PASS** (I8 + FP4, 94.7 s).
+> Revue fonctionnelle statique de `div.scala` faite au passage : `absBits`,
+> restoring divider comb/sériel, gestion de signe, saturation et handshake
+> jugés corrects ; le point faible restant est la **non-couverture formelle du
+> chemin sériel I16/I32** (BMC plus profond), couvert par les tests de sim.
+
+- `DivFormal.scala` : `DivFormal_I8` + `doVerify("div_i8")` étaient supprimés
+  alors que `div.scala` est réécrit (~290 lignes, chemins comb + sériel,
+  4 largeurs), remplacés par 5 vecteurs de simulation.
 
 ### 2.6 `examples/Mnist/inference.py` : `encode_e4m3` en half-up `[A]`
 
@@ -143,15 +156,18 @@ Statut : `[V]` = vérifié personnellement (code relu et/ou exécution),
 | 3.10 | `SigmoidTest.scala:117`, `TanhTest.scala:117` | « is still refused » faux pour I16 (accepté sur `main`) ; commentaires formels `I8 suite re-added` trompeurs (les suites I10 sont supprimées). | `[A]` |
 | 3.11 | `MatmulTest.scala:242-283` | Le deadlock « dense unpadded B ne produit jamais » est figé comme contrat attendu (pas d'`assertThrows` à l'élaboration, contrairement à Concatenate/Slice/Attention). | `[A]` |
 | 3.12 | `cli.py` `build` | `import os as _os` local alors qu'`os` est déjà importé en tête ; `_resolve_rounding` accepte toute valeur inconnue comme RNE sans validation/erreur. | `[V]` |
+| 3.13 | `ops/div.scala:87` (docstring) | Latence sérielle annoncée `width + 2` cycles, réelle `width + 1` (fire → `valid`), d'après la FSM ; docstring à ajuster. Aucun impact fonctionnel (handshake). | `[V]` |
 
 ---
 
 ## 4. Non couvert par cette passe
 
-- Revue fonctionnelle de `ops/div.scala` (réécriture ~290 lignes), du chemin
-  `requantize.scala` (`shiftSaturate`), de `math_luts.scala`/`PWL.scala`
-  (mapping `Truncate → Math.round`), de `sigmoid.scala`/`tanh.scala`, du câblage
+- Revue fonctionnelle de `math_luts.scala`/`PWL.scala` (mapping
+  `Truncate → Math.round`), de `sigmoid.scala`/`tanh.scala`, du câblage
   `nn/Sequential.scala`/`LayerSpec.scala`, et de `batchnorm.scala`/`layernorm.scala`.
+- Couverture formelle du **chemin sériel** `div.scala` (I16/I32) : la preuve
+  restaurée couvre le comb I8 ; le sériel reste couvert par les tests de sim
+  (vecteurs limites + goldens).
 - `scripts/diff_hw_json.py` (+518 lignes, outil de diagnostic).
 - Cohérence documentaire globale (hors docs déjà touchées par la PR).
 
@@ -163,8 +179,8 @@ Statut : `[V]` = vérifié personnellement (code relu et/ou exécution),
 2b. ~~**3.9 requantize `shift >= inW`**~~ : **corrigé et vérifié** (branche RNE
    fausse pour tous les positifs non nuls et le tie `INT_MIN` ; test Scala
    ajouté, suites Requantize/RoundingPolicy/Python vertes). Reste à committer.
-3. **2.5 DivFormal** : soit restaurer une preuve formelle I8 sur le nouveau
-   diviseur, soit ticketer explicitement (la réécriture est le plus gros
-   changement du lot).
+3. ~~**2.5 DivFormal**~~ : **preuve I8 restaurée et vérifiée** (caractérisation
+   + saturation, mutation testée, `test-all-formal -k DivFormal` PASS). Reste
+   à committer. Revue fonctionnelle de `div.scala` faite (aucun bug trouvé).
 4. 2.1/2.2/2.4 : trous de couverture à combler ou ticketer.
 5. Le reste : hygiène, peut partir en issues.
