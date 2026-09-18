@@ -56,7 +56,9 @@ object HWArithmetic {
     val expSum = a.e + b.e - bias +
       (if (overflow) 1 else 0) + (if (mantOv) 1 else 0)
 
-    if (aZero || bZero || expSum <= 0) PZERO
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits))
+      nanProp(a, b, expBits, mantBits)
+    else if (aZero || bZero || expSum <= 0) PZERO
     else {
       val (satExp, satMant) = satFields(expBits, mantBits)
       if (needsSat(expBits, mantBits, expSum, finalMant)) F(sign, satExp, satMant)
@@ -86,6 +88,8 @@ object HWArithmetic {
     val sameSign = larger.s == smaller.s
     val mantSumExt = if (sameSign) lmExt + smShifted else lmExt - smShifted
 
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits))
+      return nanProp(a, b, expBits, mantBits)
     if (aZero && bZero) return PZERO
     if (mantSumExt == 0) return PZERO
 
@@ -114,6 +118,9 @@ object HWArithmetic {
   def gt(a: F, b: F): Boolean = {
     val aZero = a.e == 0
     val bZero = b.e == 0
+    // NOTE (Wave 5): bare triples carry no format, so NaN cannot be detected
+    // here (E4M3 (15,7) vs a normal e=15 elsewhere). NaN-safety lives in
+    // fmax below, which owns the format — mirroring RTL Mux(gt, a, b).
     if (aZero && bZero) false
     else if (aZero) b.s
     else if (bZero) !a.s
@@ -122,7 +129,29 @@ object HWArithmetic {
     else (a.e < b.e) || (a.e == b.e && a.m < b.m)
   }
 
-  def fmax(a: F, b: F, expBits: Int, mantBits: Int): F = if (gt(a, b)) a else b
+  def fmax(a: F, b: F, expBits: Int, mantBits: Int): F =
+    // Wave 5: mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN,
+    // i.e. the second operand wins whenever either side is NaN.
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits)) b
+    else if (gt(a, b)) a else b
+
+  /** NaN detection/payload mirroring spinalML.utils.Float (Wave 5,
+    * propagation-only). E4M3: single slot (15, 7). Other formats: all-ones
+    * exponent with nonzero mantissa (never emitted, host/DDR inputs only).
+    * Sign rule: first NaN operand's sign. */
+  private def isE4M3R(expBits: Int, mantBits: Int): Boolean =
+    spinalML.utils.Float.isE4M3(expBits, mantBits)
+
+  def isNaN(f: F, expBits: Int, mantBits: Int): Boolean =
+    if (isE4M3R(expBits, mantBits)) f.e == 15 && f.m == 7
+    else f.e == ((1 << expBits) - 1) && f.m != 0
+
+  def nanOf(sign: Boolean, expBits: Int, mantBits: Int): F =
+    if (isE4M3R(expBits, mantBits)) F(sign, 15, 7)
+    else F(sign, (1 << expBits) - 1, 1)
+
+  def nanProp(a: F, b: F, expBits: Int, mantBits: Int): F =
+    nanOf(if (isNaN(a, expBits, mantBits)) a.s else b.s, expBits, mantBits)
 
   /** Saturation encoding/predicate mirroring spinalML.utils.Float (DTYPE-07). */
   private def satFields(expBits: Int, mantBits: Int): (Int, Int) =

@@ -50,6 +50,34 @@ object Float {
   }
 
   /**
+   * NaN detection (Wave 5, propagation-only).
+   *
+   * E4M3 (`fn`) reserves a single NaN slot (exponent field 15, mantissa
+   * all-ones); every other format treats any all-ones exponent with nonzero
+   * mantissa as NaN. Those encodings are never emitted (saturation produces
+   * 448/inf) but can arrive from host/DDR inputs. Subnormal-encoded values
+   * (exponent 0, mantissa != 0) are zero-class, NOT NaN (FTZ).
+   */
+  def isNaN(expBits: Int, mantBits: Int, exp: UInt, mantissa: UInt): Bool = {
+    val expMax = (1 << expBits) - 1
+    if (isE4M3(expBits, mantBits)) (exp === expMax) && (mantissa === ((1 << mantBits) - 1))
+    else (exp === expMax) && (mantissa =/= 0)
+  }
+
+  /**
+   * Canonical NaN output encoding (Wave 5, propagation-only).
+   *
+   * E4M3: the single slot (15, 7). Other formats: (all-ones exponent,
+   * mantissa 1). Never emitted spontaneously — saturation keeps producing
+   * 448/inf — only forwarded when an input is NaN. Callers preserve the
+   * first NaN operand's sign (`a` if `a` is NaN else `b`).
+   */
+  def nanEncoding(expBits: Int, mantBits: Int): (Int, Int) = {
+    if (isE4M3(expBits, mantBits)) (15, (1 << mantBits) - 1)
+    else ((1 << expBits) - 1, 1)
+  }
+
+  /**
    * Hardware combinatorial circuit to multiply two FloatML types.
    * This logic will be synthesized into DSP blocks and LUTs.
    */
@@ -108,8 +136,17 @@ object Float {
       mantOvM.asUInt.intoSInt.resized                 // rounding carry adjusts the exponent
 
     // 5. Overflow / Underflow Checks and Final Assignment
+    // Wave 5: a NaN operand propagates (canonical encoding, first-NaN
+    // sign); saturation never emits NaN spontaneously (448/inf).
+    val aNaNM = isNaN(expBits, mantBits, a.exponent, a.mantissa)
+    val bNaNM = isNaN(expBits, mantBits, b.exponent, b.mantissa)
+    val (nanExpM, nanMantM) = nanEncoding(expBits, mantBits)
     val (satExpM, satMantM) = satEncoding(expBits, mantBits)
-    when(a_is_zero || b_is_zero || expSumSInt <= 0) {
+    when(aNaNM || bNaNM) {
+      c.exponent := nanExpM
+      c.mantissa := nanMantM
+      c.sign := Mux(aNaNM, a.sign, b.sign)
+    } elsewhen(a_is_zero || b_is_zero || expSumSInt <= 0) {
       // Underflow or Zero
       c.exponent := 0
       c.mantissa := 0
@@ -154,7 +191,13 @@ object Float {
     val b_zero = b.exponent === 0
     
     val res = Bool()
-    when(a_zero && b_zero) {
+    // Wave 5: any comparison with NaN is False (IEEE); max() therefore
+    // returns the non-NaN operand, like fmax.
+    val aNaNG = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
+    val bNaNG = isNaN(b.expBits, b.mantBits, b.exponent, b.mantissa)
+    when(aNaNG || bNaNG) {
+      res := False
+    } elsewhen(a_zero && b_zero) {
       res := False
     } elsewhen(a_zero) {
       res := (b.sign === True)
@@ -244,7 +287,16 @@ object Float {
     val sumIsZero = mantSumExt === 0
     val (satExpA, satMantA) = satEncoding(expBits, mantBits)
 
-    when(a_zero && b_zero) {
+    // Wave 5: a NaN operand propagates (canonical encoding, first-NaN
+    // sign); saturation never emits NaN spontaneously (448/inf).
+    val aNaNA = isNaN(expBits, mantBits, a.exponent, a.mantissa)
+    val bNaNA = isNaN(expBits, mantBits, b.exponent, b.mantissa)
+    val (nanExpA, nanMantA) = nanEncoding(expBits, mantBits)
+    when(aNaNA || bNaNA) {
+      c.exponent := nanExpA
+      c.mantissa := nanMantA
+      c.sign := Mux(aNaNA, a.sign, b.sign)
+    } elsewhen(a_zero && b_zero) {
       c.exponent := 0
       c.mantissa := 0
       c.sign := False
@@ -525,8 +577,17 @@ object Float {
     c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
 
     val expSInt = a.exponent.intoSInt.resize(outExpBits + 2 bits) + biasDelta
+    // Wave 5: NaN inputs propagate to the output format's canonical NaN
+    // (this also covers same-format widening, where the saturation branch
+    // below would otherwise collapse NaN to inf).
+    val inNaNW = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
+    val (nanExpW, nanMantW) = nanEncoding(outExpBits, outMantBits)
     when(a.exponent === 0) {
       c.exponent := 0
+    } elsewhen(inNaNW) {
+      c.sign := a.sign
+      c.exponent := nanExpW
+      c.mantissa := nanMantW
     } elsewhen(expSInt >= ((1 << outExpBits) - 1)) {
       c.exponent := ((1 << outExpBits) - 1)
       c.mantissa := 0
@@ -557,10 +618,18 @@ object Float {
 
     val aZero = a.exponent === 0 && a.mantissa === 0
 
+    // Wave 5: NaN inputs propagate to the output format's canonical NaN
+    // (sign preserved), on both the narrowing and widening paths below.
+    val inNaNR = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
+    val (nanExpR, nanMantR) = nanEncoding(outExpBits, outMantBits)
     when(aZero) {
       c.sign := False
       c.exponent := 0
       c.mantissa := 0
+    } elsewhen(inNaNR) {
+      c.sign := a.sign
+      c.exponent := nanExpR
+      c.mantissa := nanMantR
     } otherwise {
       c.sign := a.sign
       if (a.mantBits > outMantBits) {
@@ -592,9 +661,16 @@ object Float {
         }
       } else  {
         // Exact widening path: fraction stays normalized, left-justified.
-        c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
+        // Local wire (NOT c.mantissa): the saturation check below reads the
+        // mantissa while conditionally rewriting it, which Spinal flags as a
+        // combinational loop whenever the output is E4M3 (its saturates()
+        // branch reads the mantissa; other formats only read the exponent).
+        // Latent until Wave 5: no caller ever widened INTO E4M3 before
+        // (same-format casts are passthrough, widenings target BF16/FP32).
+        val mantW = ((a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits))
+        c.mantissa := mantW
         val expSInt = a.exponent.intoSInt.resize(expSIntWidth bits) + biasDelta
-        when(saturates(outExpBits, outMantBits, expSInt, c.mantissa)) {
+        when(saturates(outExpBits, outMantBits, expSInt, mantW)) {
           c.exponent := satExpR
           c.mantissa := satMantR
         } elsewhen(expSInt <= 0) {

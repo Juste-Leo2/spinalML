@@ -129,9 +129,15 @@ dominant du projet reste la table de registres MatMul.
   (chantier multi-jours, Wave 5 « optionnel »). Cas visible : LAY-04 résiduel
   (diff² sous-flue alors que diff ≠ 0).
 - **NaN E4M3** : convention `e4m3fn` = un seul NaN (mant=111), pas d'infini,
-  saturation à 448. Notre modèle encode la saturation en (exp=all-ones, mant=0)
-  et décode mant=111 comme 480. DTYPE-07 aligne la saturation (448) ; la
-  propagation NaN complète est reportée en Wave 5.
+  saturation à 448. Wave 5 (propagation seule, fait) : `Float.mul/add/gt/roundTo/widen`
+  reconnaissent le slot (helpers `isNaN`/`nanEncoding`) et le propagent (signe du
+  premier opérande NaN, `gt` toujours False, `max` hérite `Mux(gt,a,b)` donc le
+  second opérande gagne sur NaN — asymétrie documentée) ; autres formats : exposant
+  all-ones + mantisse ≠ 0 → NaN canonique `(all-ones, 1)`. Jamais d'émission
+  spontanée (saturation → 448/inf inchangée). **Piège documenté** : les chemins
+  LUT/PWL ne propagent pas — LUT float ≤ 8 bits décodent les bits NaN en 480.0
+  (convention golden), LUT int et coefs PWL tombent à 0/saturé. Goldens Python
+  inchangés (`from_float` flushe NaN→0 côté stimulus, `(15,7)` décode toujours 480).
 - **TFLite** : half-away historique dans les kernels (non mandaté par la spec).
   Référence retenue uniquement pour les scales quantifiées des sigmoïdes
   (Wave 5 : `LOGISTIC scale=1/256 zp=−128`, `TANH scale=1/128 zp=0`).
