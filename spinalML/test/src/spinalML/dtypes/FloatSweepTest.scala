@@ -38,11 +38,20 @@ object FloatGolden {
   private def unpack(bits: Int, e: Int, m: Int): (Boolean, Int, Int) =
     (((bits >> (e + m)) & 1) == 1, (bits >> m) & ((1 << e) - 1), bits & ((1 << m) - 1))
 
+  /** E4M3 (`fn`, e=4/m=3) is the only format without infinity. */
+  def isE4M3(e: Int, m: Int): Boolean = e == 4 && m == 3
+
+  /** Saturation output encoding (mirrors `Float.satEncoding`: 448 for E4M3, inf otherwise). */
+  def satBits(sign: Boolean, e: Int, m: Int): Int =
+    if (isE4M3(e, m)) pack(sign, 15, 6, e, m) else pack(sign, (1 << e) - 1, 0, e, m)
+
   /** Encodings whose value round-trips through the format (only these flow in real datapaths). */
   def isCanonical(bits: Int, e: Int, m: Int): Boolean = {
     val (_, exp, mant) = unpack(bits, e, m)
     if (exp == 0) bits == 0                       // zero: single encoding (no subnormals)
-    else if (exp == (1 << e) - 1) mant == 0       // infinity: mantissa must be zero
+    else if (exp == (1 << e) - 1)
+      if (isE4M3(e, m)) mant <= 6                 // E4M3: field 15 holds finite 256..448; mant 7 is NaN
+      else mant == 0                              // infinity: mantissa must be zero
     else true                                      // normals: always round-trip
   }
 
@@ -73,8 +82,12 @@ object FloatGolden {
 
     val expSum = ea + eb - bias + ovf             // unbounded: cannot wrap
 
+    // Saturation (mirrors `Float.saturates`: E4M3 keeps finite field-15
+    // values and only saturates past-the-max or onto the NaN slot).
+    val maxExp = (1 << e) - 1
     if (expSum <= 0) pack(false, 0, 0, e, m)      // underflow -> zero
-    else if (expSum >= ((1 << e) - 1)) pack(sign, (1 << e) - 1, 0, e, m) // saturate
+    else if (expSum > maxExp || (!isE4M3(e, m) && expSum == maxExp) ||
+             (isE4M3(e, m) && expSum == maxExp && normMant == 7)) satBits(sign, e, m)
     else pack(sign, expSum, normMant, e, m)
   }
 
@@ -122,8 +135,10 @@ object FloatGolden {
 
     val newExp = lExp + 1 - lzAdj
 
+    val maxExpA = (1 << e) - 1
     if (sumIsZeroEnc || raw == 0 || newExp <= 0) pack(false, 0, 0, e, m)
-    else if (newExp >= ((1 << e) - 1)) pack(lSign, (1 << e) - 1, 0, e, m)
+    else if (newExp > maxExpA || (!isE4M3(e, m) && newExp == maxExpA) ||
+             (isE4M3(e, m) && newExp == maxExpA && finalMant == 7)) satBits(lSign, e, m)
     else pack(lSign, newExp, finalMant, e, m)
   }
 }
