@@ -14,7 +14,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
-| `Div` | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | Element-wise division. FloatML: Mul + Reciprocal (LUT/PWL). I4/I8 + U4/U8: exact ONNX `Div` semantics (truncation toward zero, saturating on div-by-zero and `INT_MIN/-1`; `IntDiv` restoring divider, Wave 5 step 5A). I16/I32 pending the step B iterative divider. |
+| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division. FloatML: Mul + Reciprocal (LUT/PWL). All SInt/UInt (≤32 bits): exact ONNX `Div` semantics (truncation toward zero, saturating on div-by-zero and `INT_MIN/-1`) — ≤8 bits combinational `IntDiv`, I16/I32 serial restoring FSM (fixed `width + 2` cycle latency, one beat in flight; Wave 5 steps 5A/5B). |
 | `BiasAdd` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Broadcast add of a bias vector over the last dimension (columns). |
 | `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
 | `Log` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Element-wise logarithm, compile-time base (default `e` = ln, `10` = log10). Domain `x <= 0 -> 0` (industry convention, like `Rsqrt`). |

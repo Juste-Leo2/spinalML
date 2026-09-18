@@ -7,7 +7,7 @@ import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I8, U8, FP8_E4M3, I16, BF16}
+import spinalML.dtypes.{I8, U8, FP8_E4M3, I16, I32, BF16}
 
 case class DivTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
@@ -98,14 +98,35 @@ class DivTest extends AnyFunSuite {
     )
   }
 
-  test("OPS-12 Div I16 integer division is rejected until the >8-bit divider (step B)") {
-    assertThrows[IllegalArgumentException] { spinal.core.SpinalVerilog(DivTestComp(I16())) }
+  test("Div exact signed I16 serial divider (ONNX semantics)") {
+    runDivCases(
+      I16(),
+      cases = Seq(
+        ((30000, -32768), (1000, 1)),       // (30, -32768)
+        ((-32768, 12345), (-1, -30000)),    // (32767 sat, 0)
+        ((-300, 32767), (7, 32767))         // (-42 trunc, 1)
+      ),
+      expected = Seq((30, -32768), (32767, 0), (-42, 1))
+    )
+  }
+
+  test("Div exact signed I32 serial divider (ONNX semantics)") {
+    runDivCases(
+      I32(),
+      cases = Seq(
+        ((2000000000, -2147483648), (-4, 1)),   // (-500000000, -2147483648)
+        ((-2147483648, 123456789), (-1, 1000))  // (2147483647 sat, 123456)
+      ),
+      expected = Seq((-500000000, -2147483648), (2147483647, 123456))
+    )
   }
 
   // Compilation entry points used by the Python runner (`run_mill` selects by
   // test-name substring via `-z <dtype>`).
   test("Div exact I8 compilation") { SpinalConfig().generateVerilog(DivTestComp(I8())) }
   test("Div exact U8 compilation") { SpinalConfig().generateVerilog(DivTestComp(U8())) }
+  test("Div exact I16 compilation") { SpinalConfig().generateVerilog(DivTestComp(I16())) }
+  test("Div exact I32 compilation") { SpinalConfig().generateVerilog(DivTestComp(I32())) }
   test("Div LUT compilation on FP8") { SpinalConfig().generateVerilog(DivTestComp(FP8_E4M3())) }
   test("Div PWL compilation on BF16") { SpinalConfig().generateVerilog(DivTestComp(BF16())) }
 }

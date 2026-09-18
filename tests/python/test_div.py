@@ -5,34 +5,44 @@ from cocotb_test.simulator import run
 import pytest
 import math
 
-from golden_models.dtypes import I8, FP8_E4M3, BF16
+from golden_models.dtypes import I8, I16, FP8_E4M3, BF16
 from golden_models.ops import floatml_div, pwl_reciprocal_float, floatml_mul, reciprocal
 from utils.tb_utils import run_mill, copy_roms
 from utils.cocotb_helpers import run_binary_test
 
 # Integer division follows ONNX `Div`: exact truncation toward zero, same
 # dtype, saturating on div-by-zero / INT_MIN/-1 (never wrapping). Wave 5
-# step A covers <=8-bit; the >8-bit iterative divider is step B.
+# step A covers <=8-bit (combinational), step B the serial >8-bit divider.
 
-def i8_div_bits(a, b):
-    va = int(I8.to_float(I8.from_float(a)))
-    vb = int(I8.to_float(I8.from_float(b)))
+def int_div_bits(dtype, a, b):
+    va = int(dtype.to_float(dtype.from_float(a)))
+    vb = int(dtype.to_float(dtype.from_float(b)))
     if vb == 0:
-        q = 0 if va == 0 else (I8.max_val if va > 0 else I8.min_val)
+        q = 0 if va == 0 else (dtype.max_val if va > 0 else dtype.min_val)
     else:
         q = math.trunc(va / vb)  # ONNX: rounding toward zero
-    q = max(I8.min_val, min(I8.max_val, q))
-    return q & ((1 << I8.bit_width) - 1)
+    q = max(dtype.min_val, min(dtype.max_val, q))
+    return q & ((1 << dtype.bit_width) - 1)
 
 @cocotb.test()
 async def cocotb_div_i8(dut):
-    def expected_fn(a, b): return i8_div_bits(a, b)
+    def expected_fn(a, b): return int_div_bits(I8, a, b)
     def true_math(a, b): return a / b if b != 0 else float('inf')
     await run_binary_test(dut, "Div", "I8", I8,
                           [(-7.0, 2.0), (7.0, -2.0), (-7.0, -2.0), (10.0, 4.0),
                            (-128.0, -1.0), (5.0, 0.0), (0.0, 0.0)],
                           is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_math,
                           edge_cases=[(-128.0, -1.0), (5.0, 0.0), (0.0, 0.0)])
+
+@cocotb.test()
+async def cocotb_div_i16(dut):
+    def expected_fn(a, b): return int_div_bits(I16, a, b)
+    def true_math(a, b): return a / b if b != 0 else float('inf')
+    await run_binary_test(dut, "Div", "I16", I16,
+                          [(30000.0, 1000.0), (-32768.0, -1.0), (-300.0, 7.0),
+                           (12345.0, -30000.0), (5.0, 0.0)],
+                          is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_math,
+                          edge_cases=[(-32768.0, -1.0), (5.0, 0.0)])
 
 @cocotb.test()
 async def cocotb_div_fp8(dut):
@@ -71,5 +81,6 @@ def run_div_sim(dtype_filter, testcase_name, request=None):
     )
 
 def test_div_i8(request): run_div_sim("I8", "cocotb_div_i8", request)
+def test_div_i16(request): run_div_sim("I16", "cocotb_div_i16", request)
 def test_div_fp8(request): run_div_sim("FP8", "cocotb_div_fp8", request)
 def test_div_bf16(request): run_div_sim("BF16", "cocotb_div_bf16", request)

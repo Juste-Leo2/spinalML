@@ -166,13 +166,15 @@ dominant du projet reste la table de registres MatMul.
 
 ## 7. Backlog lié
 
-1. **Division entière — sémantique ONNX (fait, Wave 5 step 5A ≤8 bits)** :
+1. **Division entière — sémantique ONNX (fait, Wave 5 steps 5A + 5B)** :
    `DivOp` int = `Div` ONNX **exact** (troncature vers zéro, I/O même dtype,
-   saturation sur diviseur 0 et `INT_MIN/-1`), divider restoring déroulé
-   ≤8 bits (`IntDiv`), float inchangé. Décision actée : **ONNX est la
-   référence normative** (RNE pour `QuantizeLinear` comme notre défaut, div
-   exacte) ; TFLite ne sert que là où ONNX n'a rien (LUT sigmoïde/tanh). Reste :
-   divider itératif >8 bits (step B) et Sigmoid/Tanh quantifiés TFLite (step C,
+   saturation sur diviseur 0 et `INT_MIN/-1`), float inchangé. SInt/UInt ≤8 bits :
+   divider restoring déroulé combinatoire (`IntDiv`, 1 cycle). >8 bits (I16/I32) :
+   divider restoring série (FSM, 1 beat en vol, latence fixe `width + 2` cycles,
+   backpressure par `ready`), bit-identique au chemin combinatoire. Décision
+   actée : **ONNX est la référence normative** (RNE pour `QuantizeLinear` comme
+   notre défaut, div exacte) ; TFLite ne sert que là où ONNX n'a rien (LUT
+   sigmoïde/tanh). Reste : Sigmoid/Tanh quantifiés TFLite (step C,
    `LOGISTIC 1/256 zp=-128`, `TANH 1/128 zp=0`). Q15 LUT abandonné (ONNX ne
    définit pas de division quantifiée, TFLite n'a pas d'op runtime standard).
 2. **Propagation NaN e4m3fn — fait (Wave 5 step 1)** : voir §5.
