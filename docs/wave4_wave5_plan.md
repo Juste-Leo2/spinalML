@@ -61,6 +61,16 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   `UniversalResidualDemo` échouaient donc en RNE (vertes sur `main`). Re-baseline
   switch-aware (voir `rounding_policy.md` §3) : suite universelle 10/10 en RNE,
   lane trunc revalidée sur Residual/Mixed2D.
+- **Option B transverse (générateurs LUT/ROM switch-aware)** : `roundRNE` branché
+  aux 7 sites d'élaboration (`generateFloatMantissaROM`, `intEncodeFn`,
+  `floatEncodeFn`, inline sqrt/rsqrt/log dont `log2ToBase`), param `rounding`
+  défauté sur `generateROMs`/`UnaryPWLOp` et les 5 feuilles
+  (Exp/Reciprocal/Sqrt/Rsqrt/Log), composés en env-only volontaire. Goldens
+  Python threadés (`pwl_*`, `SIntML/FloatML.from_float`, idiome
+  `rounding=None→env`) ; suites exp/reciprocal/sqrt/rsqrt/log + formels +
+  universel softmax/activations en RNE et lane trunc ; preuve MNIST inchangé
+  (`md5sum` builds RNE/trunc identiques — aucun de ces générateurs n'alimente
+  son datapath).
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un

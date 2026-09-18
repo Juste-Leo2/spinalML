@@ -39,7 +39,7 @@ numpy/PyTorch, pour un coût matériel marginal (voir §4).
 | Cast `SInt → FloatML` (`Float.fromSInt`) | RNE (guard/sticky) — actuellement troncature (DTYPE-06) |
 | Cast `FloatML → FloatML` / `FloatML → SInt` (`CastOp`) | `widen` (exact) / `roundTo` (RNE) — actuellement non branché (OPS-10) |
 | Requantification entière (accus → dtype) | `shift + RNE + saturation symétrique`, un seul primitive partagé (`RequantizeOp`) |
-| Génération des LUT (élaboration) | RNE (`BigDecimal HALF_EVEN`), aligné sur `round()` Python — actuellement `Math.round` half-up |
+| Génération des LUT (élaboration) | RNE (`roundRNE` half-even), aligné sur `round()` Python — switch-aware (Option B, fait) ; `Truncate` = legacy `Math.round` half-up bit-exact |
 | Saturation | Toujours vers la valeur max représentable (finie) ; jamais de wrap |
 | `sqrt`/`rsqrt` d'une entrée négative | Politique de domaine : résultat 0 (voir OPS-02) |
 | Sous-normaux | Flush-to-zero (FTZ) documenté, voir §5 |
@@ -68,6 +68,13 @@ object RoundingConfig {
 - **Per-op** : `RequantizeOp(..., rounding: RoundingMode = RoundingConfig.current)`,
   idem `Float.fromSInt`, `CastOp`, `batchnorm`, `avgpool` si touché.
   À l'élaboration : `if (rounding == Truncate) shiftLegacy else shiftRNE`.
+- **LUT/ROM (Option B, env-only)** : `MathLUTs.generateFloatMantissaROM/intEncodeFn/floatEncodeFn`,
+  `PWLLUTs.generateROMs` + `UnaryPWLOp`, et les 5 feuilles `ExpOp/ReciprocalOp/SqrtOp/RsqrtOp/LogOp`
+  (param `rounding` défauté, compagnons `apply` idem, sites inline sqrt/rsqrt/log dont la
+  constante Q0.16 `log2ToBase`). Les composés (`DivOp`, `SigmoidOp`, `TanhOp`, `Softmax1D`,
+  `LayerNorm1D`) sont **volontairement sans override** : primitifs internes sans `LayerSpec`,
+  ils suivent l'env via les défauts (un futur besoin par-couche passera par une spec,
+  comme Cast/Requantize/BatchNorm).
 - **Per-layer** : `Requantize(shift, targetType, rounding: Option[RoundingMode] = None)`
   et `Cast(..., rounding = None)` ; `None` = config globale.
 - **CLI** : `--rounding {rne|trunc}` sur `generate`/`build` (miroir de
@@ -94,7 +101,7 @@ supplémentaire. Référence design W4A8 : ~31,7 k LC (cf. `full_roadmap.md`),
 |---|---|---|---|---|
 | Requantize RNE (guard/sticky + incrément étroit) | 10–15 | 0 (ou 1 étage si timing) | 0 | 0 |
 | `fromSInt` RNE (sticky + incrément mantisse + carry) | 12–18 / voie | 0 | 0 | 0 |
-| Génération ROM RNE (constantes d'élaboration) | 0 | 0 | 0 | 0 |
+| Génération ROM RNE (constantes d'élaboration, Option B) | 0 | 0 | 0 | 0 |
 | DTYPE-07 saturation E4M3 448 (params Scala compile-time) | 0 | 0 | 0 | 0 |
 | OPS-02 domaine négatif (1 mux) | 1–2 / voie | 0 | 0 | 0 |
 | FTZ documenté / `require` / docs / tests | 0 | 0 | 0 | 0 |

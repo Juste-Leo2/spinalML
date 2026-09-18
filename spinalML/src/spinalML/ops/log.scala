@@ -7,12 +7,16 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
+import spinalML.{RoundingConfig, RoundingMode}
 
 case class LogOp[T <: Data](
   dataType: HardType[T],
   shape: Seq[Int],
   lanes: Int,
-  base: Double = Math.E
+  base: Double = Math.E,
+  // Option B (switch-aware): ROM/LUT constant rounding follows the
+  // elaboration mode (RNE vs legacy). Composed ops use the default (env).
+  rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
   val bitWidth = dataType.getBitsWidth
 
@@ -28,9 +32,9 @@ case class LogOp[T <: Data](
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
-      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits))
+      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits, rounding))
     } else {
-      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
+      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth, rounding))
     }
 
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, mathFn)
@@ -49,14 +53,18 @@ case class LogOp[T <: Data](
     val mantBits = fType.mantBits
     val bias = fType.bias
 
-    // ln(2)/ln(b) in Q0.16 (e.g. base=e: 45426, base=10: 19728)
-    val log2ToBase = Math.round(Math.log(2.0) / Math.log(base) * 65536.0).toInt
+    // ln(2)/ln(b) in Q0.16 (e.g. base=e: 45426, base=10: 19728).
+    // Option B switch for coherence (invariant for e/10: neither product
+    // is an exact .5 tie, but an arbitrary future base could tie).
+    val log2ToBase = (if (rounding == RoundingMode.Rne) MathLUTs.roundRNE(Math.log(2.0) / Math.log(base) * 65536.0)
+                      else Math.round(Math.log(2.0) / Math.log(base) * 65536.0)).toInt
 
     // ROM: index = mantissa (mantBits), output = log2(1 + m/2^mantBits) as Q8.8 fraction
     val log2MantLuts = for (i <- 0 until lanes) yield {
       val romContent = for (m <- 0 until (1 << mantBits)) yield {
         val frac = Math.log(1.0 + m.toDouble / (1 << mantBits)) / Math.log(2.0)
-        val encoded = Math.round(frac * 256.0).toInt
+        val encoded = (if (rounding == RoundingMode.Rne) MathLUTs.roundRNE(frac * 256.0)
+                       else Math.round(frac * 256.0)).toInt
         B(encoded, 8 bits)
       }
       Mem(Bits(8 bits), initialContent = romContent)
@@ -142,15 +150,16 @@ case class LogOp[T <: Data](
 
     val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
 
-    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn, rounding)
     pwlOp.io.a <> io.a
     io.c <> pwlOp.io.c
   }
 }
 
 object log {
-  def apply[T <: Data](a: Tensor[T], base: Double = Math.E): Tensor[T] = {
-    val comp = LogOp(a.dataType, a.shape, a.lanes, base)
+  def apply[T <: Data](a: Tensor[T], base: Double = Math.E,
+                       rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
+    val comp = LogOp(a.dataType, a.shape, a.lanes, base, rounding)
     comp.io.a <> a
     comp.io.c
   }

@@ -6,19 +6,25 @@ import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
+import spinalML.{RoundingConfig, RoundingMode}
 
 object PWLLUTs {
   // Generates ROM for slopes (a) and intercepts (b)
-  // segmentFn(i) should return a tuple of Double (a, b) for the i-th segment
-  def generateROMs[T <: Data](numSegments: Int, segmentFn: Int => (Double, Double), dataType: HardType[T]): (Mem[Bits], Mem[Bits]) = {
+  // segmentFn(i) should return a tuple of Double (a, b) for the i-th segment.
+  // Option B (switch-aware): the coefficient encoding follows `rounding`
+  // (half-even vs legacy half-up); the segment fits themselves are rounding-
+  // free (pure Double pairs), so createSegmentFn/createConstantSegmentFn
+  // take no rounding parameter.
+  def generateROMs[T <: Data](numSegments: Int, segmentFn: Int => (Double, Double), dataType: HardType[T],
+                              rounding: RoundingMode = RoundingConfig.current): (Mem[Bits], Mem[Bits]) = {
     val bitWidth = dataType.getBitsWidth
     val isFloat = dataType().isInstanceOf[FloatML]
-    
+
     val encodeFn = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
-      MathLUTs.floatEncodeFn(f.expBits, f.mantBits)
+      MathLUTs.floatEncodeFn(f.expBits, f.mantBits, rounding)
     } else {
-      MathLUTs.intEncodeFn(bitWidth)
+      MathLUTs.intEncodeFn(bitWidth, rounding)
     }
     
     val romAContent = for (i <- 0 until numSegments) yield {
@@ -98,7 +104,10 @@ case class UnaryPWLOp[T <: Data](
   lanes: Int,
   numSegments: Int,
   segmentIndexFn: T => UInt, // Extracts the ROM index from the input value
-  segmentFn: Int => (Double, Double) // Returns (slope a, intercept b) for a segment
+  segmentFn: Int => (Double, Double), // Returns (slope a, intercept b) for a segment
+  // Option B: forwarded to generateROMs (sole caller) so PWL coefficient
+  // ROMs follow the elaboration rounding mode like every LUT ROM.
+  rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
   
   val io = new Bundle {
@@ -108,7 +117,7 @@ case class UnaryPWLOp[T <: Data](
   
   // Replicate ROMs for each lane to allow parallel lookups
   val roms = for (i <- 0 until lanes) yield {
-    PWLLUTs.generateROMs(numSegments, segmentFn, dataType)
+    PWLLUTs.generateROMs(numSegments, segmentFn, dataType, rounding)
   }
   
   // Pipeline signals

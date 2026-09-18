@@ -1,6 +1,19 @@
 # Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
 import numpy as np
+import os
+
+
+def resolve_rounding(rounding=None):
+    """Shared Option B switch: None follows SPINALML_ROUNDING (default RNE).
+
+    Mirrors the RTL elaboration switch (`RoundingConfig.current`): 'rne'
+    (half-even) vs 'trunc' (legacy half-up / truncation bit-exact).
+    """
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    return rounding
 
 class FloatML:
     def __init__(self, exp_bits: int, mant_bits: int):
@@ -30,8 +43,14 @@ class FloatML:
         value = fraction * (2 ** (exp_val - self.bias))
         return -value if sign_bit else value
 
-    def from_float(self, value: float) -> int:
-        """Convert a Python float into the integer bit representation of the FloatML"""
+    def from_float(self, value: float, rounding=None) -> int:
+        """Convert a Python float into the integer bit representation of the FloatML.
+
+        Option B: the mantissa quantizes half-even (Python round, like the
+        RTL roundRNE) under RNE, or legacy half-up (floor(x + 0.5), like
+        Math.round) under trunc. None follows SPINALML_ROUNDING.
+        """
+        rounding = resolve_rounding(rounding)
         if value == 0.0 or np.isnan(value):
             return 0
             
@@ -70,7 +89,10 @@ class FloatML:
         
         # Adjust exponent with bias
         exp_val = exp + self.bias
-        mant_val = int(round((mant - 1.0) * (1 << self.mant_bits)))
+        if rounding != "trunc":
+            mant_val = int(round((mant - 1.0) * (1 << self.mant_bits)))
+        else:
+            mant_val = int(math.floor((mant - 1.0) * (1 << self.mant_bits) + 0.5))
         
         # Handle mantissa rounding overflow FIRST (can rescue an underflow)
         if mant_val >= (1 << self.mant_bits):
@@ -113,12 +135,20 @@ class SIntML:
             return float(bits - (1 << self.bit_width))
         return float(bits)
         
-    def from_float(self, value: float) -> int:
+    def from_float(self, value: float, rounding=None) -> int:
+        """Integer quantize (2's complement bits). Option B: half-even under
+        RNE (like the RTL roundRNE), legacy half-up under trunc. None
+        follows SPINALML_ROUNDING."""
         if np.isnan(value):
             return 0
         import math
-        # Java's Math.round equivalent
-        clamped = max(float(self.min_val), min(float(self.max_val), math.floor(value + 0.5)))
+        rounding = resolve_rounding(rounding)
+        if rounding != "trunc":
+            q = round(value)
+        else:
+            # Java's Math.round equivalent
+            q = math.floor(value + 0.5)
+        clamped = max(float(self.min_val), min(float(self.max_val), q))
         int_val = int(clamped)
         if int_val < 0:
             return int_val + (1 << self.bit_width)

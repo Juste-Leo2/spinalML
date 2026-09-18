@@ -7,8 +7,13 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
+import spinalML.{RoundingConfig, RoundingMode}
 
-case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false) extends Component {
+case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false,
+                              // Option B (switch-aware): ROM/LUT constant rounding
+                              // follows the elaboration mode (RNE vs legacy).
+                              // Composed ops instantiate with the default (env).
+                              rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
@@ -24,9 +29,9 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
-      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits))
+      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits, rounding))
     } else {
-      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
+      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth, rounding))
     }
     
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, negToZeroFn)
@@ -54,7 +59,8 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
         var e_adj = if (y == 1.0) 0 else -1
         var m_out_frac = if (y == 1.0) 0.0 else (y * 2.0 - 1.0)
         
-        var m_out_int = Math.round(m_out_frac * (1 << mantBits)).toInt
+        var m_out_int = (if (rounding == RoundingMode.Rne) MathLUTs.roundRNE(m_out_frac * (1 << mantBits))
+                         else Math.round(m_out_frac * (1 << mantBits))).toInt
         if (m_out_int >= (1 << mantBits)) {
           m_out_int = 0
           e_adj += 1
@@ -139,15 +145,16 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     val mathFn = (x: Double) => negToZeroFn(x)
     val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
     
-    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn, rounding)
     pwlOp.io.a <> io.a
     io.c <> pwlOp.io.c
   }
 }
 
 object rsqrt {
-  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false): Tensor[T] = {
-    val comp = RsqrtOp(a.dataType, a.shape, a.lanes, forceAlg)
+  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false,
+                       rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
+    val comp = RsqrtOp(a.dataType, a.shape, a.lanes, forceAlg, rounding)
     comp.io.a <> a
     comp.io.c
   }

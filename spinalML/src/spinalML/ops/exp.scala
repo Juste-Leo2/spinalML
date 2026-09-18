@@ -7,8 +7,13 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
+import spinalML.{RoundingConfig, RoundingMode}
 
-case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
+case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
+                            // Option B (switch-aware): ROM/LUT constant rounding
+                            // follows the elaboration mode (RNE vs legacy).
+                            // Composed ops instantiate with the default (env).
+                            rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
   
   val io = new Bundle {
@@ -20,9 +25,9 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
-      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits))
+      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits, rounding))
     } else {
-      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
+      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth, rounding))
     }
     
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, Math.exp)
@@ -42,7 +47,7 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val lutIndexBits = 8
     
     val mantLuts = for (i <- 0 until lanes) yield {
-      spinalML.utils.MathLUTs.generateFloatMantissaROM(lutIndexBits, mantBits, x => Math.pow(2.0, x - 1.0))
+      spinalML.utils.MathLUTs.generateFloatMantissaROM(lutIndexBits, mantBits, x => Math.pow(2.0, x - 1.0), rounding)
     }
     
     val outPayload = Vec(dataType, lanes)
@@ -134,15 +139,15 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val mathFn = Math.exp _
     val segmentFn = spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, isFloat, expBits, mantBits, indexBits, mathFn)
     
-    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn, rounding)
     pwlOp.io.a <> io.a
     io.c <> pwlOp.io.c
   }
 }
 
 object exp {
-  def apply[T <: Data](a: Tensor[T]): Tensor[T] = {
-    val comp = ExpOp(a.dataType, a.shape, a.lanes)
+  def apply[T <: Data](a: Tensor[T], rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
+    val comp = ExpOp(a.dataType, a.shape, a.lanes, rounding)
     comp.io.a <> a
     comp.io.c
   }
