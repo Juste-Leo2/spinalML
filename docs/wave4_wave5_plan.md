@@ -99,6 +99,15 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   `test-all -k "SequentialTest|AcceleratorTest|Mnist"` 5/5 ✅ (BF16 + W4A8),
   suite universelle 10/10 ✅ (5 démos AvgPool), `BatchNorm/LayerNorm/Cast/
   RoundingPolicy` 4/4 ✅.
+- **Résiduel FP8 LAY-04 (step 4)** : epsilon LayerNorm = `floatEncodeFn(1e-5)`
+  si représentable (BF16 inchangé), sinon plus petit normal positif
+  `(exp=1, mant=0)` — E4M3 `2^-6`, E2M1 `1.0` (décision : fallback conditionnel
+  uniforme, pas de refus FP4). Réplica `LayerReplicas.layerNorm1D` et golden
+  `ops.py::layernorm_hw` (`floatml_add(var, eps)` avant rsqrt) alignés.
+  Rouge : `LayerNormTest` trame FP8 `[0.5, 0.5625, 0.5, 0.5]` (`diff²=2^-8`
+  flushé → `invStd` saturait à 448, y=28.0) ; vert y=0.5 avec eps. Vérifs :
+  `LayerNormTest` ✅, suite universelle 10/10 ✅ (`UniversalPoolNormDemo`
+  LayerNorm FP8 via le réplica), `test_layernorm1d.py` ✅.
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un
@@ -115,15 +124,15 @@ Ordre proposé :
    diviseur itératif si > 8 bits ; sémantique de probabilité quantifiée alignée
    TFLite (`LOGISTIC scale=1/256 zp=−128`, `TANH scale=1/128 zp=0`) ; change
    `LayerSpec` + goldens.
-2. **NaN `e4m3fn` complet** (mant=111) : reconnaissance/propagation dans
-   mul/add/gt/roundTo (~1 j + goldens), pendant de DTYPE-07.
-3. **Test de conformité générique `LayerSpec` ↔ IO HW** (classe LAY-02) : pour
-   chaque `LayerSpec`, vérifier forme/type des poids/biais contre les ports
-   matériels instanciés (~1 j).
-4. **Résiduel FP8 LAY-04** : sous-flux `diff²` avec `diff ≠ 0` ; eps min-normal
-   représentable + décision golden.
-5. **Rounding avgpool int** : division shiftée arrondie (RNE via le switch) si
-   la sémantique entière compte.
+2. **NaN `e4m3fn` complet — fait (step 1)** : propagation seule dans
+   mul/add/gt/roundTo + formel dédié, docs `rounding_policy.md` §5.
+3. **Test de conformité générique `LayerSpec` ↔ IO HW — fait (step 2)** :
+   `LayerSpecTest` instancie un composant par famille et compare
+   formes/biais/sorties aux métadonnées (classe LAY-02).
+4. **Résiduel FP8 LAY-04 — fait (step 4)** : eps = 1e-5 si encodé ≠ 0 sinon
+   min-normal (E4M3 `2^-6`, E2M1 `1.0`), réplica + golden alignés (voir §3).
+5. **Rounding avgpool int — fait (step 3)** : `RequantizeMath` partagé, RNE via
+   le switch, goldens switch-aware (voir §3).
 6. **Sous-normaux** (optionnel lourd, multi-jours) : uniquement si un modèle le
    justifie ; FTZ reste le défaut.
 7. **Petites dettes** : références de docs périmées, généricité, messages

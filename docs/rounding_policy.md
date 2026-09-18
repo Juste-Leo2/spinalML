@@ -133,8 +133,10 @@ dominant du projet reste la table de registres MatMul.
   sous le min normal). Exemple FP8 E4M3 : min normal 2⁻⁶ ≈ 0,0156, le format
   définit des sous-normaux jusqu'à 2⁻⁹, que nous encodons 0. PyTorch
   `float8_e4m3fn` les représente → **divergence assumée**, non implémentée
-  (chantier multi-jours, Wave 5 « optionnel »). Cas visible : LAY-04 résiduel
-  (diff² sous-flue alors que diff ≠ 0).
+  (chantier multi-jours, Wave 5 « optionnel »). Le résiduel LAY-04
+  (diff² sous-flue alors que diff ≠ 0) est corrigé sans sous-normaux : quand
+  `enc(1e-5) == 0`, LayerNorm clampe eps au plus petit normal représentable
+  (E4M3 `2^-6`, E2M1 `1.0`), BF16 gardant 1e-5 (Wave 5 step 4).
 - **NaN E4M3** : convention `e4m3fn` = un seul NaN (mant=111), pas d'infini,
   saturation à 448. Wave 5 (propagation seule, fait) : `Float.mul/add/gt/roundTo/widen`
   reconnaissent le slot (helpers `isNaN`/`nanEncoding`) et le propagent (signe du

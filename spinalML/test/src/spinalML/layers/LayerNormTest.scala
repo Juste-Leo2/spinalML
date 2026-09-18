@@ -295,4 +295,87 @@ class LayerNormTest extends AnyFunSuite {
       println("[LayerNormTest] LAY-04: constant FP8 frame yields beta")
     }
   }
+
+  // LAY-04 residual: diff != 0 but diff^2 underflows. Frame [0.5, 0.5625, 0.5, 0.5]
+  // (FP8): sum tree -> 2.0, mu = 0.5, diffs = [0, 0.0625, 0, 0], 0.0625^2 = 2^-8
+  // flushed to 0 by FTZ -> var = 0. Without a representable epsilon the rsqrt LUT
+  // decodes input 0 with the 1/sqrt(x+1e-9) guard, saturates to 448 and yields
+  // y = 0.0625 * 448 = 28.0. With eps = min normal 2^-6: invStd = 8 and
+  // y = [0, 0.5, 0, 0] (gamma=1, beta=0).
+  test("LayerNorm1D small-variance FP8 frame keeps invStd finite (LAY-04 residual)") {
+    SimConfig.compile(LayerNormTestComp(FP8_E4M3())).doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      dut.x.stream.valid #= false
+      dut.gamma.stream.valid #= false
+      dut.beta.stream.valid #= false
+      dut.y.stream.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      def setFloat(p: spinalML.dtypes.FloatML, exp: Int, mant: Int): Unit = {
+        p.sign #= false
+        p.exponent #= exp
+        p.mantissa #= mant
+      }
+
+      def waitReady(ready: => Boolean, label: String, timeout: Int = 2000): Unit = {
+        var cycles = 0
+        while (!ready && cycles < timeout) {
+          dut.clockDomain.waitSampling()
+          cycles += 1
+        }
+        assert(ready, s"LAY-04: $label never became ready")
+      }
+
+      def sendBeat(valid: Bool, ready: Bool)(setPayload: => Unit): Unit = {
+        setPayload
+        valid #= true
+        dut.clockDomain.waitSamplingWhere(ready.toBoolean)
+        valid #= false
+      }
+
+      waitReady(dut.gamma.stream.ready.toBoolean, "gamma")
+      sendBeat(dut.gamma.stream.valid, dut.gamma.stream.ready) {
+        for (i <- 0 until 4) setFloat(dut.gamma.stream.payload(i), 7, 0) // 1.0
+      }
+      sendBeat(dut.beta.stream.valid, dut.beta.stream.ready) {
+        for (i <- 0 until 4) setFloat(dut.beta.stream.payload(i), 0, 0) // 0.0
+      }
+
+      val yRows = scala.collection.mutable.ArrayBuffer[Seq[(Int, Int)]]()
+      fork {
+        while (true) {
+          if (dut.y.stream.valid.toBoolean && dut.y.stream.ready.toBoolean) {
+            yRows += (0 until 4).map(i =>
+              (dut.y.stream.payload(i).exponent.toInt, dut.y.stream.payload(i).mantissa.toInt))
+          }
+          dut.clockDomain.waitSampling()
+        }
+      }
+
+      // 0.5 = 2^-1 (exp field 6), 0.5625 = 1.125 * 2^-1 (exp 6, mant 1)
+      val row = Seq((6, 0), (6, 1), (6, 0), (6, 0))
+      for (b <- 0 until 16) {
+        for (i <- 0 until 4) setFloat(dut.x.stream.payload(i), row(i)._1, row(i)._2)
+        dut.x.stream.valid #= true
+        dut.clockDomain.waitSampling()
+        var cycles = 0
+        while (!dut.x.stream.ready.toBoolean && cycles < 1000) {
+          dut.clockDomain.waitSampling()
+          cycles += 1
+        }
+        assert(dut.x.stream.ready.toBoolean, "LAY-04: x stalled during burst")
+      }
+      dut.x.stream.valid #= false
+
+      waitReady(yRows.length >= 16, "small-variance output", 3000)
+      val expected = Seq((0, 0), (6, 0), (0, 0), (0, 0))
+      for ((beat, bi) <- yRows.take(16).zipWithIndex; (got, lane) <- beat.zipWithIndex) {
+        assert(got == expected(lane),
+          s"LAY-04 residual: beat $bi lane $lane = (exp=${got._1}, mant=${got._2}) " +
+            s"expected (exp=${expected(lane)._1}, mant=${expected(lane)._2}) — invStd saturated?")
+      }
+      println("[LayerNormTest] LAY-04 residual: small-variance FP8 frame keeps a finite invStd")
+    }
+  }
 }

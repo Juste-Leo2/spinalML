@@ -1036,17 +1036,18 @@ def layernorm_hw(X, gamma, beta, dtype):
         sq_diffs = [mul(d, d) for d in diffs]
         sum_sq = adder_tree_hw(sq_diffs, dtype)
         var = div_n(sum_sq, channels)
-        
-        # Rsqrt
+
+        # Rsqrt. LAY-04 epsilon: encoded 1e-5 when representable, else the
+        # smallest positive normal (E4M3 2^-6, E2M1 1.0) — mirrors the RTL
+        # constant; without it a zero/underflowed variance hits rsqrt(0).
         if is_float:
-            # For FloatML we should use floatml_algebraic_pack and floatml_rsqrt if available.
-            # But ops.py uses pwl_int for integers and Alg+LUT for FloatML.
-            # Wait, in rsqrt.scala, FloatML uses Alg+LUT. For exact bit-match, we can use exact float math if not implemented fully, but wait!
-            # The test will fail if it's not exact.
-            # Let's use the Python approximation. Actually, wait! The user has FloatML Rsqrt which does 2^(exp_sint) * LUT.
-            pass
-        # I will leave rsqrt as a fallback to rsqrt(x, dtype) for now and see if it fails.
-        inv_std = rsqrt(var, dtype) if is_float else dtype.to_float(pwl_int(var, dtype.bit_width, lambda x: 1.0/np.sqrt(x) if x>0 else 0))
+            eps_bits = dtype.from_float(1e-5)
+            if eps_bits == 0:
+                eps_bits = 1 << dtype.mant_bits
+            var_eps = floatml_add(var, dtype.to_float(eps_bits), dtype)
+            inv_std = rsqrt(var_eps, dtype)
+        else:
+            inv_std = dtype.to_float(pwl_int(var, dtype.bit_width, lambda x: 1.0/np.sqrt(x) if x>0 else 0))
         
         # Final Norm
         for i in range(channels):

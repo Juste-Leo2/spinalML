@@ -77,7 +77,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). Integer path requantizes via `RequantizeOp` (shift + RNE + saturation, LAY-05). |
-| `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. |
+| `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. Epsilon: encoded 1e-5 when representable (BF16), else smallest positive normal (E4M3 2^-6, E2M1 1.0) — LAY-04 residual fix. |
 
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |

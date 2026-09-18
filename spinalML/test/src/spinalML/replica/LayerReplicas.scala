@@ -529,7 +529,17 @@ object LayerReplicas {
       val sumSq = tree(sqDiffs, expBits, mantBits)
       val variance = divN(sumSq)
 
-      val varDouble = decode(variance, expBits, mantBits)
+      // LAY-04: same epsilon policy as the RTL. Encoded 1e-5 when
+      // representable (BF16), otherwise the smallest positive normal
+      // (E4M3 2^-6, E2M1 1.0) — without it, a zero (or underflowed) variance
+      // reaches rsqrt at input 0 and saturates the inverse standard deviation.
+      val epsF = {
+        val enc = fromDouble(1e-5, expBits, mantBits)
+        if (enc.e == 0) F(false, 1, 0) else enc
+      }
+      val varWithEps = fadd(variance, epsF, expBits, mantBits)
+
+      val varDouble = decode(varWithEps, expBits, mantBits)
       val rsqrtVal = if (varDouble <= 0) PZERO else fromDouble(1.0 / math.sqrt(varDouble), expBits, mantBits)
 
       for (ch <- 0 until channels) {
