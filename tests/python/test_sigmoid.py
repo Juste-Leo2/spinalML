@@ -5,8 +5,8 @@ from cocotb_test.simulator import run
 import pytest
 import math
 
-from golden_models.dtypes import FP8_E4M3, BF16
-from golden_models.ops import sigmoid_hw
+from golden_models.dtypes import I8, FP8_E4M3, BF16
+from golden_models.ops import sigmoid_hw, sigmoid_q_hw
 from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_unary_test
@@ -15,11 +15,20 @@ from utils.cocotb_helpers import run_unary_test
 # Cocotb Test Logic
 # =========================================================================
 
-# OPS-03: SigmoidOp rejects integer types at elaboration (no Qm.n scale
-# yet); the I8/I16 testcases were removed here in the same commit.
+# Integer sigmoid uses the quantized TFLite LOGISTIC convention (out scale
+# 1/256, int8 zp -128, input scale/zp default 1/0). The I8 sweep covers every
+# ROM entry, so it validates the full LUT bit-exactly.
 
 def true_sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
+
+@cocotb.test()
+async def cocotb_sigmoid_i8(dut):
+    def expected_fn(val):
+        return sigmoid_q_hw(val, I8)
+    await run_unary_test(dut, "Sigmoid", "I8", I8, [float(c) for c in range(-128, 128)],
+                         is_floatml=False, expected_bits_fn=expected_fn,
+                         true_math_fn=true_sigmoid, edge_cases=[0.0, -10.0, 10.0])
 
 @cocotb.test()
 async def cocotb_sigmoid_fp8(dut):
@@ -57,5 +66,6 @@ def run_sigmoid_sim(dtype_filter, testcase_name, request=None):
         extra_env={"DEBUG_MATH": debug_flag}
     )
 
+def test_sigmoid_i8(request): run_sigmoid_sim("I8", "cocotb_sigmoid_i8", request)
 def test_sigmoid_fp8(request): run_sigmoid_sim("FP8", "cocotb_sigmoid_fp8", request)
-def test_sigmoid_bf16(request): run_sigmoid_sim("BF16", "cocotb_sigmoid_bf16", request)
+def test_sigmoid_bf16(request): run_sigmoid_sim("BF16", "cocotb_sigmoid_bf16", request)

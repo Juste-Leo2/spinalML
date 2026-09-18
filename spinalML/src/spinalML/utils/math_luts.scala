@@ -57,6 +57,18 @@ object MathLUTs {
     if (i >= halfVal) (i - maxVal).toDouble else i.toDouble
   }
 
+  /** Unsigned code -> real (identity): the code IS the value. */
+  def uintValFn(bitWidth: Int): Int => Double = i => i.toDouble
+
+  /** Real -> unsigned code with the switch-aware rounding, saturating to [0, 2^w-1]. */
+  def uintEncodeFn(bitWidth: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
+    val maxVal = (1 << bitWidth) - 1
+    val clampedD = Math.max(0.0, Math.min(maxVal.toDouble, y))
+    val rounded: Long = if (rounding == RoundingMode.Rne) roundRNE(clampedD) else Math.round(clampedD)
+    BigInt(rounded)
+  }
+
   def intEncodeFn(bitWidth: Int,
                   rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
     val maxVal = (1 << (bitWidth - 1)) - 1

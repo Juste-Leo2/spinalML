@@ -607,11 +607,13 @@ case class Sequential(
           rounding = ap2.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (pooled.lanes != ap2.lanes) repack(pooled, ap2.lanes) else pooled
 
-      case _: Sigmoid =>
-        sigmoid(inTensor)
+      case sm: Sigmoid =>
+        sigmoid(inTensor, sm.inputScale, sm.inputZeroPoint,
+          rounding = sm.rounding.getOrElse(spinalML.RoundingConfig.current))
 
-      case _: Tanh =>
-        tanh(inTensor)
+      case th: Tanh =>
+        tanh(inTensor, th.inputScale, th.inputZeroPoint,
+          rounding = th.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case c: Cast =>
         val scalePort = if (c.runtimeScale) io.dequantScale else None

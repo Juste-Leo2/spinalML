@@ -203,13 +203,30 @@ case class AvgPool2D(
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Sigmoid() extends LayerSpec {
+/**
+ * Quantized activation specs. On 8-bit integers, `inputScale`/`inputZeroPoint`
+ * describe the input tensor quantization (`x = (q - zp) * scale`); the output
+ * quantization follows the TFLite conventions (LOGISTIC scale 1/256, zp -128
+ * int8 / 0 uint8; TANH scale 1/128, zp 0 int8 / 128 uint8). FloatML ignores
+ * both (pure real sigmoid/tanh).
+ */
+case class Sigmoid(
+  inputScale: Double = 1.0,
+  inputZeroPoint: Int = 0,
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
+  require(inputScale > 0.0, s"Sigmoid inputScale must be > 0, got $inputScale")
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class Tanh() extends LayerSpec {
+case class Tanh(
+  inputScale: Double = 1.0,
+  inputZeroPoint: Int = 0,
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
+  require(inputScale > 0.0, s"Tanh inputScale must be > 0, got $inputScale")
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
   override def getWeightShape(): Seq[Int] = Seq(0)
   override def getBiasShape(): Seq[Int] = Seq(0)

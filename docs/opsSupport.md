@@ -69,8 +69,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Rectified Linear Unit. |
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
-| `Sigmoid` | ❌ | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). Composition of Negation -> Exp -> +1 -> Reciprocal. Integer types refused at elaboration (OPS-03: `1/(1+e^-x)` collapses to 0/saturation without a Qm.n scale); quantized sigmoid planned for Wave 5. |
-| `Tanh` | ❌ | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition of Mul(×2) -> Sigmoid -> ×2 - 1. Integer types refused at elaboration (OPS-03, same Qm.n reason as Sigmoid). |
+| `Sigmoid` | ✅ (I8/U8) | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). FloatML: composition of Negation -> Exp -> +1 -> Reciprocal. I8/U8: quantized TFLite LOGISTIC convention (full-range 256-entry LUT, out scale 1/256, int8 zp -128 / uint8 zp 0, input scale+zp via `LayerSpec`; Wave 5 step C). I16 refused (64K-entry ROM); I4 refused. |
+| `Tanh` | ✅ (I8/U8) | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent. FloatML: Mul(×2) -> Sigmoid -> ×2 - 1. I8/U8: quantized TFLite TANH convention (full-range 256-entry LUT, out scale 1/128, int8 zp 0 / uint8 zp 128; Wave 5 step C). I16 refused (64K-entry ROM); I4 refused. |
 | `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
@@ -122,7 +122,7 @@ See [universalTestEngine.md](universalTestEngine.md) for full architectural docu
 | `Flatten` | ✅ | ✅ | ✅ | Features-last flatten. |
 | `BatchNorm1D` | ✅ | ❌ | ❌ | Floating-point scale & bias. |
 | `Add` / `Concat` (DAG) | ✅ | ✅ | ✅ | Skip connections & branch merges. |
-| `Sigmoid` / `Tanh` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` LUT wiring. |
+| `Sigmoid` / `Tanh` | ✅ | ✅ (`I8`) | — | Replica wired (`ActivationHandlers` + `LayerReplicas.sigmoidInt/tanhInt`); FloatML is exercised by `UniversalActivationsDemo`, the int-domain path (TFLite int8 conventions) is wired by Wave 5 step C but no demo covers it yet. |
 | `Softmax` | ⚠️ | ⚠️ | ⚠️ | Pass-through in replica (compares pre-softmax logits). |
 | `ClassicalAttention` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` attention block interpreter. |
 
@@ -130,7 +130,7 @@ See [universalTestEngine.md](universalTestEngine.md) for full architectural docu
 
 spinalML aims to quantize per layer with the industry scheme naming `wXaY`: **X = bits of the weights, Y = bits of the activations**. `Linear` and `Classical/Multi-Head Attention` are wired for all six schemes below; the remaining ops are still exposed through their uniform per-op dtype columns only. This section documents the target quantization architecture.
 
-**Policy: activations are float-only.** The tensors flowing between layers (activations) exist only in the float family `{BF16, FP8, FP4}`. Non-linear ops (Softmax, Exp, Sigmoid, ...) are therefore never instantiated in integer — the integer variants are mathematically meaningless (0 / overflow on unquantized integers). Integer formats are reserved for **weights**, as compact storage plus a scale (per-tensor / per-channel): the weights are dequantized to the activation dtype before the (float) matrix multiply. *(Weight-only quantization.)*
+**Policy: activations are float-only, except explicit int8 quantization.** The tensors flowing between layers (activations) exist in the float family `{BF16, FP8, FP4}`; 8-bit integer activations are also supported when their quantization is explicit. Since Wave 5 step C, `Sigmoid`/`Tanh` accept I8/U8 codes with `LayerSpec` input scale/zero-point and the TFLite int8 output conventions, and `Requantize`/`Cast`/`AvgPool`/`Div` cover the integer-domain linear ops. Wider (I16/I32) or 4-bit non-linear activations remain refused: without a fixed-point contract they are mathematically meaningless (0 / overflow on unquantized integers). Integer weight storage (`wXaY`) is unchanged: weights are dequantized to the activation dtype before the matrix multiply. *(Weight-only quantization.)*
 
 ### Operations Requiring the Conversion
 

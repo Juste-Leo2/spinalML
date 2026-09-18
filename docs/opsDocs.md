@@ -75,8 +75,8 @@ Non-linear functions for `FloatML` use piece-wise linear (PWL) and algebraic sep
 | :--- | :--- | :--- | :--- |
 | **ReLU** | `ReLU()` | $\max(0, x)$ | Sign-bit masking (0 LUTs) |
 | **LeakyReLU** | `LeakyReLU(alpha)` | $\max(\alpha x, x)$ | Conditional arithmetic shift |
-| **Sigmoid** | `Sigmoid()` | $1 / (1 + e^{-x})$ | Pipelined Exp $\to$ Add 1 $\to$ Reciprocal. FloatML only (OPS-03) |
-| **Tanh** | `Tanh()` | $2\sigma(2x) - 1$ | Fused Sigmoid composition. FloatML only (OPS-03) |
+| **Sigmoid** | `Sigmoid(inputScale, inputZeroPoint)` | $1 / (1 + e^{-x})$ | FloatML: Pipelined Exp $\to$ Add 1 $\to$ Reciprocal. I8/U8: quantized TFLite LOGISTIC LUT (out 1/256, zp -128/0; Wave 5 step C) |
+| **Tanh** | `Tanh(inputScale, inputZeroPoint)` | $2\sigma(2x) - 1$ | FloatML: fused Sigmoid composition. I8/U8: quantized TFLite TANH LUT (out 1/128, zp 0/128; Wave 5 step C) |
 | **Softmax** | `Softmax1D()` | Normalizes inputs to probability distribution | Streaming Exp + accumulator + Reciprocal |
 | **BatchNorm** | `BatchNorm()` | Batch normalization | Folded scale & shift for inference |
 | **LayerNorm** | `LayerNorm()` | Dynamic mean & variance normalization | Online 2-pass accumulator + Rsqrt |

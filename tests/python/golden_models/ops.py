@@ -673,6 +673,25 @@ def sigmoid_hw(x: float, dtype) -> int:
         # 4. Reciprocal
         return pwl_reciprocal_int(v_add, bit_width)
 
+def sigmoid_q_hw(q, dtype, input_scale=1.0, input_zp=0, rounding=None):
+    """Golden of the quantized (TFLite-convention) logistic: out scale 1/256,
+    int8 zp -128. `q` is the raw input code, x = (q - input_zp) * input_scale.
+    Rounding follows the switch (None = SPINALML_ROUNDING, default RNE)."""
+    import math
+    code = int(q)
+    val = 1.0 / (1.0 + math.exp(-((code - input_zp) * input_scale)))
+    return dtype.from_float(val * 256.0 - 128.0, rounding)
+
+
+def tanh_q_hw(q, dtype, input_scale=1.0, input_zp=0, rounding=None):
+    """Golden of the quantized (TFLite-convention) tanh: out scale 1/128,
+    int8 zp 0. `q` is the raw input code, x = (q - input_zp) * input_scale."""
+    import math
+    code = int(q)
+    val = math.tanh((code - input_zp) * input_scale)
+    return dtype.from_float(val * 128.0, rounding)
+
+
 def tanh_hw(x: float, dtype) -> int:
     """Golden model replicating exactly the TanhOp composition: x*2 -> sigmoid -> 2*sig - 1."""
     if hasattr(dtype, "exp_bits"):

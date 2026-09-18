@@ -125,6 +125,19 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   combinatoires). Rouges : tests `DivTest` I16/I32 (ancien `require`
   « unimplemented above 8 bits »), verts après. Vérifs : `DivTest` ✅ (I8/U8/
   I16/I32/FP8/BF16), `test_div.py` I8+I16+FP8+BF16 ✅.
+- **Sigmoid/Tanh quantifiés int8 (step 5C)** : `QuantActivation` (LUT 256
+  entrées pleine échelle, `x = (q - zp) · inputScale`, encodage switch-aware
+  `intEncodeFn`/`uintEncodeFn`) ; `SigmoidOp`/`TanhOp` dispatch float (inchangé)
+  / I8 / U8 (TFLite : LOGISTIC out 1/256 zp -128 (int8) / 0 (uint8), TANH out
+  1/128 zp 0/128) ; I16 refusé (ROM 64K). Specs `Sigmoid`/`Tanh(inputScale,
+  inputZeroPoint, rounding = None)` plombées par `Sequential` ; réplica
+  `LayerReplicas.sigmoidInt/tanhInt` + `ActivationHandlers`/`ModelReplica`
+  alignés. Rouges : tests I8/U8 (ex-`require` OPS-03). Vérifs : `SigmoidTest`/
+  `TanhTest` ✅ (I8/U8 + scales/zp + FP8/BF16), formels `Sigmoid/TanhFormal`
+  i8+FP4+FP9 ✅, pytest `test_sigmoid`/`test_tanh` ✅ (sweeps 256 codes I8 +
+  FP8/BF16), suite universelle 10/10 ✅ (`UniversalActivationsDemo` FP8 via
+  `Sequential`), `SequentialTest|AcceleratorTest|SoftmaxTest|Sequential2DTest`
+  ✅.
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un
@@ -142,9 +155,10 @@ Ordre proposé :
    runtime) : `DivOp` int = troncature vers zéro exacte, I/O même dtype,
    saturation div0/`INT_MIN/-1` ; divider restoring ≤8 bits, itératif >8 bits ;
    sigmoïde/tanh quantifiés = LUT TFLite (seul manque ONNX core). **Fait
-   (steps 5A + 5B)** : ≤8 bits combinatoire et >8 bits série (I16/I32, latence
-   `width + 2`), goldens Scala + Python ; reste les activations quantifiées
-   (step C).
+   (steps 5A + 5B + 5C)** : Div exact ≤8 bits combinatoire et >8 bits série
+   (I16/I32, latence `width + 2`) ; `Sigmoid`/`Tanh` I8/U8 quantifiés TFLite
+   (LUT 256 pleine échelle, `LayerSpec` input scale/zp), goldens Scala +
+   Python, formels i8, réplica aligné.
 2. **NaN `e4m3fn` complet — fait (step 1)** : propagation seule dans
    mul/add/gt/roundTo + formel dédié, docs `rounding_policy.md` §5.
 3. **Test de conformité générique `LayerSpec` ↔ IO HW — fait (step 2)** :

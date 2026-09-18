@@ -379,20 +379,21 @@ object LayerReplicas {
     }
   }
 
-  def sigmoidInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
-    val valFn = spinalML.utils.MathLUTs.intValFn(bitWidth)
-    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth)
-    val minVal = -(1L << (bitWidth - 1))
-    val maxVal = (1L << (bitWidth - 1)) - 1
+  /** Two's-complement bits -> signed Long (replica IntTensor convention). */
+  private def bitsToSigned(bits: Long, bitWidth: Int): Long =
+    if (bits >= (1L << (bitWidth - 1))) bits - (1L << bitWidth) else bits
+
+  /**
+   * Quantized logistic, TFLite int8/uint8 convention (out scale 1/256, int8
+   * zp -128). Mirrors the RTL `QuantActivation` ROM: same formula, same
+   * switch-aware encoding function.
+   */
+  def sigmoidInt(input: Seq[Long], bitWidth: Int, inputScale: Double = 1.0, inputZeroPoint: Int = 0,
+                 rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
+    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth, rounding)
     input.map { v =>
-      val neg = math.max(minVal, -v)
-      val expReal = Math.exp(neg.toDouble)
-      val expBits = encFn(expReal).toLong
-      val expSigned = if (expBits >= (1L << (bitWidth - 1))) expBits - (1L << bitWidth) else expBits
-      val addVal = math.min(maxVal, expSigned + 1)
-      val recReal = if (addVal == 0) 0.0 else 1.0 / addVal.toDouble
-      val recBits = encFn(recReal).toLong
-      if (recBits >= (1L << (bitWidth - 1))) recBits - (1L << bitWidth) else recBits
+      val x = (v - inputZeroPoint) * inputScale
+      bitsToSigned(encFn(1.0 / (1.0 + math.exp(-x)) * 256.0 - 128.0).toLong, bitWidth)
     }
   }
 
@@ -404,16 +405,16 @@ object LayerReplicas {
     sig.map(s => fadd(fmul(s, two, expBits, mantBits), minusOne, expBits, mantBits))
   }
 
-  def tanhInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
-    val minVal = -(1L << (bitWidth - 1))
-    val maxVal = (1L << (bitWidth - 1)) - 1
-    val mask = if (bitWidth >= 64) -1L else (1L << bitWidth) - 1
+  /**
+   * Quantized tanh, TFLite int8/uint8 convention (out scale 1/128, int8 zp 0).
+   * Same oracle as the RTL `QuantActivation` tanh ROM.
+   */
+  def tanhInt(input: Seq[Long], bitWidth: Int, inputScale: Double = 1.0, inputZeroPoint: Int = 0,
+              rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
+    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth, rounding)
     input.map { v =>
-      val x2 = (v * 2) & mask
-      val x2Signed = if (bitWidth < 64 && (x2 & (1L << (bitWidth - 1))) != 0) x2 - (1L << bitWidth) else x2
-      val sig = sigmoidInt(Seq(x2Signed), bitWidth).head
-      val twice = math.max(minVal, math.min(maxVal, 2 * sig))
-      math.max(minVal, math.min(maxVal, twice - 1))
+      val x = (v - inputZeroPoint) * inputScale
+      bitsToSigned(encFn(math.tanh(x) * 128.0).toLong, bitWidth)
     }
   }
 

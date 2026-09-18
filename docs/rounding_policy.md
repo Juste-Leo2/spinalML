@@ -174,9 +174,11 @@ dominant du projet reste la table de registres MatMul.
    backpressure par `ready`), bit-identique au chemin combinatoire. Décision
    actée : **ONNX est la référence normative** (RNE pour `QuantizeLinear` comme
    notre défaut, div exacte) ; TFLite ne sert que là où ONNX n'a rien (LUT
-   sigmoïde/tanh). Reste : Sigmoid/Tanh quantifiés TFLite (step C,
-   `LOGISTIC 1/256 zp=-128`, `TANH 1/128 zp=0`). Q15 LUT abandonné (ONNX ne
-   définit pas de division quantifiée, TFLite n'a pas d'op runtime standard).
+   sigmoïde/tanh). **Sigmoid/Tanh quantifiés — fait (step C)** : LUT 256 entrées
+   pleine échelle I8/U8, `LOGISTIC 1/256 zp -128/0`, `TANH 1/128 zp 0/128`,
+   scale/zp d'entrée par `LayerSpec`, réplica + goldens ; I16 refusé (ROM
+   64K entrées). Q15 LUT abandonné (ONNX ne définit pas de division quantifiée,
+   TFLite n'a pas d'op runtime standard).
 2. **Propagation NaN e4m3fn — fait (Wave 5 step 1)** : voir §5.
 3. **Sous-normaux** : uniquement si un modèle le justifie ; FTZ reste le défaut.
 4. **Rounding avgpool int — fait (Wave 5 step 3)** : RNE via le switch,
