@@ -6,9 +6,11 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
-import spinalML.ops.repack
+import spinalML.ops.{repack, RequantizeMath}
+import spinalML.{RoundingConfig, RoundingMode}
 
-case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, poolSize: Int, stride: Int) extends Component {
+case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, poolSize: Int, stride: Int,
+                                  rounding: RoundingMode = RoundingConfig.current) extends Component {
   require(L >= poolSize, "Sequence length L must be >= poolSize")
   require(isPow2(poolSize), "poolSize must be a power of 2 for AvgPool (shift based)")
   
@@ -54,11 +56,13 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
       case _: SInt => 
         val resizedNodes = shiftRegs(ch).map(_.asInstanceOf[SInt].resize(dataType.getBitsWidth + shift))
         val acc = buildAdderTree(resizedNodes).asInstanceOf[SInt]
-        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
+        io.c.stream.payload(ch).assignFrom(
+          RequantizeMath.shiftSaturate(acc, shift, dataType.getBitsWidth, rounding).asInstanceOf[T])
       case _: UInt =>
         val resizedNodes = shiftRegs(ch).map(_.asInstanceOf[UInt].resize(dataType.getBitsWidth + shift))
         val acc = buildAdderTree(resizedNodes).asInstanceOf[UInt]
-        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(dataType.getBitsWidth).asInstanceOf[T])
+        io.c.stream.payload(ch).assignFrom(
+          RequantizeMath.shiftRound(acc, shift, dataType.getBitsWidth, rounding).asInstanceOf[T])
       case f: spinalML.dtypes.FloatML =>
         val acc = buildAdderTree(shiftRegs(ch).toSeq).asInstanceOf[spinalML.dtypes.FloatML]
         val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
@@ -165,12 +169,13 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
 }
 
 object avgpool1d {
-  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int, outLanes: Int = -1): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int, outLanes: Int = -1,
+                       rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
     require(a.shape.length == 2, "AvgPool1D expects a 2D tensor [L, channels]")
     val channels = a.shape(1)
     val in = if (a.lanes != channels) repack(a, channels) else a
     
-    val comp = AvgPool1DOp(in.dataType, in.shape(0), channels, poolSize, stride)
+    val comp = AvgPool1DOp(in.dataType, in.shape(0), channels, poolSize, stride, rounding)
     comp.io.a <> in
     val rawC = comp.io.c
     val finalLanes = if (outLanes > 0) outLanes else channels

@@ -117,7 +117,7 @@ Layer  5 [Linear    ] : shape 1x10         | first3=[128.000, 128.000, 128.000].
 | `LeakyReLU` | ✅ | ❌ | ❌ | **Supported** in FloatML. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | **Supported** (Line buffers + delay lines bit-exact). |
 | `MaxPool1D` | ✅ | ❌ | ❌ | **Supported** in FloatML. |
-| `AvgPool2D` / `AvgPool1D` | ❌ | ❌ | ❌ | *Hardware RTL ready; pending replica interpreter wiring.* |
+| `AvgPool2D` / `AvgPool1D` | ✅ | ✅ (`I8`, `I16`) | — | **Supported** (Replica wired via `PoolHandlers`/`LayerReplicas`; integer shift shares `RequantizeMath` with the rounding switch, float path is an exact exponent shift). |
 | `Cast` | ✅ (Float -> Float) | ✅ (Int -> Int) | ✅ (Int -> Float + scale) | **Supported** (Bridge between integer and float domains). |
 | `Flatten` | ✅ | ✅ | ✅ | **Supported** (Features-last). |
 | `BatchNorm1D` | ✅ | ❌ | ❌ | **Supported** in FloatML. |

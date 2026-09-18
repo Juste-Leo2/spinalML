@@ -314,7 +314,8 @@ object LayerReplicas {
     out
   }
 
-  def avgPool2DInt(input: Array[Array[Array[Long]]], poolSize: Int, stride: Int): Array[Array[Array[Long]]] = {
+  def avgPool2DInt(input: Array[Array[Array[Long]]], poolSize: Int, stride: Int, outBits: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Array[Array[Array[Long]]] = {
     val c = input.length; val h = input(0).length; val w = input(0)(0).length
     val hOut = (h - poolSize) / stride + 1
     val wOut = (w - poolSize) / stride + 1
@@ -326,12 +327,13 @@ object LayerReplicas {
       for (r <- 0 until poolSize; k <- 0 until poolSize) {
         acc += input(i)(y * stride + r)(x * stride + k)
       }
-      out(i)(y)(x) = acc >> shift
+      out(i)(y)(x) = requantizeScalar(acc, shift, outBits, rounding)
     }
     out
   }
 
-  def avgPool1DInt(input: Array[Array[Long]], poolSize: Int, stride: Int): Array[Array[Long]] = {
+  def avgPool1DInt(input: Array[Array[Long]], poolSize: Int, stride: Int, outBits: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Array[Array[Long]] = {
     val l = input.length; val c = input(0).length
     val lOut = (l - poolSize) / stride + 1
     val out = Array.ofDim[Long](lOut, c)
@@ -342,7 +344,7 @@ object LayerReplicas {
       for (k <- 0 until poolSize) {
         acc += input(pos * stride + k)(ch)
       }
-      out(pos)(ch) = acc >> shift
+      out(pos)(ch) = requantizeScalar(acc, shift, outBits, rounding)
     }
     out
   }
@@ -547,23 +549,25 @@ object LayerReplicas {
    * saturation. RNE on an arithmetic shift rounds guard/sticky ties to even;
    * the switch follows [[spinalML.RoundingConfig]] like the elaborated RTL.
    */
-  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int,
-                    rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
+  def requantizeScalar(v: Long, shift: Int, outBits: Int,
+                       rounding: RoundingMode = RoundingConfig.current): Long = {
     val maxVal = (1L << (outBits - 1)) - 1
     val minVal = -(1L << (outBits - 1))
     val useRne = rounding == RoundingMode.Rne
-    input.map { v =>
-      val shifted =
-        if (shift <= 0) v
-        else if (!useRne) v >> shift
-        else {
-          val truncated = v >> shift
-          val rem = v - (truncated << shift)
-          val half = 1L << (shift - 1)
-          if (rem > half || (rem == half && (truncated & 1L) != 0)) truncated + 1 else truncated
-        }
-      math.max(minVal, math.min(maxVal, shifted))
-    }
+    val shifted =
+      if (shift <= 0) v
+      else if (!useRne) v >> shift
+      else {
+        val truncated = v >> shift
+        val rem = v - (truncated << shift)
+        val half = 1L << (shift - 1)
+        if (rem > half || (rem == half && (truncated & 1L) != 0)) truncated + 1 else truncated
+      }
+    math.max(minVal, math.min(maxVal, shifted))
   }
+
+  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int,
+                    rounding: RoundingMode = RoundingConfig.current): Seq[Long] =
+    input.map(requantizeScalar(_, shift, outBits, rounding))
 }
 

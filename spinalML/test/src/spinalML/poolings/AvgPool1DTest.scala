@@ -7,18 +7,19 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import spinal.lib._
 import spinalML.tensors.Tensor
-import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
+import spinalML.dtypes.{I8, U8, FP8_E4M3, I16, BF16}
+import spinalML.{RoundingConfig, RoundingMode}
 import org.scalatest.funsuite.AnyFunSuite
 
 // Component for testing the AvgPool1D operation
-case class AvgPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component {
+case class AvgPool1DTestComp[T <: Data](dataType: HardType[T], rounding: RoundingMode = RoundingConfig.current) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
     val c = master(Tensor(dataType, Seq(2, 2), lanes = 2))
   }
   
   // poolSize = 2, stride = 2
-  io.c <> spinalML.poolings.avgpool1d(io.a, poolSize = 2, stride = 2)
+  io.c <> spinalML.poolings.avgpool1d(io.a, poolSize = 2, stride = 2, rounding = rounding)
 }
 
 // ACT-01 repro: L=7, pool=2, stride=2 -> L_out=3 leaves one tail element per
@@ -73,6 +74,59 @@ class AvgPool1DTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling(5)
     }
+  }
+
+  // Deterministic tie frames for the int shift. SInt: window 0 = (7, 8) = 7.5
+  // (floor 7 odd -> RNE 8) and window 1 = (-2, -3) = -2.5 (floor -3 odd -> RNE -2).
+  // UInt: window 0 = (7, 8) = 7.5 (floor 7 odd -> RNE 8) and window 1 =
+  // (2, 3) = 2.5 (floor 2 even -> stays 2). The legacy truncate lane must keep
+  // the arithmetic-shift floor.
+  private def runAvgPool1DTie[T <: Data](dataType: HardType[T], rounding: RoundingMode,
+                                         seq0: Seq[Int], expected: (Int, Int)): Unit = {
+    SimConfig.compile(AvgPool1DTestComp(dataType, rounding)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.a.stream.valid #= false
+      dut.io.c.stream.ready #= true
+      dut.clockDomain.waitSampling()
+
+      val seq1 = Array(0, 0, 0, 0)
+      var i = 0
+      fork {
+        while (i < 4) {
+          dut.io.a.stream.valid #= true
+          dut.io.a.stream.payload(0).asInstanceOf[BaseType].assignBigInt(BigInt(seq0(i)))
+          dut.io.a.stream.payload(1).asInstanceOf[BaseType].assignBigInt(BigInt(seq1(i)))
+          dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
+          i += 1
+        }
+        dut.io.a.stream.valid #= false
+      }
+
+      for (o <- 0 until 2) {
+        dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
+        val result = dut.io.c.stream.payload(0).asInstanceOf[BaseType].toBigInt.toInt
+        val exp = if (o == 0) expected._1 else expected._2
+        assert(result == exp, s"Output $o: expected $exp, got $result (rounding=$rounding)")
+      }
+      dut.clockDomain.waitSampling(5)
+    }
+  }
+
+  test("AvgPool1D SInt shift rounds ties to even in RNE mode") {
+    runAvgPool1DTie(I8(), RoundingMode.Rne, Seq(7, 8, -2, -3), (8, -2))
+  }
+
+  test("AvgPool1D SInt shift truncates in Truncate mode (legacy)") {
+    runAvgPool1DTie(I8(), RoundingMode.Truncate, Seq(7, 8, -2, -3), (7, -3))
+  }
+
+  test("AvgPool1D UInt shift rounds ties to even in RNE mode") {
+    runAvgPool1DTie(U8(), RoundingMode.Rne, Seq(7, 8, 2, 3), (8, 2))
+  }
+
+  test("AvgPool1D UInt shift truncates in Truncate mode (legacy)") {
+    runAvgPool1DTie(U8(), RoundingMode.Truncate, Seq(7, 8, 2, 3), (7, 2))
   }
 
   test("Test AvgPool1D compilation on I8") {

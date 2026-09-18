@@ -594,7 +594,8 @@ case class Sequential(
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
         val targetLanes = if (ap.lanes > 0) ap.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride)
+        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride,
+          rounding = ap.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case mp2: MaxPool2D =>
@@ -602,7 +603,8 @@ case class Sequential(
         if (pooled.lanes != mp2.lanes) repack(pooled, mp2.lanes) else pooled
 
       case ap2: AvgPool2D =>
-        val pooled = avgpool2d(inTensor, ap2.poolSize, ap2.stride)
+        val pooled = avgpool2d(inTensor, ap2.poolSize, ap2.stride,
+          rounding = ap2.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (pooled.lanes != ap2.lanes) repack(pooled, ap2.lanes) else pooled
 
       case _: Sigmoid =>

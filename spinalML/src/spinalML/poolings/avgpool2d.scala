@@ -6,8 +6,9 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
-import spinalML.ops.repack
+import spinalML.ops.{repack, RequantizeMath}
 import spinalML.memory.LineBuffer2D
+import spinalML.{RoundingConfig, RoundingMode}
 
 /**
  * AvgPool2DOp: 2D Average Pooling with multi-channel support.
@@ -16,7 +17,8 @@ import spinalML.memory.LineBuffer2D
  * H_out = (H - K) / stride + 1, W_out = (W - K) / stride + 1
  * Division by K*K is a power-of-2 shift, hence isPow2(K*K) is required.
  */
-case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, stride: Int) extends Component {
+case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K: Int, stride: Int,
+                                  rounding: RoundingMode = RoundingConfig.current) extends Component {
   require(H >= K && W >= K, "Image dimensions must be >= kernel size")
   require(C >= 1 && stride >= 1)
   require(isPow2(K * K), "K*K must be a power of 2 for AvgPool (shift based)")
@@ -99,12 +101,14 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
         val width = dataType.getBitsWidth
         val resizedNodes = nodes.map(_.asInstanceOf[SInt].resize(width + shift))
         val acc = buildAdderTree(resizedNodes).asInstanceOf[SInt]
-        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(width).asInstanceOf[T])
+        io.c.stream.payload(ch).assignFrom(
+          RequantizeMath.shiftSaturate(acc, shift, width, rounding).asInstanceOf[T])
       case _: UInt =>
         val width = dataType.getBitsWidth
         val resizedNodes = nodes.map(_.asInstanceOf[UInt].resize(width + shift))
         val acc = buildAdderTree(resizedNodes).asInstanceOf[UInt]
-        io.c.stream.payload(ch).assignFrom((acc >> shift).resize(width).asInstanceOf[T])
+        io.c.stream.payload(ch).assignFrom(
+          RequantizeMath.shiftRound(acc, shift, width, rounding).asInstanceOf[T])
       case f: spinalML.dtypes.FloatML =>
         val acc = buildAdderTree(nodes).asInstanceOf[spinalML.dtypes.FloatML]
         val avg = spinalML.dtypes.FloatML(f.expBits, f.mantBits)
@@ -213,12 +217,13 @@ case class AvgPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
 }
 
 object avgpool2d {
-  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int): Tensor[T] = {
+  def apply[T <: Data](a: Tensor[T], poolSize: Int, stride: Int,
+                       rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
     require(a.shape.length >= 2 && a.shape.length <= 3, "AvgPool2D expects a 2D [H, W] or 3D [H, W, channels] tensor")
     val C = if (a.shape.length == 3) a.shape(2) else 1
     val in = if (a.lanes != 1) repack(a, 1) else a
 
-    val comp = AvgPool2DOp(in.dataType, in.shape(0), in.shape(1), C, poolSize, stride)
+    val comp = AvgPool2DOp(in.dataType, in.shape(0), in.shape(1), C, poolSize, stride, rounding)
     comp.io.a <> in
     comp.io.c
   }

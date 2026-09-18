@@ -38,7 +38,7 @@ numpy/PyTorch, pour un coût matériel marginal (voir §4).
 | Arithmétique FloatML (`mul`, `add`, `roundTo`, `widen`) | RNE — **déjà** le style maison (guard/sticky) |
 | Cast `SInt → FloatML` (`Float.fromSInt`) | RNE (guard/sticky) — actuellement troncature (DTYPE-06) |
 | Cast `FloatML → FloatML` / `FloatML → SInt` (`CastOp`) | `widen` (exact) / `roundTo` (RNE) — actuellement non branché (OPS-10) |
-| Requantification entière (accus → dtype) | `shift + RNE + saturation symétrique`, un seul primitive partagé (`RequantizeOp`) |
+| Requantification entière (accus → dtype) | `shift + RNE + saturation symétrique`, un seul datapath partagé `RequantizeMath` (`RequantizeOp`, `BatchNorm1D` SInt, `AvgPool1D/2D` int — fait, Wave 5 step 3 ; saturation inatteignable sur un avgpool, gardée par partage) |
 | Génération des LUT (élaboration) | RNE (`roundRNE` half-even), aligné sur `round()` Python — switch-aware (Option B, fait) ; `Truncate` = legacy `Math.round` half-up bit-exact |
 | Saturation | Toujours vers la valeur max représentable (finie) ; jamais de wrap |
 | `sqrt`/`rsqrt` d'une entrée négative | Politique de domaine : résultat 0 (voir OPS-02) |
@@ -66,8 +66,15 @@ object RoundingConfig {
 - **Précédence** : paramètre explicite de l'op > `SPINALML_ROUNDING` /
   `-Dspinalml.rounding` > défaut RNE.
 - **Per-op** : `RequantizeOp(..., rounding: RoundingMode = RoundingConfig.current)`,
-  idem `Float.fromSInt`, `CastOp`, `batchnorm`, `avgpool` si touché.
+  idem `Float.fromSInt`, `CastOp`, `batchnorm`, `avgpool1d/2d` (chemin entier,
+  spec `rounding: Option[RoundingMode] = None` plombée par `Sequential`).
   À l'élaboration : `if (rounding == Truncate) shiftLegacy else shiftRNE`.
+  Le shift+RNE+saturation entier est factorisé dans `ops/requantize.scala`
+  (`RequantizeMath.shiftSaturate` SInt, `shiftRound` UInt) : `RequantizeOp`,
+  `BatchNorm1D` et les deux pools partagent une seule implémentation. Sur un
+  avgpool la saturation est mathématiquement inatteignable (la moyenne d'un
+  fenêtre reste dans la plage d'entrée et l'accumulateur fait `w + shift` bits) ;
+  elle est conservée par partage, jamais par nécessité.
 - **LUT/ROM (Option B, env-only)** : `MathLUTs.generateFloatMantissaROM/intEncodeFn/floatEncodeFn`,
   `PWLLUTs.generateROMs` + `UnaryPWLOp`, et les 5 feuilles `ExpOp/ReciprocalOp/SqrtOp/RsqrtOp/LogOp`
   (param `rounding` défauté, compagnons `apply` idem, sites inline sqrt/rsqrt/log dont la
@@ -163,5 +170,10 @@ dominant du projet reste la table de registres MatMul.
 2. **Propagation NaN e4m3fn** (mant=111) : comparateur + mux dans mul/add/gt/
    roundTo (~1 j + goldens), pendant de DTYPE-07.
 3. **Sous-normaux** : uniquement si un modèle le justifie ; FTZ reste le défaut.
-4. **Rounding avgpool int** (RNE via le switch) si la sémantique entière compte.
+4. **Rounding avgpool int — fait (Wave 5 step 3)** : RNE via le switch,
+   `RequantizeMath` partagé avec `RequantizeOp` (SInt `shiftSaturate`, UInt
+   `shiftRound`), specs `AvgPool1D/2D(rounding = None)` plombées par `Sequential`,
+   réplica `LayerReplicas.avgPool*Int(outBits, rounding)` via `requantizeScalar`,
+   goldens `avgpool1d_hw`/`avgpool2d_hw` paramétrés par mode, tests RNE + lane
+   trunc.
 5. **Résiduel FP8 LAY-04** : eps min-normal représentable (décision + golden).

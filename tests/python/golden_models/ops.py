@@ -1406,10 +1406,11 @@ def maxpool2d_hw(X, K, stride, dtype):
         Y.append(row)
     return Y
 
-def avgpool2d_hw(X, K, stride, dtype):
+def avgpool2d_hw(X, K, stride, dtype, rounding=None):
     """Golden model of AvgPool2DOp. Input [H, W] or [H, W, C]; output [H_out, W_out(, C)].
     Floats: pairwise adder-tree (floatml_add) then exact exponent shift by log2(K*K).
-    Integers: exact sum then arithmetic right shift (floor division)."""
+    Integers: exact sum then the shared RequantizeMath datapath (shift with the
+    rounding switch, RNE default / trunc legacy, then saturation)."""
     import math
     H = len(X)
     W_in = len(X[0])
@@ -1435,7 +1436,7 @@ def avgpool2d_hw(X, K, stride, dtype):
                     val = _floatml_exp_shift(acc_val, shift, dtype)
                 else:
                     acc = sum(int(w) for w in window)
-                    val = acc >> shift
+                    val = requantize_hw(acc, dtype.bit_width, dtype.bit_width, shift, rounding)
                 bits = dtype.from_float(val)
                 pix.append(dtype.to_float(bits))
             row.append(pix if is_3d else pix[0])

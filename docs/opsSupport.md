@@ -84,8 +84,8 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D max pooling. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D max pooling, multi-channel. BRAM delay-line line buffers (`Mem` + `readSync`). |
-| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
-| `AvgPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D average pooling (isPow2(K*K), shift-based). Same BRAM line buffers as MaxPool2D. |
+| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. Integer path shift+RNE via the rounding switch (`RequantizeMath`, same datapath as `RequantizeOp`); `rounding` per layer via `LayerSpec`. |
+| `AvgPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D average pooling (isPow2(K*K), shift-based). Same BRAM line buffers as MaxPool2D. Integer path shift+RNE via the rounding switch (`RequantizeMath`). |
 
 ## Infrastructure Modules
 
@@ -117,7 +117,7 @@ See [universalTestEngine.md](universalTestEngine.md) for full architectural docu
 | `LeakyReLU` | ✅ | ❌ | ❌ | Arithmetic shift right in float. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | Bit-exact spatial pooling. |
 | `MaxPool1D` | ✅ | ❌ | ❌ | Bit-exact 1D pooling. |
-| `AvgPool2D` / `AvgPool1D` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` interpreter wiring. |
+| `AvgPool2D` / `AvgPool1D` | ✅ | ✅ (`I8`, `I16`) | — | Replica wired (`PoolHandlers` + `LayerReplicas.avgPool*`); integer path shares `RequantizeMath` (shift+RNE via the rounding switch, Wave 5 step 3). Float path: exponent shift. |
 | `Cast` | ✅ (Float -> Float) | ✅ (Int -> Int) | ✅ (Int -> Float + scale) | Bridging integer and float domains. |
 | `Flatten` | ✅ | ✅ | ✅ | Features-last flatten. |
 | `BatchNorm1D` | ✅ | ❌ | ❌ | Floating-point scale & bias. |

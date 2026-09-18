@@ -66,7 +66,8 @@ object PoolHandlers {
           arr3D(ch)(y)(x) = if (idx < raw.length) raw(idx) else 0L
           idx += 1
         }
-        val pooled = LayerReplicas.avgPool2DInt(arr3D, p.poolSize, p.stride)
+        val pooled = LayerReplicas.avgPool2DInt(arr3D, p.poolSize, p.stride, it.bitWidth,
+          p.rounding.getOrElse(spinalML.RoundingConfig.current))
         val flat = LayerReplicas.flattenInt(pooled)
         IntTensor(nextShape, flat, it.bitWidth)
 
@@ -140,7 +141,8 @@ object PoolHandlers {
           arr2D(pos)(ch) = if (idx < raw.length) raw(idx) else 0L
           idx += 1
         }
-        val pooled = LayerReplicas.avgPool1DInt(arr2D, p.poolSize, p.stride)
+        val pooled = LayerReplicas.avgPool1DInt(arr2D, p.poolSize, p.stride, it.bitWidth,
+          p.rounding.getOrElse(spinalML.RoundingConfig.current))
         val flat = ArrayBuffer[Long]()
         for (pos <- pooled.indices; ch <- 0 until c) flat += pooled(pos)(ch)
         IntTensor(nextShape, flat.toSeq, it.bitWidth)

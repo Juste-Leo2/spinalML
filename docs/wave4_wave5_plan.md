@@ -84,6 +84,21 @@ annotation `docs/bugs/list_bug.md` → **PAUSE** (l'utilisateur commit).
   `Seq(4,1)` (`IllegalArgumentException: LAY-02 conformance …`).
   Non-régression : `test-all -k "LayerSpecTest|SequentialTest|AcceleratorTest"`
   4/4 ✅.
+- **Rounding AvgPool int (step 3)** : datapath entier factorisé dans
+  `ops/requantize.scala` (`RequantizeMath.shiftSaturate` SInt / `shiftRound`
+  UInt), réutilisé par `RequantizeOp` et les deux pools (SInt **et** UInt) ;
+  specs `AvgPool1D/2D(rounding: Option[RoundingMode] = None)` plombées par
+  `Sequential` ; réplica `LayerReplicas.avgPool*Int(outBits, rounding)` via
+  `requantizeScalar` + `PoolHandlers` ; goldens `avgpool1d_hw`/`avgpool2d_hw`
+  via `requantize_hw` (idiome `rounding=None→env`). Décision actée : alignement
+  `RequantizeOp` — le clamp est inatteignable pour une moyenne (la moyenne reste
+  dans la plage, accumulateur `w + shift` bits), seul l'arrondi change.
+  Rouges : `AvgPool1D` tie 7.5 → 7 au lieu de 8 (RNE), `AvgPool2D` 3.5 → 3 au
+  lieu de 4. Vérifs : `AvgPool1D/2DTest` RNE + trunc ✅, `RequantizeTest` ✅,
+  formels pools/Requantize 5/5 ✅, pytest avgpool1d/2d RNE ✅ + lane trunc ✅,
+  `test-all -k "SequentialTest|AcceleratorTest|Mnist"` 5/5 ✅ (BF16 + W4A8),
+  suite universelle 10/10 ✅ (5 démos AvgPool), `BatchNorm/LayerNorm/Cast/
+  RoundingPolicy` 4/4 ✅.
 - **Aire** : une synthèse Yosys comparative (top représentatif, RNE vs trunc) ;
   chiffres consignés dans `docs/rounding_policy.md`.
 - **Formels** : suites existantes en RNE, inchangées ; ajouter au besoin un

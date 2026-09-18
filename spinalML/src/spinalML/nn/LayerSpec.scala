@@ -154,7 +154,12 @@ case class MaxPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerS
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class AvgPool1D(poolSize: Int, stride: Int, lanes: Int = -1) extends LayerSpec {
+case class AvgPool1D(
+  poolSize: Int,
+  stride: Int,
+  lanes: Int = -1,
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2, "AvgPool1D requires at least 2D input shape (L, C)")
     val l = inShape(0)
@@ -179,7 +184,12 @@ case class MaxPool2D(poolSize: Int, stride: Int, lanes: Int = 1) extends LayerSp
   override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
-case class AvgPool2D(poolSize: Int, stride: Int, lanes: Int = 1) extends LayerSpec {
+case class AvgPool2D(
+  poolSize: Int,
+  stride: Int,
+  lanes: Int = 1,
+  rounding: Option[spinalML.RoundingMode] = None
+) extends LayerSpec {
   require(isPow2(poolSize * poolSize), "AvgPool2D requires isPow2(poolSize*poolSize) (shift-based division)")
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = {
     require(inShape.length >= 2 && inShape.length <= 3, "AvgPool2D requires a 2D (H, W) or 3D (H, W, C) input shape")
