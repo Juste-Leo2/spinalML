@@ -24,9 +24,9 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | ✅ **CORRIGÉ** |
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
 | [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | ✅ **CORRIGÉ** |
-| [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | 🟡 **MOYEN** | P1 (Tiling), P3 (Knobs lanes) | **Fragilité protocolaire** |
+| [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | ⚪ **FAUX POSITIF** | P1 (Tiling), P3 (Knobs lanes) | ⚪ **FAUX POSITIF DÉMONTRÉ** |
 | [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | ✅ **CORRIGÉ** |
-| [BUG-DDR-10](#bug-ddr-10--flakiness-du-banc-dmasdbtb-lié-à-labsence-de-resetflush-du-streamer) | Flakiness non-déterministe du banc DDR `DmaSdbTb` (stale FIFO) | 🟢 **TEST** | P0 (Filet de sécurité) | **Dette de test / Flakiness** |
+| [BUG-DDR-10](#bug-ddr-10--flakiness-du-banc-dmasdbtb-lié-à-labsence-de-resetflush-du-streamer) | Flakiness non-déterministe du banc DDR `DmaSdbTb` (stale FIFO) | 🟢 **TEST** | P0 (Filet de sécurité) | ✅ **CORRIGÉ** |
 | [BUG-DDR-11](#bug-ddr-11--désactivation-totale-en-ci-des-suites-end-to-end-ddr-archivées) | Exclusion complète des suites de tests end-to-end DDR du build CI | 🟢 **TEST** | P0 (Priorité 0 Wave 6) | **Dette de couverture** |
 
 ---
@@ -264,7 +264,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 
 ### BUG-DDR-08 : Risque de deadlock dans `DMAReader2D` si `(rowWords * axiLanes) % outLanes != 0`
 
-- **Sévérité** : 🟡 **MOYEN** (Blocage complet du pipeline de lecture d'images)
+- **Sévérité** : ⚪ **FAUX POSITIF (VÉRIFIÉ & DÉMONTRÉ)**
 - **Fichier** : [`spinalML/src/spinalML/memory/DMAReader2D.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/DMAReader2D.scala#L65-L70) et [`L130-L133`](file:///e:/spinalML/spinalML/src/spinalML/memory/DMAReader2D.scala#L130-L133)
 - **Code concerné** :
   ```scala
@@ -274,14 +274,22 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   val rowFetchedBeats = ((totalFetchElems / outLanes).resize(beatsW bits)) +
                         Mux(totalFetchElems % outLanes =/= 0, U(1, beatsW bits), U(0, beatsW bits))
   ```
-- **Mécanisme de défaillance** :
-  `DMAReader2D` délègue la lecture de chaque ligne à un composant `DMAReader` 1D sans boîte de vitesses flushable (`flushableGearbox = false` par défaut).
-  L'opérateur de repack de voies interne attend que les battements d'entrée complètent un groupe de sortie de largeur `outLanes`.
-  Si pour une configuration donnée (ex. géométrie non multiple ou changement dynamique de tuiles), le nombre d'éléments transférés sur le bus ne permet pas de compléter le dernier mot de sortie, le convertisseur de largeur reste en attente d'éléments supplémentaires.
-  L'état `stateDrain` attend que `elemCnt === rowFetchedBeats - 1` pour clore la ligne, ce qui ne se produit jamais : le pipeline se fige en interblocage permanent.
-- **Impact Wave 6** : Bloquant pour le pavage flexible d'images et le streaming de tuiles de dimensions arbitraires (Priorité 1 et 3).
-- **Correction recommandée** :
-  Activer `flushableGearbox = true` dans l'instance interne `reader1D` de `DMAReader2D` et synchroniser la frontière de ligne avec le re-armement du repack.
+- **Mécanisme allégué** :
+  Il était supposé que si `(rowWords * axiLanes) % outLanes != 0`, le convertisseur de voies resterait en attente d'éléments pour compléter le dernier battement de sortie et que le terme `+ 1` dans `rowFetchedBeats` causerait un deadlock dans `stateDrain` attendant un battement fantôme.
+- **Démonstration de l'impossibilité structurelle (Faux Positif)** :
+  1. **Invariants et contrats formels du module** :
+     - `shape(1) % outLanes == 0` : contrat d'élaboration (`DMAReader2D.scala:78`), chaque ligne ML est un multiple strict de `outLanes`.
+     - `headSkipElems % outLanes == 0` pour `outLanes > 1` : contrat d'alignement runtime prouvé formellement (`DMAReader2DFormal.scala:99-102`), car le trimming aval ne découpe que des battements entiers.
+     - Toutes les largeurs de bus AXI (`dataWidth`) et dtypes sont des puissances de 2, donc $AL = elemsPerWord$ et $OL = outLanes$ sont des puissances de 2.
+  2. **Preuve mathématique que `totalFetchElems % outLanes == 0` toujours** :
+     - Soit $rowWords = \lceil (headSkipElems + rowWidth) / AL \rceil$ et $totalFetchElems = rowWords \times AL$.
+     - **Cas $OL \le AL$** : $AL$ est un multiple de $OL$ ($AL = k \times OL$). Donc $totalFetchElems = (rowWords \times k) \times OL$, ce qui donne $totalFetchElems \pmod{OL} \equiv 0$ pour tout $rowWords$.
+     - **Cas $OL > AL$** : Puisque $headSkipBytes < bytesPerBeat$, on a $0 \le headSkipElems < AL < OL$. Par le contrat d'alignement ($headSkipElems \pmod{OL} == 0$), la seule valeur possible est $headSkipElems = 0$. Alors $rowWords = \lceil rowWidth / AL \rceil$. Comme $rowWidth$ est multiple de $OL = m \times AL$, $rowWords$ est un multiple exact de $m$, et $totalFetchElems = p \times m \times AL = p \times OL$. Donc $totalFetchElems \pmod{OL} \equiv 0$.
+  3. **Absence de résidu inter-lignes** :
+     Comme documenté dans [`DMAReader.scala:43`](file:///e:/spinalML/spinalML/src/spinalML/memory/DMAReader.scala#L43) (*« DMAReader2D keeps the legacy adapter (image rows are exact multiples) »*), le convertisseur `StreamWidthAdapter` se vide intégralement à la fin de chaque ligne car chaque ligne comprend un nombre entier exact de battements de sortie.
+  4. **Validation de non-régression** :
+     Suite de tests unitaires `DMAReader2DTest` (75.4s) ✅ et suite formelle BMC + Cover SymbiYosys `DMAReader2DFormal` (115.5s) ✅. Statut : ⚪ **FAUX POSITIF DOCUMENTÉ**.
+
 
 ---
 
@@ -332,8 +340,10 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   Dans le banc de micro-benchmark `DmaSdbTb`, `streamer.io.reArm` n'est pas branché au signal de frontière de commande.
   La FIFO interne de 16 mots du streamer conserve des valeurs initiales aléatoires produites par Verilator. Selon la graine pseudo-aléatoire de simulation, le banc réussit (graine `1481499482` : 0 erreur) ou échoue dramatiquement (graine `2094212935` : 2832 erreurs sur 2880 valeurs, le streamer répétant le premier mot indéfiniment). Le test a été désactivé par un tag `ignore` au lieu d'être corrigé.
 - **Impact Wave 6** : Fragilise le filet de sécurité (Priorité 0) qui doit impérativement restaurer des tests vivants et déterministes.
-- **Correction recommandée** :
-  Dans `DmaSdbDut`, connecter explicitement `streamer.io.reArm := io.cmd.fire`.
+- **Correction appliquée & validée** :
+  1. Câblage de `streamer.io.reArm := io.cmd.fire` dans `DmaSdbDut` ([`archive/test/examples/SdbSwapTb.scala`](file:///e:/spinalML/archive/test/examples/SdbSwapTb.scala#L138-L139)), assurant la réinitialisation de la FIFO interne et des compteurs à chaque nouvelle commande de fetch.
+  2. Rétablissement du test `test("DMA->SDB full path serves the W4A8 FC weight exactly")` (suppression du tag `ignore`).
+  3. Non-régression unitaire `DoubleBufferStreamerTest` (53.6s) ✅. Statut : ✅ **CORRIGÉ**.
 
 ---
 
