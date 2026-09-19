@@ -7,6 +7,22 @@
   "baud_rate": 115200,
   "bram_words": 4096,
   "description": "Sipeed Tang Primer 20K (Gowin GW2A-18, 27 MHz base clock)",
+  "memory": {
+    "onchip_words": 4096,
+    "onchip_addr": {
+      "imgBase": "0x10000",
+      "weightBase": "0x20000"
+    },
+    "ddr": {
+      "present": false,
+      "size_bytes": 0,
+      "base": "0x00000000",
+      "dataWidth": 16,
+      "controller": "none",
+      "max_burst": 256,
+      "note": "External DRAM not pinned/calibrated yet (.cst has clk/reset/UART only); see docs/ddr_impl.md Phase 5b"
+    }
+  },
   "build": {
     "synth_cmd": "synth_gowin",
     "pnr_tool": "nextpnr-himbaechel",

@@ -36,8 +36,21 @@ case class Conv2D(
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
+  // K-axis chunk width of the matmul weight beats (M2 pattern, mirrors
+  // Linear.weightLanes): the weight memory layout is unchanged (one
+  // flattened K*K*inChannels row per output channel); only the per-beat lane
+  // count and the matmul's internal K chunking change.
+  // -1 (default) = kernelSize*kernelSize, the legacy full row-group width.
+  // Any other value must divide K*K*inChannels (dense beats == column
+  // groups, no zero-padding — see the OPS-07 note in Sequential).
+  weightLanes: Int = -1,
   lanes: Int = 1
 ) extends LayerSpec {
+  require(weightLanes == -1 || (weightLanes > 0 && (kernelSize * kernelSize * inChannels) % weightLanes == 0),
+    s"Conv2D weightLanes=$weightLanes must be -1 or a positive divisor of K*K*inChannels=${kernelSize * kernelSize * inChannels}")
+
+  /** Effective per-beat width: K*K when the default (-1) is left untouched. */
+  def effLanes: Int = if (weightLanes <= 0) kernelSize * kernelSize else weightLanes
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   
@@ -97,8 +110,16 @@ case class Conv1D(
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
+  // Same M2 pattern as Conv2D: -1 (default) = kernelSize*inChannels, the
+  // legacy width; otherwise must divide K*inChannels (no padding).
+  weightLanes: Int = -1,
   lanes: Int = 1
 ) extends LayerSpec {
+  require(weightLanes == -1 || (weightLanes > 0 && (kernelSize * inChannels) % weightLanes == 0),
+    s"Conv1D weightLanes=$weightLanes must be -1 or a positive divisor of K*inChannels=${kernelSize * inChannels}")
+
+  /** Effective per-beat width: K*inChannels when the default (-1) is left untouched. */
+  def effLanes: Int = if (weightLanes <= 0) kernelSize * inChannels else weightLanes
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   
