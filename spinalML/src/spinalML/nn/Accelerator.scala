@@ -39,7 +39,11 @@ class Accelerator[T <: Data](
   // 0 = legacy full MxN accumulator table; > 0 = windowed row drain.
   val temporal: Int = 0,
   val inLanes: Int = 1,
-  val target: Target = Target.Simulation
+  val target: Target = Target.Simulation,
+  // Phase-2 DDR plumbing (docs/ddr_impl.md): logical memory descriptor.
+  // Default = legacy map (on-chip, historical bases, no fit check), so every
+  // existing model elaborates exactly as before.
+  val memory: MemorySpec = MemorySpec.default
 ) extends Component {
 
   val axiLiteConfig = AxiLite4Config(addressWidth = 8, dataWidth = 32)
@@ -83,15 +87,15 @@ class Accelerator[T <: Data](
   val ctrlFactory = new AxiLite4SlaveFactory(io.ctrlBus)
 
   // Register 0x20: Output Base Address (for DMAWriter write-back)
-  val outAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), 0x20, 0) init(0)
+  val outAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.OutAddr, 0) init(0)
 
   // Register 0x24: Output Control (bit 0: writeToDdr enable)
-  val outCtrlReg = ctrlFactory.createReadAndWrite(UInt(8 bits), 0x24, 0) init(0)
+  val outCtrlReg = ctrlFactory.createReadAndWrite(UInt(8 bits), CsrMap.OutCtrl, 0) init(0)
   val writeToDdr = outCtrlReg(0)
 
   // Register 0x28: DMA Write Status (bit 0: busy, bit 1: done)
-  ctrlFactory.read(dmaWriter.io.busy, 0x28, 0)
-  ctrlFactory.read(dmaWriter.io.done, 0x28, 1)
+  ctrlFactory.read(dmaWriter.io.busy, CsrMap.DmaStatus, 0)
+  ctrlFactory.read(dmaWriter.io.done, CsrMap.DmaStatus, 1)
 
   // Register 0x30: Runtime Dequantization Scale (for Cast layers with runtimeScale = true)
   val initialScaleBits: BigInt = {
@@ -106,7 +110,7 @@ class Accelerator[T <: Data](
       case None => BigInt(0)
     }
   }
-  val dequantScaleReg = ctrlFactory.createReadAndWrite(Bits(32 bits), 0x30, 0) init(B(initialScaleBits, 32 bits))
+  val dequantScaleReg = ctrlFactory.createReadAndWrite(Bits(32 bits), CsrMap.DequantScale, 0) init(B(initialScaleBits, 32 bits))
   model.io.dequantScale.foreach(_ := dequantScaleReg)
 
   // 2. Map the AXI4 Master
@@ -165,7 +169,7 @@ class Accelerator[T <: Data](
   // but a host AXI-Lite status read spans many cycles. Cleared by a host START
   // write so a polling driver cannot miss completion.
   val doneSticky = RegInit(False)
-  ctrlFactory.onWrite(0x00) {
+  ctrlFactory.onWrite(CsrMap.Start) {
     // Trigger inference. We hold the request until the datapath accepts it.
     startPending := True
     doneSticky := False
@@ -202,10 +206,10 @@ class Accelerator[T <: Data](
   // CSR register itself is factory-driven and must not be ticked from
   // arbitrary when-closures): readback 0x08 therefore stays the host-set base,
   // while the effective access point walks base + frameCount × imageBytes.
-  val imgAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), 0x08, 0) init(0)
+  val imgAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.ImgBase, 0) init(0)
 
   // Register 0x0C: Weights Base Address
-  val weightsAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), 0x0C, 0) init(0)
+  val weightsAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.WeightBase, 0) init(0)
   model.io.weightsBaseAddress := weightsAddrReg
 
   // ------------------------------------------------------------------
@@ -229,9 +233,15 @@ class Accelerator[T <: Data](
   // Race note: the cursor is advanced on the SAME edge as the auto-START,
   //   strictly before any DMA reads the address — the host never observes a
   //   half-advanced frame access.
-  val runReg = ctrlFactory.createReadAndWrite(UInt(8 bits), 0x1C, 0) init(0)
+  val runReg = ctrlFactory.createReadAndWrite(UInt(8 bits), CsrMap.Run, 0) init(0)
   val runActive = runReg(0) // sampled at top level (see comment above)
   val imageBytesAcc = (globalDataType().getBitsWidth / 8) * inputShape.product
+
+  // Phase-2 DDR plumbing: elaboration-time footprint check against the
+  // declared capacity (no-op for the legacy default with capacityBytes=None).
+  // Frame cursors (imgBaseOffset/outBaseOffset) stay runtime registers —
+  // Phase 4 generalizes them with the spill cursor (CSR 0x34 reserved).
+  memory.reportFit(imageBytesAcc.toLong, model.totalWeightBytes.toLong, outBytesAcc.toLong)
 
   val tileCntReg = Reg(UInt(32 bits)) init(0)
   val imgBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
@@ -255,12 +265,12 @@ class Accelerator[T <: Data](
   // A host write to 0x08 starts a new image stream: reset the RUN cursor so the
   // next inference reads from the newly programmed base without a hard reset.
   // Placed after the frameDone increment so a same-cycle host write wins.
-  ctrlFactory.onWrite(0x08) {
+  ctrlFactory.onWrite(CsrMap.ImgBase) {
     imgBaseOffset := 0
   }
 
   // A host write to 0x20 starts a new output stream: reset the write-back cursor.
-  ctrlFactory.onWrite(0x20) {
+  ctrlFactory.onWrite(CsrMap.OutAddr) {
     outBaseOffset := 0
   }
 
@@ -268,10 +278,10 @@ class Accelerator[T <: Data](
   // Bit 0: Done (latched frameDone in DDR mode, outStream.valid in stream mode)
   // Bit 1: Busy (model busy || dmaWriter busy)
   // Bit 2: RUN state (mirror of 0x1C bit0)
-  ctrlFactory.read(Mux(writeToDdr, doneSticky, io.outStream.stream.valid), 0x04, 0)
-  ctrlFactory.read(io.busy, 0x04, 1)
-  ctrlFactory.read(runActive, 0x04, 2)
-  ctrlFactory.read(tileCntReg, 0x18, 0)
+  ctrlFactory.read(Mux(writeToDdr, doneSticky, io.outStream.stream.valid), CsrMap.Status, 0)
+  ctrlFactory.read(io.busy, CsrMap.Status, 1)
+  ctrlFactory.read(runActive, CsrMap.Status, 2)
+  ctrlFactory.read(tileCntReg, CsrMap.TileCnt, 0)
 
   model.io.imgBaseAddress := imgAddrReg + imgBaseOffset
 
@@ -295,12 +305,12 @@ class Accelerator[T <: Data](
   // Assumption (documented in docs): the host paces RELOAD requests at most
   // one outstanding per region — BUSY/export may be added later if needed.
   if (weightResidencyCSR) {
-    val runModeReg = ctrlFactory.createReadAndWrite(UInt(8 bits), 0x10, 0) init(0)
+    val runModeReg = ctrlFactory.createReadAndWrite(UInt(8 bits), CsrMap.Mode, 0) init(0)
     model.io.weightResident.foreach(_ := runModeReg(0))
     model.io.weightPrefetch.foreach(_ := runModeReg(1))
 
     val reloadShot = RegInit(False)
-    ctrlFactory.onWrite(0x14) {
+    ctrlFactory.onWrite(CsrMap.Reload) {
       reloadShot := True
     }
     when(reloadShot) {

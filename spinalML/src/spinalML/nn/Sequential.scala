@@ -716,6 +716,12 @@ case class Sequential(
     registerNode(nextTensor)
   }
 
+  // Total weight/bias region footprint in bytes (exact `MemLayout`
+  // conventions: whole-region ceil + beat alignment per region). Phase-2 DDR
+  // plumbing: `Accelerator` uses this for the elaboration-time fit check
+  // (`MemorySpec.reportFit`) instead of duplicating the layout loop.
+  val totalWeightBytes: Int = currentMemoryOffset
+
   // RELOAD broadcast (Phase 2a weight residency): a pulse on this input arms
   // EVERY resident region for exactly one refetch at the next START. Placed
   // textually after the per-command latch-clear sites so it wins there
