@@ -20,7 +20,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-01](#bug-ddr-01--omission-du-guard-prefetchworldb-sur-le-re-arm-du-double-buffer-de-biais) | Omission du guard `!prefetchWorldB` sur le re-arm du double buffer de biais | 🔴 **CRITIQUE** | P0 (Tests), P4 (Folding L2) | ✅ **CORRIGÉ** |
 | [BUG-DDR-02](#bug-ddr-02--absence-dincrément-de-ladresse-de-sortie-en-mode-flux-continu-writetoddr) | Écrasement systématique des sorties en mode continu `writeToDdr` | 🔴 **CRITIQUE** | P1 (Advanced Tiling), P2 (Flux continu) | ✅ **CORRIGÉ** |
 | [BUG-DDR-03](#bug-ddr-03--masque-doctets-wstrb-nul-sur-le-dernier-beat-dmawriter-pour-les-types-4-bits) | Masque d'octets `w.strb` nul sur le dernier battement `DMAWriter` (< 8 bits) | 🔴 **CRITIQUE** | P1 (Spill d'accumulateurs), P3 (Scaling W4A8/FP4) | ✅ **CORRIGÉ** |
-| [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | **Lacune architecturale** |
+| [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | ✅ **CORRIGÉ** |
 | [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | ✅ **CORRIGÉ** |
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
 | [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | **Bug de synchronisation** |
@@ -162,8 +162,13 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   - La passe $P+1$ relit ces sommes partielles via le maître AXI Read pour accumuler la tuile suivante.
   - Rien dans `DdrAdapter` ne garantit que la transaction d'écriture s'est achevée (réponse B reçue et commitée dans la DRAM physique) avant que la requête de lecture `ar` de la passe $P+1$ ne soit présentée au contrôleur DDR. Cela expose le système à des lectures de données périmées.
 - **Impact Wave 6** : Bloquant pour le spill multi-passes d'accumulateurs (Priorité 1) et pour le bring-up DDR3 réel sur Tang Primer 20K (Priorité 5).
-- **Correction recommandée** :
-  Ajouter un module de synchronisation d'accès ou un interlock dans `DdrAdapter` garantissant qu'aucune transaction `ar` sur une région en cours d'écriture ne peut être émise tant que `accWaitB` est actif (ou intégrer un compteur de transactions d'écriture en vol).
+- **Correction appliquée & validée** :
+  1. Synchronisation inter-canaux dans `DdrAdapter.scala` :
+     - Gating du canal AXI Read : `extIo.ddrMaster.ar.valid := io.axi.ar.valid && !writeBusy` et `io.axi.ar.ready := extIo.ddrMaster.ar.ready && !writeBusy` avec `writeBusy = hostActive || accBusy`. Aucune requête de lecture ne peut être émise ni acceptée par le contrôleur DRAM tant qu'une écriture (hôte ou rafale accélérateur jusqu'à la réponse `B`) est en cours.
+     - Compteur de transactions de lecture en vol `readInFlight` pour synchronisation bidirectionnelle : protection WAR bloquant `io.axi.aw.ready` et `io.wrReady` tant qu'une lecture DRAM est en cours d'évacuation (`readBusy = (readInFlight =/= 0)`).
+     - Mémorisation et propagation de l'ID de transaction d'écriture accélérateur `accIdR := io.axi.aw.payload.id` sur `extIo.ddrMaster.aw.payload.id`.
+  2. Validée par `MemoryAdapterTest` (« BUG-DDR-04: DdrAdapter RAW hazard interlock stalls AXI AR until write completes ») confirmant le blocage systématique de `ar.valid`/`ar.ready` durant toutes les phases d'écriture (`accAwPending`, `accStreaming`, `accWaitB`) et le déblocage synchrone à la réception de la réponse `B`. Non-régression complète validée sur `AcceleratorTest`, `MLAcceleratorTest` et vérification formelle SymbiYosys/BMC `AcceleratorFormal` (2/2 PASS). Statut : ✅ **CORRIGÉ**.
+
 
 ---
 
