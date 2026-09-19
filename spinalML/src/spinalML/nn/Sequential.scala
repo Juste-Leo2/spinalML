@@ -46,9 +46,17 @@ case class Sequential(
   // high-level API so the same modelSpec elaborates for sim / FPGA / ASIC.
   // Default Simulation keeps CI behavior bit-identical (layers still use
   // DspConfig.default = Target.current until Phase 4 threads this through).
-  val target: Target = Target.Simulation
+  val target: Target = Target.Simulation,
+  // S0 compute-side spill (docs/ddr_final_impl.md): on-chip replay budget in
+  // bytes for a spilling layer whose A operand is NOT DDR-backed (deep
+  // layer): pass 0 snoops the A stream into a replay Mem, passes > 0 re-read
+  // it. Layers above budget (and not on node 0) fail elaboration with a
+  // pointer at A-spill (v2). 0 disables the replay path (node-0 spill only).
+  val spillReplayBudgetBytes: Int = 4096
 ) extends Component {
   require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
+  require(spillReplayBudgetBytes >= 0,
+    s"Sequential spillReplayBudgetBytes=$spillReplayBudgetBytes must be >= 0")
 
   /** Arithmetic policy derived from the high-level target (Phase 4 will
     * thread this into the layer instantiations below). */
@@ -202,6 +210,10 @@ case class Sequential(
   // --- 1. Memory Offset Calculation & DMA Instantiation ---
   val allAxiMasters = scala.collection.mutable.ArrayBuffer[Axi4ReadOnly]()
   var currentMemoryOffset = 0
+  // S0 compute-side spill: exact M*N full-width partials footprint per
+  // spilling layer (DDR region sized by the S2 cursor; fit-checked by
+  // Accelerator.reportFit). Beat-aligned per region, MemLayout conventions.
+  var spillBytesAcc = 0
 
   // Every weight/bias region must start on an AXI-beat boundary: DDR
   // controllers and memory models serve bursts from the beat-aligned address,
@@ -669,6 +681,31 @@ case class Sequential(
           case _ =>
             LinearHW(repackedTensor, layerWeights, layerBias, lType, 1024, false, Option(weightDmaFire), Option(biasDmaFire), temporal)
         }
+        // The K-pass GEMM needs the windowed row drain (temporal) and must
+        // be able to re-stream A every pass: node 0 is DDR-backed
+        // (re-fetch), deeper nodes need a replay buffer within budget
+        // (A-spill to DDR is the v2 follow-up, see docs/ddr_final_impl.md).
+        // NOTE (runtime contract, enforced by the S2 pass controller): spill
+        // passes assume STREAM_PER_PASS (CSR 0x10 = 0). The residency control
+        // plane may be wired (weightResidency flag) as long as the host never
+        // enables resident/prefetch modes under a spill — hence no
+        // elaboration require on the flag itself (Accelerator enables it by
+        // default).
+        if (l.spilling) {
+          require(temporal >= 1,
+            s"Sequential: Linear layer $i spills (spillKSlice=${l.spillKSlice}) but temporal=$temporal — " +
+              "the spill drain reuses the windowed row drain, require temporal >= 1")
+          val aElems = nodeShapes(i).product
+          val aBytes = MemLayout.regionBytes(aElems, nodeTypes(i).getBitsWidth)
+          require(i == 0 || aBytes <= spillReplayBudgetBytes,
+            s"Sequential: Linear layer $i spills but its A operand (node $i, ${aBytes}B) is neither " +
+              "DDR-backed (node 0) nor within spillReplayBudgetBytes=$spillReplayBudgetBytes — " +
+              "spill A to DDR first (v2, see docs/ddr_final_impl.md)")
+          // M*N full-width partials (accType = lType at both call sites above).
+          val mRows = nodeShapes(i).dropRight(1).product
+          val spillElems = mRows * l.outFeatures
+          spillBytesAcc += alignToBeat(MemLayout.regionBytes(spillElems, lType.getBitsWidth))
+        }
         if (linOut.lanes != l.lanes) repack(linOut, l.lanes) else linOut
 
       case rq: Requantize =>
@@ -731,6 +768,11 @@ case class Sequential(
   // plumbing: `Accelerator` uses this for the elaboration-time fit check
   // (`MemorySpec.reportFit`) instead of duplicating the layout loop.
   val totalWeightBytes: Int = currentMemoryOffset
+
+  // S0 compute-side spill footprint in bytes (exact `MemLayout` conventions:
+  // per-region ceil + beat alignment). 0 = no spilling layer. `Accelerator`
+  // feeds this to `MemorySpec.reportFit` instead of the declared hint.
+  val totalSpillBytes: Int = spillBytesAcc
 
   // RELOAD broadcast (Phase 2a weight residency): a pulse on this input arms
   // EVERY resident region for exactly one refetch at the next START. Placed

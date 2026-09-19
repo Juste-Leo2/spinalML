@@ -249,8 +249,16 @@ class Accelerator[T <: Data](
   // declared capacity (no-op for the legacy default with capacityBytes=None).
   // Frame cursors (imgBaseOffset/outBaseOffset) stay runtime registers —
   // Phase 4 generalizes them with the spill cursor (CSR 0x34 live above).
+  // S0 compute-side spill (docs/ddr_final_impl.md): the elaboration-computed
+  // footprint is the fit-check truth (MemorySpec.spillBytes stays a driver
+  // hint until the S2 cursor sizes the region). A spilling model without a
+  // spill descriptor base fails fast here, not on silicon.
+  val spillBytesFit = model.totalSpillBytes.toLong
+  require(spillBytesFit == 0 || memory.spillBase.isDefined,
+    s"Accelerator: model spills ${spillBytesFit}B but memory.spillBase is empty — " +
+      "declare the spill region (MemorySpec spillBase, programmed via CSR 0x34)")
   memory.reportFit(imageBytesAcc.toLong, model.totalWeightBytes.toLong, outBytesAcc.toLong,
-    memory.spillBytes.getOrElse(0L))
+    spillBytesFit)
 
   val tileCntReg = Reg(UInt(32 bits)) init(0)
   val imgBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
