@@ -31,14 +31,17 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     val reArm     = in Bool() default(False)
   }
   
-  // State Machine for reading
+  // State Machine for reading and tile delivery tracking
   val readCounter = Counter(memSize)
-  val isReading = RegInit(False)
+  val popCounter  = Counter(memSize)
+  val isReading   = RegInit(False)
+  val tileActive  = RegInit(False)
   
   io.nextTile := False
   
-  when(io.tileReady && !isReading) {
-    isReading := True
+  when(io.tileReady && !tileActive) {
+    tileActive := True
+    isReading  := True
   }
   
   // To handle the 1-cycle read latency from StreamDoubleBuffer cleanly with Stream backpressure,
@@ -54,13 +57,22 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     readCounter.increment()
     when(readCounter.willOverflowIfInc) {
       isReading := False
-      io.nextTile := True // Signal the double buffer to flip banks
     }
   }
   
   // Explicit FIFO to perfectly handle the 1-cycle BRAM read latency and downstream backpressure.
   val fifo = new StreamFifo(Vec(dataType, lanes), 16)
   io.streamOut << fifo.io.pop
+
+  // BUG-DDR-07 fix: io.nextTile must only be asserted when the entire tile has been
+  // delivered to the downstream consumer, not when read addresses finish issuing.
+  when(io.streamOut.fire) {
+    popCounter.increment()
+    when(popCounter.willOverflowIfInc) {
+      io.nextTile := True
+      tileActive  := False
+    }
+  }
   
   // We can only issue a read request if there is enough space in the FIFO for both
   // the data we are requesting now, AND any data that might already be in flight (1 cycle delay).
@@ -77,7 +89,9 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
 
   when(io.reArm) {
     isReading := False
+    tileActive := False
     readCounter.clear()
+    popCounter.clear()
     fifo.io.flush := True
     delayedValid := False
   }

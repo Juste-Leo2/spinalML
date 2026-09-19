@@ -23,7 +23,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | ✅ **CORRIGÉ** |
 | [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | ✅ **CORRIGÉ** |
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
-| [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | **Bug de synchronisation** |
+| [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | ✅ **CORRIGÉ** |
 | [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | 🟡 **MOYEN** | P1 (Tiling), P3 (Knobs lanes) | **Fragilité protocolaire** |
 | [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | **Conformité AXI4** |
 | [BUG-DDR-10](#bug-ddr-10--flakiness-du-banc-dmasdbtb-lié-à-labsence-de-resetflush-du-streamer) | Flakiness non-déterministe du banc DDR `DmaSdbTb` (stale FIFO) | 🟢 **TEST** | P0 (Filet de sécurité) | **Dette de test / Flakiness** |
@@ -250,8 +250,15 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   Si le consommateur aval subit un calage (backpressure), la totalité ou une partie de la tuile réside encore dans la FIFO.
   Pourtant, le `StreamDoubleBuffer` reçoit déjà l'impulsion `nextTile` et bascule immédiatement sa banque (`computeBank := !computeBank`). Si le lecteur DMA a déjà préchargé la tuile suivante en arrière-plan, le streamer peut commencer à aspirer la nouvelle tuile dans la même FIFO avant que l'ancienne ne soit totalement consommée, ce qui crée des mélanges ou des queues résiduelles lors des frontières d'inférence.
 - **Impact Wave 6** : Cause racine documentée des corruptions sous prefetch eager (voir `docs/bugs/2026-08-prefetch-eager-stale-fifo-session.md`) et risque de pacing sous flux continu (Priorités 0, 2 et 4).
-- **Correction recommandée** :
-  Assurer que `io.nextTile` n'est émis que lorsque la FIFO est complètement vide et que le dernier élément a été accepté par l'aval.
+- **Correction appliquée & validée** :
+  1. Synchronisation de `io.nextTile` sur la livraison effective aval dans `DoubleBufferStreamer.scala` :
+     - Remplacement de l'émission prématurée (basée sur `readCounter.willOverflowIfInc` qui survenait à l'émission de la dernière adresse BRAM avant même que les données n'atteignent la FIFO) par un compteur de livraison `popCounter = Counter(memSize)`.
+     - `io.nextTile := True` et libération de l'état `tileActive := False` sont désormais exclusivement pilotés par `when(io.streamOut.fire) { popCounter.increment(); when(popCounter.willOverflowIfInc) { ... } }`.
+     - L'état de lecture `isReading` s'arrête proprement dès que toutes les adresses sont dispatchées, et le démarrage d'une nouvelle tuile est conditionné par `!tileActive`, interdisant toute aspiration de nouvelle tuile tant que la tuile en cours n'a pas été vidée de la FIFO.
+     - Reset et flush atomique de `popCounter` et `tileActive` sur `io.reArm`.
+  2. Validée par le test unitaire Scala `DoubleBufferStreamerTest` (« BUG-DDR-07: nextTile must NOT fire prematurely under downstream backpressure until tile is fully drained ») vérifiant qu'aucune impulsion `nextTile` n'est émise tant que l'aval est calé (0 mot extrait de la FIFO), et que l'impulsion survient exactement sur le handshake du dernier mot.
+  3. Non-régression formelle BMC `DoubleBufferStreamerFormal` (31.8s), `StreamDoubleBufferFormal` (27.3s), `StreamDoubleBufferPrefetchFormal` (76.6s) et test d'intégration `SequentialTest` (164.9s). Statut : ✅ **CORRIGÉ**.
+
 
 ---
 
