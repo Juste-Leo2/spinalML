@@ -26,6 +26,20 @@ class MemoryAdapterTest extends AnyFunSuite {
     SpinalConfig().generateVerilog(simFactory(axiConfig))
   }
 
+  test("MemoryAdapter: factory resolution from explicit MemoryKind (Phase-1 DDR plumbing)") {
+    // Backward-compatible default path is unchanged (FPGA -> BRAM).
+    SpinalConfig().generateVerilog(MemoryAdapter.factory(Target.FPGA())(axiConfig))
+    // Explicit kinds select the matching Layer-2 implementation.
+    SpinalConfig().generateVerilog(
+      MemoryAdapter.factory(Target.FPGA(), Some(MemoryKind.OnChip), memoryWords = 512)(axiConfig))
+    SpinalConfig().generateVerilog(
+      MemoryAdapter.factory(Target.FPGA(), Some(MemoryKind.ExternalDram))(axiConfig))
+    SpinalConfig().generateVerilog(
+      MemoryAdapter.factory(Target.Simulation, Some(MemoryKind.ExternalDram))(axiConfig))
+    SpinalConfig().generateVerilog(
+      MemoryAdapter.factory(Target.ASIC(PdkFamily.Sky130), Some(MemoryKind.AsicSram), memoryWords = 512)(axiConfig))
+  }
+
   test("BramAdapter: Write and Read back simulation") {
     val words = 64
     SimConfig.compile(new BramAdapter(axiConfig, memoryWords = words, imgBase = 0x1000, weightBase = 0x2000)).doSim { dut =>

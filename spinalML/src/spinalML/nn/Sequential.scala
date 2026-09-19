@@ -7,6 +7,8 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
 import spinalML.tensors.Tensor
+import spinalML.{Target, FpgaFamily, PdkFamily}
+import spinalML.arithmetic.ArithmeticConfig
 import spinalML.utils.{MemLayout, SimLog}
 import spinalML.dtypes.FloatML
 import spinalML.layers.{Conv1D => Conv1DHW, Conv2D => Conv2DHW, Linear => LinearHW, batchnorm}
@@ -39,9 +41,18 @@ case class Sequential(
   // to <= min(temporal, M) x N slots. Bit-exactness is preserved by
   // construction (the fadd sum order is unchanged).
   val temporal: Int = 0,
-  val inLanes: Int = 1
+  val inLanes: Int = 1,
+  // Phase-1 DDR plumbing (docs/ddr_impl.md): hardware target carried by the
+  // high-level API so the same modelSpec elaborates for sim / FPGA / ASIC.
+  // Default Simulation keeps CI behavior bit-identical (layers still use
+  // DspConfig.default = Target.current until Phase 4 threads this through).
+  val target: Target = Target.Simulation
 ) extends Component {
   require(temporal >= 0, s"Sequential temporal=$temporal must be >= 0")
+
+  /** Arithmetic policy derived from the high-level target (Phase 4 will
+    * thread this into the layer instantiations below). */
+  val arithmeticConfig: ArithmeticConfig = ArithmeticConfig(target = target)
 
   // ============================================================
   // 0. Topology analysis (pure elaboration-time, no hardware yet)

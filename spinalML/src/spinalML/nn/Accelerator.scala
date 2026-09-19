@@ -8,15 +8,21 @@ import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.amba4.axilite._
 import spinalML.tensors.Tensor
 import spinalML.memory.{DMAWriter, WriteRequest}
+import spinalML.Target
 
 /**
  * Top-level wrapper that converts a generic `Sequential` model into a complete
  * System-on-Chip (SoC) ready hardware accelerator.
- * 
+ *
  * It automatically exposes two standard memory-mapped buses:
  * - AXI4 Master (High Speed): For fetching features and weights directly from DDR,
  *   and writing back output tensors via DMAWriter.
  * - AXI4-Lite Slave (Control): For the CPU to configure registers and start the inference.
+ *
+ * @param target Hardware target carried through to `Sequential`
+ *               (Phase-1 DDR plumbing, docs/ddr_impl.md). Default Simulation
+ *               preserves current CI behavior; pass `Target.FPGA(...)` or
+ *               `Target.ASIC(...)` to elaborate for silicon.
  */
 class Accelerator[T <: Data](
   val dataType: HardType[T],
@@ -32,7 +38,8 @@ class Accelerator[T <: Data](
   // M3: rows-in-flight bound for the reduction ops (see Sequential.temporal).
   // 0 = legacy full MxN accumulator table; > 0 = windowed row drain.
   val temporal: Int = 0,
-  val inLanes: Int = 1
+  val inLanes: Int = 1,
+  val target: Target = Target.Simulation
 ) extends Component {
 
   val axiLiteConfig = AxiLite4Config(addressWidth = 8, dataWidth = 32)
@@ -42,7 +49,8 @@ class Accelerator[T <: Data](
 
   // 1. Instantiate the neural network datapath first to infer its output shape
   val model = Sequential(globalDataType, inputShape, modelSpec, axiConfig,
-    weightResidency = weightResidencyCSR, tileHeight = tileHeight, temporal = temporal, inLanes = inLanes)
+    weightResidency = weightResidencyCSR, tileHeight = tileHeight, temporal = temporal, inLanes = inLanes,
+    target = target)
 
   // Instantiate DMAWriter for optional DDR write-back of final output tensor
   val dmaWriter = DMAWriter(
