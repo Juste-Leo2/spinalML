@@ -1,6 +1,7 @@
 # Compute-side spill — Plan final d'implémentation (étapes S0-S3)
 
-> **Statut** : plan figé le 19/09/2026, exécution en cours (S0 d'abord).
+> **Statut** : plan figé le 19/09/2026. **S0 validée, S1 validée** (voir notes de
+> clôture dans chaque section) ; prochaine étape : S2.
 > **Docs liés** : `docs/ddr_impl.md` §5.3 (soudure compute), `docs/ddr_replica_status.md`
 > (contrat numérique, non-régression), `docs/wave6_ddr_scaling_plan.md` P1 (contexte cap DRAM),
 > `docs/roadmap_board.md` §4 (mémoire par board).
@@ -32,6 +33,12 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
   `require` spill configuré ⇒ `memory.spillBase.isDefined`.
 - **Gate** : `SpillConfigTest` (accepté/refusé aux bons endroits, fit qui lève) ;
   tout le reste vert, aucun comportement RTL ne change.
+- **✅ VALIDÉE le 19/09/2026.** Écarts au plan actés pendant l'exécution :
+  pas de `require(!weightResidency)` — le flag n'instancie que le plan de
+  contrôle (inactif par défaut, et `Accelerator` l'active par défaut) ;
+  l'interaction spill × residency est un **contrat runtime** (`STREAM_PER_PASS`,
+  `CSR 0x10 = 0`) que le contrôleur S2 appliquera, pas un `require`
+  d'élaboration.
 
 ## S1 — `MatmulOp` slice engine (1 j)
 
@@ -41,6 +48,17 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
   B-buffer rechargé par slice (fire piloté par S2).
 - **Gate** : sim standalone bit-exact vs réplica **inchangé** ; test `bias_add(x,0)==x`
   par dtype (dont `FloatML`) — échec ⇒ fallback bypass ; spill désactivé = historique.
+- **✅ VALIDÉE le 19/09/2026** (`MatmulSpillTest` 4/4 + non-régression legacy
+  `Matmul/Linear/Conv/BiasAdd/SpillConfig` verte). Écarts et durcissements actés :
+  seed **par ligne** entrelacé (pas en bloc — aliasing de fenêtre `temporal`) ;
+  entrée de passe verrouillée sur **front `reArm`** (pass-fire explicite, pas de
+  départ fantôme sur `tileReady` stale) ; `passDone` pulsé sur le drain de la
+  **dernière ligne** (pas par ligne) ; bias-zéro validé I8 + BF16 au triple près
+  (fallback bypass **écarté**) ; réplica **zéro-change confirmé** (ordre `fadd`
+  identique) ; `LinearLayer` spillée + `passDone` exposé (test smoke : bias une
+  fois, `y` silencieux hors passe finale). Discipline bench consignée en tête de
+  `MatmulSpillTest.scala` (v3 : valid tenu, un tick/beat, payload pré-posé,
+  `ready` armés tôt, feed/collecte entrelacés sur passthrough).
 
 ## S2 — Pass-loop `Sequential` + curseur spill `Accelerator` (1-1.5 j)
 
