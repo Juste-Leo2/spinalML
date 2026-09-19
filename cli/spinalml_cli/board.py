@@ -56,6 +56,15 @@ def parse_frequency(freq: Union[str, int, float]) -> int:
     else:
         raise ValueError(f"Unknown frequency unit '{unit}' in '{freq}'. Use Hz, kHz, MHz, or GHz.")
 
+def _parse_addr(value: Any, default: int) -> int:
+    """Parses a memory address accepting ints or hex/dec strings ("0x10000")."""
+    if value is None:
+        return int(default)
+    if isinstance(value, str):
+        return int(value.strip(), 0)
+    return int(value)
+
+
 def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
     """
     Loads a board configuration JSON from boards/<name>.json or a direct file path.
@@ -89,6 +98,9 @@ def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
     raw_build = data.get("build", {})
     raw_flash = data.get("flash", {})
     raw_limits = data.get("limits", {})
+    raw_memory = data.get("memory", {})
+    raw_ddr = raw_memory.get("ddr", {})
+    raw_onchip_addr = raw_memory.get("onchip_addr", {})
 
     default_cst_rel = raw_build.get("default_cst")
     default_cst_path = None
@@ -111,6 +123,21 @@ def load_board_config(board_name_or_path: str) -> Dict[str, Any]:
         "bram_words": int(data.get("bram_words", 4096)),
         "description": data.get("description", ""),
         "file_path": target_file,
+        "memory": {
+            "onchip_words": int(raw_memory.get("onchip_words", data.get("bram_words", 4096))),
+            "onchip_addr": {
+                "imgBase": _parse_addr(raw_onchip_addr.get("imgBase"), 0x10000),
+                "weightBase": _parse_addr(raw_onchip_addr.get("weightBase"), 0x20000),
+            },
+            "ddr": {
+                "present": bool(raw_ddr.get("present", False)),
+                "size_bytes": int(raw_ddr.get("size_bytes", 0)),
+                "base": _parse_addr(raw_ddr.get("base"), 0x00000000),
+                "dataWidth": int(raw_ddr.get("dataWidth", 16)),
+                "controller": str(raw_ddr.get("controller", "none")),
+                "max_burst": int(raw_ddr.get("max_burst", 256)),
+            },
+        },
         "build": {
             "synth_cmd": raw_build.get("synth_cmd", "synth_gowin" if data.get("vendor") == "Gowin" else "synth"),
             "pnr_tool": raw_build.get("pnr_tool", "nextpnr-himbaechel"),
