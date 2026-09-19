@@ -207,7 +207,8 @@ case class DMAWriter[T <: Data](
   // drops to 0 while `burstRemain` counts the final burst down, so mask the
   // padding bytes of the final beat instead of strobing them all (which would
   // corrupt the bytes adjacent to the tensor).
-  val finalBeatBytes = (totalElements - (totalAxiBeats - 1) * axiLanes) * (elemWidth / 8)
+  val finalBeatElems = totalElements - (totalAxiBeats - 1) * axiLanes
+  val finalBeatBytes = (finalBeatElems * elemWidth + 7) / 8
   val fullByteMask = (BigInt(1) << bytesPerBeat) - 1
   val lastByteMask = (BigInt(1) << finalBeatBytes) - 1
   val finalBeat = (remaining === 0) && (burstRemain === 1)
