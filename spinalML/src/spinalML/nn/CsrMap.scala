@@ -38,10 +38,10 @@ object CsrMap {
   val DmaStatus: Int = 0x28
   /** 0x30: Runtime dequantization scale (Cast layers with runtimeScale). */
   val DequantScale: Int = 0x30
-
-  // ---- Reserved for the spill/stride/status plane (Phase 4/5) -------------
-  /** 0x34 (RESERVED): spill region base address (accumulator spill). */
+  /** 0x34: Spill region base address (accumulator spill, Phase 4). */
   val SpillBase: Int = 0x34
+
+  // ---- Reserved for the stride/status plane (Phase 4/5) ------------------
   /** 0x38 (RESERVED): output stride between consecutive frames. */
   val OutStride: Int = 0x38
   /** 0x3C (RESERVED): memory status (fit/fence state). */
@@ -49,8 +49,8 @@ object CsrMap {
 
   /** All currently wired addresses (excludes reserved). */
   val wired: Set[Int] = Set(Start, Status, ImgBase, WeightBase, Mode, Reload,
-    TileCnt, Run, OutAddr, OutCtrl, DmaStatus, DequantScale)
+    TileCnt, Run, OutAddr, OutCtrl, DmaStatus, DequantScale, SpillBase)
 
   /** All reserved addresses (must not collide with wired). */
-  val reserved: Set[Int] = Set(SpillBase, OutStride, MemStatus)
+  val reserved: Set[Int] = Set(OutStride, MemStatus)
 }

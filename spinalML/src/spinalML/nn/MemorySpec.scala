@@ -23,27 +23,31 @@ case class MemorySpec(
   kind: MemoryKind = MemoryKind.OnChip,
   imgBase: Long = 0x10000L,
   weightBase: Long = 0x20000L,
-  /** Spill region base (accumulator spill, Phase 4/5). None = no spill. */
+  /** Spill region base (accumulator spill, Phase 4). None = no spill. */
   spillBase: Option[Long] = None,
+  /** Spill region size in bytes (M*N partials footprint). None = unknown. */
+  spillBytes: Option[Long] = None,
   /** Total usable bytes behind this descriptor. None = no fit check. */
   capacityBytes: Option[Long] = None
 ) {
   require(imgBase >= 0 && weightBase >= 0, s"MemorySpec bases must be non-negative (img=$imgBase weight=$weightBase)")
   spillBase.foreach(b => require(b >= 0, s"MemorySpec spillBase must be non-negative (got $b)"))
+  spillBytes.foreach(b => require(b >= 0, s"MemorySpec spillBytes must be >= 0 (got $b)"))
   capacityBytes.foreach(c => require(c > 0, s"MemorySpec capacityBytes must be > 0 (got $c)"))
 
   /**
    * Elaboration-time footprint check: image + weight/bias regions + one
-   * output frame must fit in `capacityBytes` when declared.
+   * output frame (+ spill, when sized) must fit in `capacityBytes` when
+   * declared.
    *
    * All sizes are exact region bytes (`MemLayout` conventions: whole-region
    * ceil + beat alignment, as computed by `Sequential.totalWeightBytes`).
    */
-  def reportFit(imageBytes: Long, weightBytes: Long, outBytes: Long): Unit =
+  def reportFit(imageBytes: Long, weightBytes: Long, outBytes: Long, spill: Long = 0): Unit =
     capacityBytes.foreach { cap =>
-      val total = imageBytes + weightBytes + outBytes
+      val total = imageBytes + weightBytes + outBytes + spill
       require(total <= cap,
-        s"MemorySpec: model footprint ${total}B (image ${imageBytes}B + weights ${weightBytes}B + out ${outBytes}B) " +
+        s"MemorySpec: model footprint ${total}B (image ${imageBytes}B + weights ${weightBytes}B + out ${outBytes}B + spill ${spill}B) " +
         s"exceeds capacity ${cap}B — enable activation tiling (tileHeight), accumulator spill, " +
         s"layer folding, or quantized weights (see docs/wave6_ddr_scaling_plan.md)")
     }

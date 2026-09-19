@@ -65,7 +65,7 @@ modèles de validation phase 4) : Linear int pur sans `Cast`, `AvgPool`,
 `Sigmoid`/`Tanh`, `Softmax`, Conv2D int multi-canal, attention, packing
 I16/I32.
 
-## 4. Décisions ouvertes (bloquent le démarrage phase 4)
+## 4. Décisions ouvertes (bloquaient le démarrage phase 4 — voir §5-6)
 
 1. **Contrat numérique du spill** : sommes pleine largeur + bias/activation
    une seule fois sur la passe finale (réplica quasi inchangé, recommandé)
@@ -75,3 +75,58 @@ I16/I32.
    agrandies (aucun gap) vs mixte.
 3. **Scaffold CLI `test`** : propagation `dut.memory` + log capacité dès la
    phase 4 vs reporté au bring-up (phase 5).
+
+## 5. Garantie de non-régression réplica (phases 1-4 livrées)
+
+Règle appliquée à chaque changement réplica des phases 1-4 : **paramètre
+optionnel avec défaut = comportement historique au bit près**, jamais de
+réécriture de l'ordre existant.
+
+* `conv2D`/`conv1D` float : `lanes: Int = -1` ; `<= 0` = un seul `tree` sur
+  toute la fenêtre = l'ancien code, instruction par instruction
+  (`LayerReplicas.scala`). `ConvHandlers` transmet `c.effLanes`, qui vaut
+  l'ancienne largeur pleine par défaut (`K*K`, `K*inC`).
+* Preuve : suites existantes vertes sans modification d'oracle
+  (`MnistTest`, `Conv2DTest`, `AcceleratorTest`, …) + sim dédiée à lanes
+  étroites bit-exacte (`SequentialTest` Conv2D BF16 `weightLanes=3`).
+* Chemins int : aucune modification (associativité entière, wrap final
+  unique — valide tant que le spill reste pleine largeur, §2).
+* À ajouter avec le compute-side, même pattern : fold `spillWidth`
+  (une ligne par handler, défaut = `effLanes`).
+
+## 6. Compute size — ce qui tient *à l'exécution* aujourd'hui
+
+Distinguer deux tailles (toutes deux en octets exacts, conventions
+`MemLayout` : ceil par région + alignement beat) :
+
+* **Footprint déclaré** (tient en DDR/sim, vérifié à l'élaboration par
+  `MemorySpec.reportFit`) : `image + totalWeightBytes + out (+ spill)`,
+  avec `image = (dtypeBits/8) * inputShape.product` (`Accelerator`),
+  `totalWeightBytes` exposé par `Sequential`, `out = totalOutBeats *
+  beatBytes`. C'est lui qui « scale en sim » depuis les phases 1-4.
+* **Working set d'exécution** (doit tenir on-chip *aujourd'hui*) : par
+  couche matmul, table d'accumulateurs `M*N` (`MatmulOp`, legacy) bornée à
+  `min(temporal,M)*N` en mode `temporal`, + buffer B `paddedK*N` + fenêtre
+  A. Le spill K-pass (compute-side) est ce qui fera passer les sommes
+  partiels `M*N` en DDR entre passes — voir design figé dans
+  `docs/ddr_impl.md` §5.3.
+
+Règle de lecture : un modèle **élabore et charge** dès que le footprint
+tient la capacité déclarée ; il **s'exécute** tant que chaque working set
+tient l'on-chip (ou draine vers l'aval en `temporal`). Tout écart lève un
+`require` d'élaboration explicite, jamais un débordement silencieux.
+
+## 7. Clôture PR DDR-plumbing + anticipation du compute-side
+
+Cette PR introduit la DDR comme **tuyauterie vérifiée** (pas comme
+exécution spillée) : `Target` propagé, `MemoryKind`/`FenceConfig`,
+`MemorySpec` + fit check, CSR `0x34` live, arbre AXI, lanes uniformes
+Linear/Conv, fencing par chevauchement — chaque brique avec tests sim +
+preuves formelles vertes, socle non-régressé.
+
+Le compute-side **était anticipé dès le départ** : `docs/ddr_impl.md` §5.3
+fige la soudure (drain temporal → mux `spillOut`, seed `spillIn`, slices W
+par offset, re-stream A DDR-résident, bias-zéro hors passe finale,
+périmètre v1 = `Linear` à A DDR-résident) et `docs/wave6_ddr_scaling_plan.md`
+P1 le chiffrait (2-4 j). Il fera l'objet d'une PR dédiée : contrôleur
+multi-passes + RMW + fold réplica + spec formelle du contrôleur.

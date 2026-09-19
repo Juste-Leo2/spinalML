@@ -49,6 +49,34 @@ object MemoryKind {
   case object AsicSram extends MemoryKind
 }
 
+/**
+ * Read/write fencing policy for `DdrAdapter` (Phase-4 DDR plumbing,
+ * docs/ddr_impl.md).
+ *
+ * - `fenceReadsOnWrite` (RAW): forwarded reads stall while a write is in
+ *   flight. Required by DRAM controllers with no read/write ordering.
+ * - `fenceWritesOnRead` (WAR): accepted writes stall while reads are in
+ *   flight. Same rationale in the other direction.
+ * - `regionAware`: when true, each direction stalls only if the new request's
+ *   byte range overlaps the in-flight opposite-direction range(s), allowing
+ *   prefetch/compute overlap and spill Read-Modify-Write across disjoint
+ *   regions. When false, any in-flight opposite traffic stalls (conservative).
+ *
+ * Presets: `strictDram` (default, bit-identical to the BUG-DDR-04 barrier),
+ * `regionAwareDram` (overlap fencing for scaling), `relaxedSram`
+ * (documentary: Bram/SramAsic adapters have no interlock to configure).
+ */
+case class FenceConfig(
+  fenceReadsOnWrite: Boolean = true,
+  fenceWritesOnRead: Boolean = true,
+  regionAware: Boolean = false
+)
+object FenceConfig {
+  def strictDram: FenceConfig = FenceConfig(true, true, false)
+  def regionAwareDram: FenceConfig = FenceConfig(true, true, true)
+  def relaxedSram: FenceConfig = FenceConfig(false, false, false)
+}
+
 object MemoryAdapter {
 
   /**

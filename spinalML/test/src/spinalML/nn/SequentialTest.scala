@@ -537,6 +537,180 @@ class SequentialTest extends AnyFunSuite {
     }
   }
 
+  test("Arbiter cascade: two-stage tree structure beyond 8 DMA masters") {
+    def arbiterCount(nLinears: Int): Int = {
+      val targetDir = s"out/test_arb_count_$nLinears"
+      val layers = (0 until nLinears).map(_ => Linear(inFeatures = 4, outFeatures = 4))
+      // Default idWidth = 8 covers the tree routing budget at these sizes.
+      val wideAxi = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 8)
+      SpinalConfig(targetDirectory = targetDir).generateVerilog {
+        Sequential(
+          globalDataType = I8(),
+          inputShape = Seq(1, 4),
+          layers = layers,
+          axiConfig = wideAxi
+        )
+      }
+      val verilog = scala.io.Source.fromFile(s"$targetDir/Sequential.v").mkString
+      // Instantiation lines start with the module name (Spinal suffixes
+      // per-parameter variants as Axi4ReadOnlyArbiter_2, ...); the module
+      // definitions themselves start with the `module` keyword and comments
+      // with `//`, so a bare prefix match counts instances only.
+      verilog.split("\n").count(_.trim.startsWith("Axi4ReadOnlyArbiter"))
+    }
+
+    // 3 linears => 7 triggers <= 8: single-stage, exactly 1 arbiter.
+    assert(arbiterCount(3) == 1, "fan-in <= 8 must use a single arbiter")
+    // 4 linears => 9 triggers: 2 stage-1 groups + root = 3 arbiters.
+    assert(arbiterCount(4) == 3, "9 DMA masters must build a 2+1 tree")
+    // 9 linears => 19 triggers: 3 stage-1 groups + root = 4 arbiters.
+    assert(arbiterCount(9) == 4, "19 DMA masters must build a 3+1 tree")
+  }
+
+  test("Arbiter cascade: bit-exact inference routed through the tree") {
+    // 5 linears => 11 triggers => groups of 8+3 under a root arbiter: every
+    // weight/bias fetch crosses two arbitration stages with routed IDs.
+    val spec = (0 until 5).map(_ => Linear(inFeatures = 4, outFeatures = 4)).toSeq
+
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      new Sequential(
+        globalDataType = I8(),
+        inputShape = Seq(1, 4),
+        layers = spec,
+        axiConfig = axiConfig
+      )
+    )
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      val memory = SparseMemory()
+      new Axi4ReadOnlySlaveAgent(dut.io.axiMaster, dut.clockDomain) {
+        override def readByte(address: BigInt, id: Int): Byte = memory.read(address.toLong)
+      }
+
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.layers, dut.globalDataType, axiConfig)
+      writeWords(memory, weightBase, packed.words)
+
+      val inInts = Seq(1L, -2L, 3L, -4L)
+      writeWords(memory, imgBase, MemoryHarness.packBytes(inInts.map(_.toInt)))
+
+      dut.io.start.valid #= false
+      dut.io.outStream.stream.ready #= true
+      dut.io.imgBaseAddress #= imgBase
+      dut.io.weightsBaseAddress #= weightBase
+      dut.clockDomain.waitSampling(5)
+
+      dut.io.start.valid #= true
+      dut.clockDomain.waitSamplingWhere(dut.io.start.ready.toBoolean)
+      dut.io.start.valid #= false
+
+      val got = scala.collection.mutable.ArrayBuffer[Long]()
+      dut.clockDomain.waitSamplingWhere(dut.io.outStream.stream.valid.toBoolean)
+      while (got.length < 4) {
+        if (dut.io.outStream.stream.valid.toBoolean) {
+          dut.io.outStream.stream.payload(0) match {
+            case s: SInt => got += s.toBigInt.toLong
+            case u: UInt => got += u.toBigInt.toLong
+            case b: Bits => got += b.toBigInt.toLong
+          }
+        }
+        dut.clockDomain.waitSampling()
+      }
+
+      val oracle = ModelReplica.forwardWithTrace(
+        spec, Seq(1, 4), ModelReplica.IntTensor(Seq(1, 4), inInts, 8), packed)
+      val expected = oracle.logits
+      assert(got.length == expected.length, s"collected ${got.length} beats, expected ${expected.length}")
+      for ((g, e) <- got.zip(expected)) {
+        assert(g.toDouble == e, s"tree-routed beat $g != oracle $e")
+      }
+      println("[SequentialTest] Arbiter cascade: 5xLinear bit-exact through the 8+3 tree")
+    }
+  }
+
+  test("Conv weightLanes: divisor requirement and legacy defaults") {
+    // Defaults preserve the historical full widths (bit-identical RTL).
+    assert(Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3).effLanes == 9)
+    assert(Conv2D(inChannels = 2, outChannels = 3, kernelSize = 3).effLanes == 9)
+    assert(Conv1D(inChannels = 2, outChannels = 3, kernelSize = 4).effLanes == 8)
+    // Narrow divisors accepted.
+    assert(Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3, weightLanes = 3).effLanes == 3)
+    assert(Conv2D(inChannels = 2, outChannels = 3, kernelSize = 3, weightLanes = 6).effLanes == 6)
+    assert(Conv1D(inChannels = 2, outChannels = 3, kernelSize = 4, weightLanes = 2).effLanes == 2)
+    // Non-divisors (would need zero-padding) refused like Linear.
+    intercept[IllegalArgumentException] { Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3, weightLanes = 4) }
+    intercept[IllegalArgumentException] { Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3, weightLanes = 0) }
+    intercept[IllegalArgumentException] { Conv1D(inChannels = 2, outChannels = 3, kernelSize = 4, weightLanes = 3) }
+  }
+
+  test("Conv weightLanes: narrow streaming is bit-exact vs replica") {
+    // Conv2D K3 streamed 3 lanes at a time (3 chunks of 3): exercises the
+    // DMA narrow-beat framing + the matmul K-fold + the replica fold order.
+    val spec = Seq(Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3, weightLanes = 3))
+
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      new Sequential(
+        globalDataType = BF16(),
+        inputShape = Seq(5, 5, 1),
+        layers = spec,
+        axiConfig = axiConfig
+      )
+    )
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      val memory = SparseMemory()
+      new Axi4ReadOnlySlaveAgent(dut.io.axiMaster, dut.clockDomain) {
+        override def readByte(address: BigInt, id: Int): Byte = memory.read(address.toLong)
+      }
+
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.layers, dut.globalDataType, axiConfig)
+      writeWords(memory, weightBase, packed.words)
+
+      val (eW, mW) = (8, 7) // BF16
+      val inputValues = (0 until 25).map { idx =>
+        val sign = if (idx % 2 == 0) 1.0f else -1.0f
+        val mag = (((idx % 7) + 1) * 0.125).toFloat
+        HWArithmetic.fromDouble(sign * mag, eW, mW)
+      }
+      // BF16 elements are 16 bits: pack as padded float words (packBytes is
+      // for 8-bit elements only) — same convention as the CLI test scaffold.
+      val inFloats = inputValues.map(f => HWArithmetic.decode(f, eW, mW).toFloat)
+      writeWords(memory, imgBase, MemoryHarness.packFloats(MemoryHarness.padded(inFloats)))
+
+      dut.io.start.valid #= false
+      dut.io.outStream.stream.ready #= true
+      dut.io.imgBaseAddress #= imgBase
+      dut.io.weightsBaseAddress #= weightBase
+      dut.clockDomain.waitSampling(5)
+
+      dut.io.start.valid #= true
+      dut.clockDomain.waitSamplingWhere(dut.io.start.ready.toBoolean)
+      dut.io.start.valid #= false
+
+      // Output [3, 3, 2] at lanes=1 => 18 beats.
+      val got = scala.collection.mutable.ArrayBuffer[Double]()
+      dut.clockDomain.waitSamplingWhere(dut.io.outStream.stream.valid.toBoolean)
+      while (got.length < 18) {
+        if (dut.io.outStream.stream.valid.toBoolean) {
+          got += decodeData(dut.io.outStream.stream.payload(0))
+        }
+        dut.clockDomain.waitSampling()
+      }
+
+      val oracle = ModelReplica.forwardWithTrace(
+        spec, Seq(5, 5, 1), ModelReplica.FloatTensor(Seq(5, 5, 1), inputValues, eW, mW), packed)
+      val expected = oracle.logits
+      assert(got.length == expected.length, s"collected ${got.length} beats, expected ${expected.length}")
+      for (((g, e), i) <- got.zip(expected).zipWithIndex) {
+        assert(g == e, s"narrow-lane beat $i: hw=$g != replica=$e")
+      }
+      println("[SequentialTest] Conv weightLanes=3: bit-exact vs replica (K-fold order)")
+    }
+  }
+
   test("BUG-DDR-06: idWidth validation and elaboration for deep models (> 8 weight/bias layers)") {
     // 9 linear layers => 18 DMA triggers for weights/biases + 1 for image = 19 triggers.
     // log2Up(19) = 5 bits.

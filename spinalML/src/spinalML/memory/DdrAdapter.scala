@@ -15,7 +15,8 @@ import spinal.lib.bus.amba4.axi._
 class DdrAdapter(
   axiConfig: Axi4Config,
   val imgBase: Int    = 0x10000,
-  val weightBase: Int = 0x20000
+  val weightBase: Int = 0x20000,
+  val fence: FenceConfig = FenceConfig.strictDram
 ) extends MemoryAdapter(axiConfig) {
 
   val extIo = new Bundle {
@@ -64,16 +65,76 @@ class DdrAdapter(
   val readBusy = (readInFlight =/= 0)
 
   // ------------------------------------------------------------------
-  // AXI Read: interlocked with write path to prevent RAW hazards (BUG-DDR-04)
+  // AXI Read/write fencing (BUG-DDR-04 barrier, policy per FenceConfig)
+  //
+  // Strict mode (default): any in-flight write stalls every forwarded read
+  // and vice versa — the historical global interlock, bit-identical.
+  // Region-aware mode: a request stalls only if its byte range overlaps the
+  // in-flight opposite-direction range(s), so weight prefetch can overlap a
+  // spill/out write-back (and vice versa) across disjoint DDR regions.
   // ------------------------------------------------------------------
-  extIo.ddrMaster.ar.valid   := io.axi.ar.valid && !writeBusy
-  io.axi.ar.ready            := extIo.ddrMaster.ar.ready && !writeBusy
+  val beatBytes = axiConfig.dataWidth / 8
+  // Extended width: burst end (addr + beats*beatBytes) always fits, so the
+  // overlap comparison below can never wrap before comparing.
+  val extW = axiConfig.addressWidth + axiConfig.lenWidth + 4
+
+  def burstEnd(addr: UInt, len: UInt): UInt = {
+    val beats = (len +^ U(1, axiConfig.lenWidth bits)).resize(extW bits)
+    (addr.resize(extW bits) + beats * U(beatBytes, extW bits)).resize(extW bits)
+  }
+  def rangesOverlap(aAddr: UInt, aEnd: UInt, bAddr: UInt, bEnd: UInt): Bool =
+    (aAddr < bEnd) && (bAddr < aEnd)
+  def minU(a: UInt, b: UInt): UInt = Mux(a < b, a, b)
+  def maxU(a: UInt, b: UInt): UInt = Mux(a < b, b, a)
+
+  // Region tracking registers (elaborated only in regionAware mode).
+  // Write side: at most one range in flight (acc bursts and host beats are
+  // mutually exclusive by construction). Read side: union of the in-flight
+  // read ranges; a stale union can never gate because the gates below also
+  // require the matching busy counter, and a fresh AR overwrites the union
+  // whenever the counter was empty.
+  var wrTrackAddr: UInt = null
+  var wrTrackEnd: UInt = null
+  var rdTrackAddr: UInt = null
+  var rdTrackEnd: UInt = null
+  if (fence.regionAware) {
+    wrTrackAddr = Reg(UInt(axiConfig.addressWidth bits)) init(0)
+    wrTrackEnd = Reg(UInt(extW bits)) init(0)
+    rdTrackAddr = Reg(UInt(axiConfig.addressWidth bits)) init(0)
+    rdTrackEnd = Reg(UInt(extW bits)) init(0)
+  }
+
+  // Request ranges on the accelerator/host ports (extended width).
+  val arAddrExt = io.axi.ar.payload.addr.resize(extW bits)
+  val arEndExt = burstEnd(io.axi.ar.payload.addr, io.axi.ar.payload.len)
+  val awAddrExt = io.axi.aw.payload.addr.resize(extW bits)
+  val awEndExt = burstEnd(io.axi.aw.payload.addr, io.axi.aw.payload.len)
+  val hostAddrExt = io.wrAddr.resize(extW bits)
+  val hostEndExt = hostAddrExt + U(beatBytes, extW bits)
+
+  // RAW: forwarded reads stall on in-flight writes.
+  val arBlock: Bool = if (!fence.fenceReadsOnWrite) False
+    else if (!fence.regionAware) writeBusy
+    else writeBusy && rangesOverlap(arAddrExt, arEndExt,
+      wrTrackAddr.resize(extW bits), wrTrackEnd)
+  // WAR: accepted writes stall on in-flight reads (acc bursts and host beats).
+  val awBlock: Bool = if (!fence.fenceWritesOnRead) False
+    else if (!fence.regionAware) readBusy
+    else readBusy && rangesOverlap(awAddrExt, awEndExt,
+      rdTrackAddr.resize(extW bits), rdTrackEnd)
+  val hostBlock: Bool = if (!fence.fenceWritesOnRead) False
+    else if (!fence.regionAware) readBusy
+    else readBusy && rangesOverlap(hostAddrExt, hostEndExt,
+      rdTrackAddr.resize(extW bits), rdTrackEnd)
+
+  extIo.ddrMaster.ar.valid   := io.axi.ar.valid && !arBlock
+  io.axi.ar.ready            := extIo.ddrMaster.ar.ready && !arBlock
   extIo.ddrMaster.ar.payload := io.axi.ar.payload
 
   io.axi.r                   <> extIo.ddrMaster.r
 
-  // Flow control for writes: mutually exclusive with in-flight reads
-  val hostWrReady = !hostActive && !accBusy && !readBusy
+  // Flow control for writes: mutually exclusive with fencing reads
+  val hostWrReady = !hostActive && !accBusy && !hostBlock
   io.wrReady := hostWrReady
 
   when(io.wrEnable && hostWrReady) {
@@ -87,13 +148,34 @@ class DdrAdapter(
 
   val busHost = hostActive && !accBusy
 
-  // Accelerator AW is accepted only while the bus is fully idle (host first, no in-flight read).
-  io.axi.aw.ready := !hostActive && !accBusy && !readBusy
+  // Accelerator AW is accepted only while the bus is fence-idle (host first).
+  io.axi.aw.ready := !hostActive && !accBusy && !awBlock
   when(io.axi.aw.fire) {
     accAwPending  := True
     accWRemaining := (io.axi.aw.payload.len +^ 1).resize(beatCountW bits)
     accAddrR      := io.axi.aw.payload.addr
     accIdR        := io.axi.aw.payload.id
+  }
+
+  // Region tracking maintenance (regionAware mode only): capture the write
+  // range exactly when the write is latched, widen the read union on every
+  // forwarded AR (overwriting it when the counter was empty).
+  if (fence.regionAware) {
+    when(io.axi.aw.fire) {
+      wrTrackAddr := io.axi.aw.payload.addr
+      wrTrackEnd := burstEnd(io.axi.aw.payload.addr, io.axi.aw.payload.len)
+    }
+    when(io.wrEnable && hostWrReady) {
+      wrTrackAddr := io.wrAddr.resize(axiConfig.addressWidth bits)
+      wrTrackEnd := hostAddrExt + U(beatBytes, extW bits)
+    }
+    when(arFire) {
+      val newEnd = burstEnd(extIo.ddrMaster.ar.payload.addr, extIo.ddrMaster.ar.payload.len)
+      val wasActive = (readInFlight =/= 0)
+      rdTrackAddr := Mux(!wasActive, extIo.ddrMaster.ar.payload.addr,
+        minU(rdTrackAddr, extIo.ddrMaster.ar.payload.addr))
+      rdTrackEnd := Mux(!wasActive, newEnd, maxU(rdTrackEnd, newEnd))
+    }
   }
 
   // AW mux

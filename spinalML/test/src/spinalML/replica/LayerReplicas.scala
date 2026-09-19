@@ -22,7 +22,12 @@ object LayerReplicas {
     outChannels: Int,
     kernelSize: Int,
     expBits: Int,
-    mantBits: Int
+    mantBits: Int,
+    // M2/Phase-4 K-axis chunk width mirroring the HW matmul fold
+    // (Conv2D.weightLanes): chunks accumulate sequentially via fadd, exactly
+    // like Linear. <= 0 (default) = single chunk over the whole window, the
+    // historical behavior. Must divide K*K*inChannels when > 0.
+    lanes: Int = -1
   ): Array[Array[Array[F]]] = {
     val h = input(0).length
     val w = input(0)(0).length
@@ -39,7 +44,13 @@ object LayerReplicas {
         wIdx += 1
         prods += fmul(pix, weight, expBits, mantBits)
       }
-      val acc = fadd(PZERO, tree(prods.toSeq, expBits, mantBits), expBits, mantBits)
+      val wLanes = if (lanes <= 0) prods.length else lanes
+      require(prods.length % wLanes == 0,
+        s"conv2D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
+      var acc = PZERO
+      for (chunk <- 0 until prods.length by wLanes) {
+        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      }
       out(cOut)(y)(x) = fadd(acc, bias(cOut), expBits, mantBits)
     }
     out
@@ -54,7 +65,9 @@ object LayerReplicas {
     outChannels: Int,
     kernelSize: Int,
     expBits: Int,
-    mantBits: Int
+    mantBits: Int,
+    // Same M2 chunk contract as conv2D (mirrors Conv1D.weightLanes).
+    lanes: Int = -1
   ): Array[Array[F]] = {
     val l = input.length
     val lOut = l - kernelSize + 1
@@ -69,7 +82,13 @@ object LayerReplicas {
         wIdx += 1
         prods += fmul(inVal, wVal, expBits, mantBits)
       }
-      val acc = fadd(PZERO, tree(prods.toSeq, expBits, mantBits), expBits, mantBits)
+      val wLanes = if (lanes <= 0) prods.length else lanes
+      require(prods.length % wLanes == 0,
+        s"conv1D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
+      var acc = PZERO
+      for (chunk <- 0 until prods.length by wLanes) {
+        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      }
       out(pos)(cOut) = fadd(acc, bias(cOut), expBits, mantBits)
     }
     out

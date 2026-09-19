@@ -121,8 +121,26 @@ Objectif : scaling sans DDR physique. Tout est validé sur `BramAdapter` / `AxiM
    - Remplace la soustraction `idWidth` (`Sequential` BUG-DDR-06, pansement `idWidth=8`) par un arbre `Axi4ReadOnlyArbiter` à 2 étages.
    - Étend `Linear.weightLanes` à `Conv2D/Conv1D/Attention` via un knob unique `maxWeightLanes/streamingWidth`. Préserve le contrat beat partiel (`Tensor` : `totalElements % lanes != 0` autorisé).
 3. **Spill générique (Wave 6 P1, version `MemoryAdapter`, pas `DDR`).**
-   - Second `DMAWriter` + `DMAReader` dédiés spill dans `Sequential` (aujourd'hui un seul writer final dans `Accelerator`), régions allouées par `MemoryMap`, bias/activation une seule fois sur passe finale, RNE + saturation à la requant finale.
-   - Testé sur `BramAdapter` petit spill puis `AxiMemorySim` grand spill, bit-exact vs `ModelReplica`.
+    - **Mémoire (FAIT)** : CSR `0x34 SPILL_BASE` live dans `Accelerator`
+      (init depuis `MemorySpec.spillBase`, R/W hôte), `spillBytes` dans le
+      fit check, `CsrMap`/`MemorySpecFormal` à jour (13 wired / 2 reserved).
+    - **Compute (PROCHAINE ÉTAPE, design figé le 19/09)** : K-split du GEMM
+      avec sommes partielles M×N en DDR entre passes. Soudure identifiée :
+      le drain temporal existant (`MatmulOp` `stateEmitRow`/`stateOutput`,
+      drain + clear par ligne) devient la sortie spill sur passes non
+      finales (mux `spillOut`/`io.c`) ; l'accumulation est ensemencée depuis
+      `spillIn` sur passes > 0 (mux zéro/spill, sommes pleine largeur +
+      bias final unique — contrainte `docs/ddr_replica_status.md` §2) ;
+      boucle de chunks bornée à la slice + compteur de passes ; tranches W
+      par offset (`reqW.address`), re-stream A depuis source DDR-residente
+      (couche 1 d'abord) ; bias-zéro sur passes non finales (mux de stream,
+      `BiasAddOp` consomme exactement N beats/commande) ; paire
+      `DMAWriter`/`DMAReader` spill dans `Sequential` + curseur spill (reset
+      sur write `0x34`) ; fold `spillWidth` côté réplica ; spec formelle du
+      contrôleur multi-passes (progression, bias unique, pas de deadlock).
+      Périmètre v1 : `Linear` à A DDR-résident (cas MLP-4k : la première
+      couche est la grosse) ; `Conv`/couches profondes ensuite.
+    - Testé sur `BramAdapter` petit spill puis `AxiMemorySim` grand spill, bit-exact vs `ModelReplica`.
 4. **Gate Phase 4.**
    - `Linear 4096 / Conv 7x7` élabore dans le budget (`maxWeightLanes` + `temporal`), spill bit-exact, formels `DMAWriterFormal` / `AcceleratorFormal` verts.
    - Interdit : toujours aucune dépendance au silicium Tang.

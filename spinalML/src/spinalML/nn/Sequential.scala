@@ -216,15 +216,22 @@ case class Sequential(
   val startTriggers = StreamFork(io.start, totalDmaTriggers)
   var triggerIdx = 0
 
-  // Base AXI config for leaf DMAs (accounting for arbiter routing bits)
-  val minRequiredIdWidth = if (totalDmaTriggers <= 1) 0 else log2Up(totalDmaTriggers)
-  require(axiConfig.idWidth >= minRequiredIdWidth,
+  // Base AXI config for leaf DMAs (accounting for arbiter routing bits).
+  // Single-stage arbiter up to arbFanIn masters, two-stage tree beyond:
+  // routing budget = log2Up(fanIn) + log2Up(numGroups), always covering
+  // log2Up(totalDmaTriggers). Leaf idWidth 0 is legal (Spinal requires >= 0).
+  val arbFanIn = 8
+  val arbGroups = if (totalDmaTriggers <= 1) 1 else (totalDmaTriggers + arbFanIn - 1) / arbFanIn
+  val routeBits = if (totalDmaTriggers <= 1) 0
+    else if (totalDmaTriggers <= arbFanIn) log2Up(totalDmaTriggers)
+    else log2Up(arbFanIn) + log2Up(arbGroups)
+  require(axiConfig.idWidth >= routeBits,
     s"Sequential: axiConfig.idWidth (${axiConfig.idWidth}) is insufficient to arbitrate " +
-    s"$totalDmaTriggers DMA masters (requires at least $minRequiredIdWidth bits, i.e. axiConfig.idWidth >= $minRequiredIdWidth).")
+    s"$totalDmaTriggers DMA masters (requires at least $routeBits bits, i.e. axiConfig.idWidth >= $routeBits).")
 
   val dmaAxiConfig =
     if (totalDmaTriggers == 1) axiConfig
-    else axiConfig.copy(idWidth = axiConfig.idWidth - minRequiredIdWidth)
+    else axiConfig.copy(idWidth = axiConfig.idWidth - routeBits)
 
   // 1.1. Image DMA — banded 2D fetch (Phase-3 tiling)
   // Each band is one 2D patch command (patchHeight = band rows, baseAddress =
@@ -345,12 +352,14 @@ case class Sequential(
     // Fetch Weights
     if (wShape.head > 0) {
       val elements = wShape.product
-      // For Linear, lanes might be very high. We should cap it or repack. For this V1, we assume small kernel/linear.
-      // Wait, Conv2D requires w.lanes == K*K.
-      // Linear requires w.lanes == inFeatures.
+      // Per-beat weight width (M2 streaming): Linear/Conv1D/Conv2D expose
+      // weightLanes (default = legacy full width); norm layers and attention
+      // keep their structural widths (attention: wLanes == embedDim is a
+      // hard require inside ClassicalAttentionHW — narrowing it belongs to a
+      // dedicated change, not this knob).
       val requiredLanes = layer match {
-        case c: Conv2D => c.kernelSize * c.kernelSize
-        case c: Conv1D => c.kernelSize * c.inChannels
+        case c: Conv2D => c.effLanes
+        case c: Conv1D => c.effLanes
         case l: Linear => l.effLanes
         case bn: BatchNorm1D => bn.features
         case ln: LayerNorm1D => ln.features
@@ -446,10 +455,11 @@ case class Sequential(
       layerWeights.stream << wStreamer.io.streamOut
       // OPS-07: this weight stream is dense (exactly `elements` values, no
       // padding beats). It satisfies the MatMulOp per-line padded-group
-      // contract iff the beat framing divides K: Linear enforces lanes | K
-      // (`LayerSpec` require on weightLanes), so dense beats == column groups
-      // and no padding is needed. Any future producer with K % lanes != 0
-      // must zero-pad each line BEFORE this point, or the B buffer starves.
+      // contract iff the beat framing divides K: Linear/Conv1D/Conv2D enforce
+      // lanes | K (`LayerSpec` require on weightLanes), so dense beats ==
+      // column groups and no padding is needed. Any future producer with
+      // K % lanes != 0 must zero-pad each line BEFORE this point, or the B
+      // buffer starves.
       auditWeightLanes += requiredLanes
       auditWeightElements += elements
       auditWeightBeats += beats
@@ -757,15 +767,43 @@ case class Sequential(
 
   // --- 3. AXI Read Arbitration ---
   // If only a single DMA exists (e.g. image-only weightless model), bypass the arbiter entirely.
-  // Otherwise, arbitrate all DMA read masters onto the shared AXI master bus.
+  // Up to arbFanIn masters share one single-stage arbiter; beyond that a
+  // two-stage tree (groups of <= arbFanIn, then a root arbiter) bounds the
+  // per-stage fan-in for timing and removes the single-stage ID squeeze.
   if (allAxiMasters.length == 1) {
     io.axiMaster <> allAxiMasters.head
-  } else {
+  } else if (allAxiMasters.length <= arbFanIn) {
     val arbiter = Axi4ReadOnlyArbiter(axiConfig, allAxiMasters.length)
     for (i <- allAxiMasters.indices) {
       arbiter.io.inputs(i) <> allAxiMasters(i)
     }
     io.axiMaster <> arbiter.io.output
+  } else {
+    // Every stage-1 arbiter is sized to arbFanIn (unused inputs tied
+    // request-silent) so all group outputs share one ID width into root:
+    // dmaAxiConfig.idWidth + log2Up(arbFanIn) == axiConfig.idWidth - log2Up(groups).
+    val stage1OutCfg = axiConfig.copy(idWidth = dmaAxiConfig.idWidth + log2Up(arbFanIn))
+    val groupOutputs = scala.collection.mutable.ArrayBuffer[Axi4ReadOnly]()
+    var idx = 0
+    while (idx < allAxiMasters.length) {
+      val arb = Axi4ReadOnlyArbiter(stage1OutCfg, arbFanIn)
+      for (k <- 0 until arbFanIn) {
+        if (idx + k < allAxiMasters.length) {
+          arb.io.inputs(k) <> allAxiMasters(idx + k)
+        } else {
+          arb.io.inputs(k).ar.valid := False
+          arb.io.inputs(k).ar.payload.assignDontCare()
+          arb.io.inputs(k).r.ready := True
+        }
+      }
+      groupOutputs += arb.io.output
+      idx += arbFanIn
+    }
+    val root = Axi4ReadOnlyArbiter(axiConfig, groupOutputs.length)
+    for (i <- groupOutputs.indices) {
+      root.io.inputs(i) <> groupOutputs(i)
+    }
+    io.axiMaster <> root.io.output
   }
 
   // ---- SimLog audit: model summary (INFO) + per-node table (DEBUG) --------

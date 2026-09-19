@@ -4,19 +4,21 @@ package spinalML.nn
 
 import org.scalatest.funsuite.AnyFunSuite
 import spinal.core._
+import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.dtypes.I8
 import spinalML.memory.MemoryKind
 
 /**
- * Phase-2 DDR plumbing guards (docs/ddr_impl.md):
- * - `CsrMap` freezes the historical CSR addresses and reserves the
- *   spill/stride/status plane without collision.
+ * Phase-2/4 DDR plumbing guards (docs/ddr_impl.md):
+ * - `CsrMap` freezes the CSR addresses (spill base live since Phase 4,
+ *   stride/status still reserved) without collision.
  * - `MemorySpec` keeps legacy defaults and validates its inputs.
  * - `Sequential.totalWeightBytes` matches the hand-computed `MemLayout`
  *   footprint (single source of truth, no duplicated layout loop).
  * - `Accelerator` fails fast at elaboration when the footprint exceeds the
  *   declared capacity, and elaborates unchanged otherwise.
+ * - CSR 0x34 (spill base) reads back its descriptor default and host writes.
  */
 class MemorySpecTest extends AnyFunSuite {
 
@@ -38,8 +40,8 @@ class MemorySpecTest extends AnyFunSuite {
     assert(CsrMap.SpillBase == 0x34)
     assert(CsrMap.OutStride == 0x38)
     assert(CsrMap.MemStatus == 0x3C)
-    assert(CsrMap.wired.size == 12)
-    assert(CsrMap.reserved.size == 3)
+    assert(CsrMap.wired.size == 13)
+    assert(CsrMap.reserved.size == 2)
     assert((CsrMap.wired & CsrMap.reserved).isEmpty, "reserved CSR collides with a wired address")
   }
 
@@ -58,11 +60,17 @@ class MemorySpecTest extends AnyFunSuite {
   }
 
   test("MemorySpec.reportFit: exact boundary accounting") {
-    // Pure-Scala check: 4B image + 16B weights + 8B out = 28B.
+    // Pure-Scala check: 4B image + 16B weights + 8B out + 0B spill = 28B.
     MemorySpec(capacityBytes = Some(28)).reportFit(4, 16, 8)
     intercept[Exception] {
       MemorySpec(capacityBytes = Some(27)).reportFit(4, 16, 8)
     }
+    // Spill footprint participates in the same boundary.
+    MemorySpec(capacityBytes = Some(36), spillBytes = Some(8)).reportFit(4, 16, 8, 8)
+    intercept[Exception] {
+      MemorySpec(capacityBytes = Some(35), spillBytes = Some(8)).reportFit(4, 16, 8, 8)
+    }
+    intercept[Exception] { MemorySpec(spillBytes = Some(-1)) }
     // No capacity declared => no check (legacy behavior).
     MemorySpec.default.reportFit(Long.MaxValue / 2, 0, 0)
   }
@@ -98,6 +106,59 @@ class MemorySpecTest extends AnyFunSuite {
     }
     intercept[Exception] {
       SpinalConfig().generateVerilog(tinyAccelerator(MemorySpec(capacityBytes = Some(1))))
+    }
+  }
+
+  test("Accelerator: CSR spill base (0x34) defaults and readback") {
+    val spinalConfig = SpinalConfig()
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      tinyAccelerator(MemorySpec(spillBase = Some(0x30000L)))
+    )
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      def writeCsr(addr: BigInt, data: BigInt): Unit = {
+        dut.io.ctrlBus.aw.valid #= true
+        dut.io.ctrlBus.aw.payload.addr #= addr
+        dut.io.ctrlBus.w.valid #= true
+        dut.io.ctrlBus.w.payload.data #= data
+        dut.io.ctrlBus.w.payload.strb #= 0xF
+        dut.io.ctrlBus.b.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.aw.ready.toBoolean && dut.io.ctrlBus.w.ready.toBoolean)
+        dut.io.ctrlBus.aw.valid #= false
+        dut.io.ctrlBus.w.valid #= false
+        dut.clockDomain.waitSampling()
+      }
+      def readCsr(addr: BigInt): BigInt = {
+        dut.io.ctrlBus.ar.valid #= true
+        dut.io.ctrlBus.ar.payload.addr #= addr
+        dut.io.ctrlBus.r.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.ar.ready.toBoolean)
+        dut.io.ctrlBus.ar.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.r.valid.toBoolean)
+        val data = dut.io.ctrlBus.r.payload.data.toBigInt
+        dut.io.ctrlBus.r.ready #= false
+        dut.clockDomain.waitSampling()
+        data
+      }
+
+      dut.io.ctrlBus.aw.valid #= false
+      dut.io.ctrlBus.w.valid #= false
+      dut.io.ctrlBus.ar.valid #= false
+      dut.io.ctrlBus.b.ready #= true
+      dut.io.ctrlBus.r.ready #= false
+      dut.clockDomain.waitSampling(5)
+
+      // Reset value comes from the MemorySpec descriptor...
+      assert(readCsr(CsrMap.SpillBase) == 0x30000L,
+        s"CSR 0x34 reset value must be the descriptor spillBase")
+      // ...and host writes stick.
+      writeCsr(CsrMap.SpillBase, 0x40000L)
+      assert(readCsr(CsrMap.SpillBase) == 0x40000L,
+        s"CSR 0x34 must read back the host-programmed spill base")
+      // Neighboring registers are unaffected (no address aliasing).
+      assert(readCsr(CsrMap.DequantScale) == 0,
+        s"CSR 0x30 must be untouched by 0x34 writes (no descriptor Cast here)")
     }
   }
 }

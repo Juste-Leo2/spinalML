@@ -53,7 +53,8 @@ object ConvHandlers {
         }
         val convW = (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
         val convB = (0 until outC).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
-        val convOut = LayerReplicas.conv2D(arr3D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits)
+        val convOut = LayerReplicas.conv2D(arr3D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits,
+          lanes = c.effLanes)
         val flat = LayerReplicas.flatten(convOut)
         FloatTensor(nextShape, flat, ft.expBits, ft.mantBits)
     }
@@ -84,7 +85,8 @@ object ConvHandlers {
         }
         val convW = (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
         val convB = (0 until outC).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
-        val convOut = LayerReplicas.conv1D(arr2D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits)
+        val convOut = LayerReplicas.conv1D(arr2D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits,
+          lanes = c.effLanes)
         val flat = ArrayBuffer[F]()
         for (pos <- convOut.indices; ch <- 0 until outC) flat += convOut(pos)(ch)
         FloatTensor(nextShape, flat.toSeq, ft.expBits, ft.mantBits)

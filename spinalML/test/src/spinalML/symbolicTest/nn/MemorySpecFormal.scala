@@ -28,7 +28,7 @@ import spinalML.nn.{CsrMap, MemorySpec}
  *     like the pre-Phase-2 RTL.
  *
  * Properties 1-2 are proven universally over an anyseq selector covering all
- * twelve wired addresses; 3-5 are solver-discharged constant equalities plus
+ * thirteen wired addresses; 3-5 are solver-discharged constant equalities plus
  * elaboration guards. Cover points prove the selector model is not
  * over-constrained (no vacuous proof).
  *
@@ -47,13 +47,14 @@ class MemorySpecFormal extends Component {
   val wired = List(
     CsrMap.Start, CsrMap.Status, CsrMap.ImgBase, CsrMap.WeightBase,
     CsrMap.Mode, CsrMap.Reload, CsrMap.TileCnt, CsrMap.Run,
-    CsrMap.OutAddr, CsrMap.OutCtrl, CsrMap.DmaStatus, CsrMap.DequantScale
+    CsrMap.OutAddr, CsrMap.OutCtrl, CsrMap.DmaStatus, CsrMap.DequantScale,
+    CsrMap.SpillBase
   )
-  val reserved = List(CsrMap.SpillBase, CsrMap.OutStride, CsrMap.MemStatus)
+  val reserved = List(CsrMap.OutStride, CsrMap.MemStatus)
 
   // Elaboration guards: pure-Scala contracts, checked on every proof run.
-  require(wired.size == 12, s"CsrMap wired set changed size (got ${wired.size}, want 12)")
-  require(reserved.size == 3, s"CsrMap reserved set changed size (got ${reserved.size}, want 3)")
+  require(wired.size == 13, s"CsrMap wired set changed size (got ${wired.size}, want 13)")
+  require(reserved.size == 2, s"CsrMap reserved set changed size (got ${reserved.size}, want 2)")
   require((wired.toSet & reserved.toSet).isEmpty, "reserved CSR collides with a wired address")
   require(MemorySpec.default.kind == MemoryKind.OnChip, "MemorySpec default kind changed")
   require(MemorySpec.default.spillBase.isEmpty, "MemorySpec default must not declare a spill region")

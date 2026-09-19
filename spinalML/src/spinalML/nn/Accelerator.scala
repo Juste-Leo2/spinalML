@@ -212,6 +212,14 @@ class Accelerator[T <: Data](
   val weightsAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.WeightBase, 0) init(0)
   model.io.weightsBaseAddress := weightsAddrReg
 
+  // Register 0x34: Spill Base Address (accumulator spill region, Phase 4).
+  // Programmed by the host exactly like the image/weight bases and defaulting
+  // to the MemorySpec descriptor; the K-pass spill controller (compute side)
+  // walks it with its own cursor, reset on every host write like the image
+  // and output cursors below.
+  val spillAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.SpillBase, 0) init(
+    BigInt(memory.spillBase.getOrElse(0L)))
+
   // ------------------------------------------------------------------
   // Continuous run control (Phase 3, S1)
   //
@@ -240,8 +248,9 @@ class Accelerator[T <: Data](
   // Phase-2 DDR plumbing: elaboration-time footprint check against the
   // declared capacity (no-op for the legacy default with capacityBytes=None).
   // Frame cursors (imgBaseOffset/outBaseOffset) stay runtime registers —
-  // Phase 4 generalizes them with the spill cursor (CSR 0x34 reserved).
-  memory.reportFit(imageBytesAcc.toLong, model.totalWeightBytes.toLong, outBytesAcc.toLong)
+  // Phase 4 generalizes them with the spill cursor (CSR 0x34 live above).
+  memory.reportFit(imageBytesAcc.toLong, model.totalWeightBytes.toLong, outBytesAcc.toLong,
+    memory.spillBytes.getOrElse(0L))
 
   val tileCntReg = Reg(UInt(32 bits)) init(0)
   val imgBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)

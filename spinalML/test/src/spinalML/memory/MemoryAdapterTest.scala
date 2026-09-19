@@ -386,6 +386,154 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.ar.valid #= false
     }
   }
+  test("DdrAdapter regionAware: disjoint read overlaps a write burst (prefetch/compute overlap)") {
+    SimConfig.compile(new DdrAdapter(axiConfig, fence = FenceConfig.regionAwareDram)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.wrEnable #= false
+      dut.io.wrAddr #= 0
+      dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
+      dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
+      dut.io.axi.r.ready #= true
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.extIo.ddrMaster.w.ready #= false
+      dut.extIo.ddrMaster.r.valid #= false
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.extIo.ddrMaster.ar.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      // 1. Accelerator burst write to the spill region 0x4000 (2 beats).
+      dut.io.axi.aw.valid #= true
+      dut.io.axi.aw.payload.addr #= 0x4000
+      dut.io.axi.aw.payload.len #= 1
+      dut.clockDomain.waitSampling()
+      dut.io.axi.aw.valid #= false
+      dut.clockDomain.waitSampling()
+
+      // 2. Read from a disjoint region (weights at 0x20000) must be forwarded
+      // immediately even though the write is in flight.
+      dut.io.axi.ar.valid #= true
+      dut.io.axi.ar.payload.addr #= 0x20000
+      dut.io.axi.ar.payload.len #= 3
+      dut.clockDomain.waitSampling()
+      assert(dut.extIo.ddrMaster.ar.valid.toBoolean,
+        "disjoint read must be forwarded while a write burst is in flight")
+      assert(dut.io.axi.ar.ready.toBoolean,
+        "disjoint read must not see backpressure while a write burst is in flight")
+      dut.io.axi.ar.valid #= false
+      dut.clockDomain.waitSampling()
+
+      // 3. Overlapping read (inside 0x4000-0x400F) must still stall (RAW).
+      dut.io.axi.ar.valid #= true
+      dut.io.axi.ar.payload.addr #= 0x4008
+      dut.io.axi.ar.payload.len #= 0
+      dut.clockDomain.waitSampling()
+      assert(!dut.extIo.ddrMaster.ar.valid.toBoolean,
+        "overlapping read must stall while the write burst is in flight")
+      assert(!dut.io.axi.ar.ready.toBoolean,
+        "overlapping read must see backpressure while the write burst is in flight")
+      dut.io.axi.ar.valid #= false
+
+      // 4. Drain the write burst, then the overlapping read is released.
+      dut.extIo.ddrMaster.aw.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.io.axi.w.valid #= true
+      dut.extIo.ddrMaster.w.ready #= true
+      dut.clockDomain.waitSampling(2)
+      dut.io.axi.w.valid #= false
+      dut.extIo.ddrMaster.w.ready #= false
+      dut.extIo.ddrMaster.b.valid #= true
+      dut.extIo.ddrMaster.b.payload.resp #= 0
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.io.axi.ar.valid #= true
+      dut.io.axi.ar.payload.addr #= 0x4008
+      dut.io.axi.ar.payload.len #= 0
+      dut.clockDomain.waitSampling()
+      assert(dut.extIo.ddrMaster.ar.valid.toBoolean,
+        "overlapping read must be released once the write completes")
+      dut.io.axi.ar.valid #= false
+    }
+  }
+
+  test("DdrAdapter regionAware: WAR fences overlapping AW only") {
+    SimConfig.compile(new DdrAdapter(axiConfig, fence = FenceConfig.regionAwareDram)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.wrEnable #= false
+      dut.io.wrAddr #= 0
+      dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
+      dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
+      dut.io.axi.r.ready #= true
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.extIo.ddrMaster.w.ready #= false
+      dut.extIo.ddrMaster.r.valid #= false
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.extIo.ddrMaster.ar.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      // 1. Open a long read burst at 0x20000 and hold its data (in flight).
+      dut.io.axi.ar.valid #= true
+      dut.io.axi.ar.payload.addr #= 0x20000
+      dut.io.axi.ar.payload.len #= 7
+      dut.clockDomain.waitSampling()
+      assert(dut.extIo.ddrMaster.ar.valid.toBoolean, "read burst must be forwarded when idle")
+      dut.io.axi.ar.valid #= false
+      dut.clockDomain.waitSampling()
+
+      // 2. Overlapping AW (inside the read range) must stall.
+      dut.io.axi.aw.valid #= true
+      dut.io.axi.aw.payload.addr #= 0x20010
+      dut.io.axi.aw.payload.len #= 0
+      dut.clockDomain.waitSampling()
+      assert(!dut.io.axi.aw.ready.toBoolean,
+        "AW overlapping an in-flight read must stall (WAR)")
+
+      // 3. Disjoint AW (spill region) must be accepted concurrently.
+      dut.io.axi.aw.payload.addr #= 0x4000
+      dut.clockDomain.waitSampling()
+      assert(dut.io.axi.aw.ready.toBoolean,
+        "AW disjoint from in-flight reads must be accepted (overlap)")
+      dut.io.axi.aw.valid #= false
+      dut.clockDomain.waitSampling()
+
+      // 4. Drain the accepted spill write, then complete the read: the
+      // overlapping AW is accepted once no read is in flight.
+      dut.extIo.ddrMaster.aw.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.io.axi.w.valid #= true
+      dut.extIo.ddrMaster.w.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.io.axi.w.valid #= false
+      dut.extIo.ddrMaster.w.ready #= false
+      dut.extIo.ddrMaster.b.valid #= true
+      dut.extIo.ddrMaster.b.payload.resp #= 0
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.extIo.ddrMaster.r.valid #= true
+      dut.extIo.ddrMaster.r.payload.last #= true
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.r.valid #= false
+      dut.io.axi.aw.valid #= true
+      dut.io.axi.aw.payload.addr #= 0x20010
+      dut.io.axi.aw.payload.len #= 0
+      dut.clockDomain.waitSampling()
+      assert(dut.io.axi.aw.ready.toBoolean,
+        "AW must be accepted once in-flight reads have completed")
+      dut.io.axi.aw.valid #= false
+    }
+  }
+
   test("UartSoC: Seamless instantiation with custom SramAsicAdapter") {
     val targetDir = "out/test_soc_sram"
     SpinalConfig(targetDirectory = targetDir).generateVerilog(
