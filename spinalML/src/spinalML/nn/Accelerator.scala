@@ -163,9 +163,12 @@ class Accelerator[T <: Data](
     doneSticky := False
   }
   
+  val outBytesAcc = totalOutBeats * (axiConfig.dataWidth / 8)
+  val outBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
+
   val startEvent = Event
   val dmaCmd = Stream(WriteRequest(axiConfig.addressWidth))
-  dmaCmd.address := outAddrReg
+  dmaCmd.address := outAddrReg + outBaseOffset
   dmaCmd.length := U(totalOutBeats - 1, 16 bits)
 
   when(writeToDdr) {
@@ -235,6 +238,9 @@ class Accelerator[T <: Data](
       // Auto-advance: re-fire START and slide the image cursor forward.
       startPending := True
       imgBaseOffset := imgBaseOffset + imageBytesAcc
+      when(writeToDdr) {
+        outBaseOffset := outBaseOffset + outBytesAcc
+      }
     }
   }
 
@@ -243,6 +249,11 @@ class Accelerator[T <: Data](
   // Placed after the frameDone increment so a same-cycle host write wins.
   ctrlFactory.onWrite(0x08) {
     imgBaseOffset := 0
+  }
+
+  // A host write to 0x20 starts a new output stream: reset the write-back cursor.
+  ctrlFactory.onWrite(0x20) {
+    outBaseOffset := 0
   }
 
   // Register 0x04: Status

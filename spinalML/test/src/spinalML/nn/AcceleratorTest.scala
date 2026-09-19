@@ -387,6 +387,139 @@ class AcceleratorTest extends AnyFunSuite {
     }
   }
 
+  test("Accelerator: Continuous streaming write-back to DDR (CSR 0x1C RUN + CSR 0x24 OUT_CTRL, auto-increment OUT_ADDR)") {
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(makeToyAccelerator())
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      val memSim = AxiMemorySim(
+        axi = dut.io.axiMaster,
+        clockDomain = dut.clockDomain,
+        config = AxiMemorySimConfig(maxOutstandingReads = 8)
+      )
+      memSim.start()
+
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
+      writeWords(memSim.memory, weightBase, packed.words)
+
+      val numFrames = 3
+      val imageBytes = 16 // 4x4 bytes
+      val oracles = scala.collection.mutable.ArrayBuffer[Seq[Double]]()
+
+      for (k <- 0 until numFrames) {
+        val inInts = (0 until 16).map(idx => ((idx + k) % 3).toLong)
+        val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
+        writeWords(memSim.memory, imgBase + k * imageBytes, imgWords)
+
+        val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
+        val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
+        oracles += oracle.logits
+      }
+
+      def writeCsr(addr: BigInt, data: BigInt): Unit = {
+        dut.io.ctrlBus.aw.valid #= true
+        dut.io.ctrlBus.aw.payload.addr #= addr
+        dut.io.ctrlBus.w.valid #= true
+        dut.io.ctrlBus.w.payload.data #= data
+        dut.io.ctrlBus.w.payload.strb #= 0xF
+        dut.io.ctrlBus.b.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.aw.ready.toBoolean && dut.io.ctrlBus.w.ready.toBoolean)
+        dut.io.ctrlBus.aw.valid #= false
+        dut.io.ctrlBus.w.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.b.valid.toBoolean)
+        dut.io.ctrlBus.b.ready #= false
+        dut.clockDomain.waitSampling()
+      }
+
+      def readCsr(addr: BigInt): BigInt = {
+        dut.io.ctrlBus.ar.valid #= true
+        dut.io.ctrlBus.ar.payload.addr #= addr
+        dut.io.ctrlBus.r.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.ar.ready.toBoolean)
+        dut.io.ctrlBus.ar.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.r.valid.toBoolean)
+        val data = dut.io.ctrlBus.r.payload.data.toBigInt
+        dut.io.ctrlBus.r.ready #= false
+        dut.clockDomain.waitSampling()
+        data
+      }
+
+      dut.io.ctrlBus.aw.valid #= false
+      dut.io.ctrlBus.w.valid #= false
+      dut.io.ctrlBus.ar.valid #= false
+      dut.io.ctrlBus.b.ready #= false
+      dut.io.ctrlBus.r.ready #= false
+      dut.io.outStream.stream.ready #= false
+      dut.clockDomain.waitSampling(5)
+
+      val outBase = 0x30000L
+      val outFrameBytes = 8 // 1 beat on 64-bit bus for 2 I8 elements
+
+      // Pre-fill output region with poison pattern 0xAA to detect untouched memory
+      for (k <- 0 until numFrames) {
+        memSim.memory.writeBigInt(outBase + k * outFrameBytes, BigInt("AAAAAAAAAAAAAAAA", 16), 8)
+      }
+
+      writeCsr(0x08, imgBase)
+      writeCsr(0x0C, weightBase)
+      writeCsr(0x20, outBase)
+      writeCsr(0x24, 1) // writeToDdr = true
+      writeCsr(0x1C, 1) // RUN = true
+
+      // Start continuous streaming
+      writeCsr(0x00, 1)
+
+      var timeout = 0
+      val maxTimeout = 20000
+      var stopIssued = false
+      var completedFrames = 0
+
+      while (timeout < maxTimeout && completedFrames < numFrames) {
+        timeout += 1
+        if (dut.io.done.toBoolean) {
+          completedFrames += 1
+          println(s"[AcceleratorTest] Frame done pulse observed: count=$completedFrames")
+          if (!stopIssued && completedFrames == 2) {
+            println(s"[AcceleratorTest] Issuing STOP after 2 frames...")
+            writeCsr(0x1C, 0)
+            stopIssued = true
+          }
+        }
+        dut.clockDomain.waitSampling()
+      }
+
+      assert(stopIssued, "STOP was never issued")
+      assert(completedFrames == numFrames, s"Expected $numFrames frames, observed $completedFrames")
+
+      // Wait until accelerator is completely idle
+      var idleCycles = 0
+      while (dut.io.busy.toBoolean && idleCycles < 200) {
+        dut.clockDomain.waitSampling()
+        idleCycles += 1
+      }
+      assert(!dut.io.busy.toBoolean, "Accelerator stayed busy")
+
+      val tileCnt = readCsr(0x18)
+      assert(tileCnt == numFrames, s"Expected TILE_CNT == $numFrames, got $tileCnt")
+
+      // Verify that EACH frame was written to its respective address without overwriting
+      for (k <- 0 until numFrames) {
+        val frameAddr = outBase + k * outFrameBytes
+        val writtenWord = memSim.memory.readBigInt(frameAddr, 8)
+        val hwLogits = (0 until 2).map { b =>
+          val byteVal = ((writtenWord >> (b * 8)) & 0xFF).toLong
+          val signedByte = if (byteVal >= 128) byteVal - 256 else byteVal
+          signedByte.toDouble
+        }
+        val dev = hwLogits.zip(oracles(k)).map { case (hw, sw) => math.abs(hw - sw) }.max
+        assert(dev == 0.0, f"Frame $k at 0x$frameAddr%X mismatch: HW $hwLogits vs SW ${oracles(k)}")
+      }
+
+      println(s"[AcceleratorTest] Continuous streaming DDR write-back PASSED ($numFrames frames bit-exact at distinct addresses)")
+    }
+  }
+
   test("Generate Verilog for Python co-simulation") {
     // Identity passthrough: exercises the AXI-Lite control plane, the output
     // stream, continuous RUN/STOP and the DMAWriter write-back path without

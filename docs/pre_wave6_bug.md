@@ -17,9 +17,9 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 
 | ID | Intitulé du Bug / Risque | Sévérité | Chantier Wave 6 Impacté | Statut |
 |---|---|---|---|---|
-| [BUG-DDR-01](#bug-ddr-01--omission-du-guard-prefetchworldb-sur-le-re-arm-du-double-buffer-de-biais) | Omission du guard `!prefetchWorldB` sur le re-arm du double buffer de biais | 🔴 **CRITIQUE** | P0 (Tests), P4 (Folding L2) | **Bug RTL avéré** |
-| [BUG-DDR-02](#bug-ddr-02--absence-dincrément-de-ladresse-de-sortie-en-mode-flux-continu-writetoddr) | Écrasement systématique des sorties en mode continu `writeToDdr` | 🔴 **CRITIQUE** | P1 (Advanced Tiling), P2 (Flux continu) | **Bug RTL avéré** |
-| [BUG-DDR-03](#bug-ddr-03--masque-doctets-wstrb-nul-sur-le-dernier-beat-dmawriter-pour-les-types-4-bits) | Masque d'octets `w.strb` nul sur le dernier battement `DMAWriter` (< 8 bits) | 🔴 **CRITIQUE** | P1 (Spill d'accumulateurs), P3 (Scaling W4A8/FP4) | **Bug RTL avéré** |
+| [BUG-DDR-01](#bug-ddr-01--omission-du-guard-prefetchworldb-sur-le-re-arm-du-double-buffer-de-biais) | Omission du guard `!prefetchWorldB` sur le re-arm du double buffer de biais | 🔴 **CRITIQUE** | P0 (Tests), P4 (Folding L2) | ✅ **CORRIGÉ** |
+| [BUG-DDR-02](#bug-ddr-02--absence-dincrément-de-ladresse-de-sortie-en-mode-flux-continu-writetoddr) | Écrasement systématique des sorties en mode continu `writeToDdr` | 🔴 **CRITIQUE** | P1 (Advanced Tiling), P2 (Flux continu) | ✅ **CORRIGÉ** |
+| [BUG-DDR-03](#bug-ddr-03--masque-doctets-wstrb-nul-sur-le-dernier-beat-dmawriter-pour-les-types-4-bits) | Masque d'octets `w.strb` nul sur le dernier battement `DMAWriter` (< 8 bits) | 🔴 **CRITIQUE** | P1 (Spill d'accumulateurs), P3 (Scaling W4A8/FP4) | ✅ **CORRIGÉ** |
 | [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | **Lacune architecturale** |
 | [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | **Lacune architecturale** |
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | **Bug RTL d'élaboration** |
@@ -72,11 +72,9 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   ```
   Le `reArm` efface immédiatement les drapeaux de plénitude (`pingFull`, `pongFull`), force `computeBank := False` et annule `switchArmed := False`. La banque résidente de biais est corrompue en plein vol et le swap ordonnancé est avorté.
 - **Impact Wave 6** : Bloquant pour la Priorité 0 (restauration de `WeightPrefetchChainTest`) et la Priorité 4 (Layer Folding L2 re-fetchant les coefficients).
-- **Correction recommandée** :
-  Corriger la ligne 512 dans `Sequential.scala` :
-  ```scala
-  bDoubleBuffer.io.reArm := reqB.fire && !prefetchWorldB
-  ```
+- **Correction appliquée & validée** :
+  Ligne 512 dans `Sequential.scala` corrigée avec `&& !prefetchWorldB`.
+  Validée par `SequentialTest` (test dédié multi-passes avec mesure du trafic AR DDR) et `StreamDoubleBufferPrefetchFormal`. Statut : ✅ **CORRIGÉ**.
 
 ---
 
@@ -107,18 +105,11 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   Lors de chaque inférence successive :
   - L'image d'entrée $k$ est bien lue à `imgAddrReg + k * imageBytesAcc`.
   - Mais le résultat $k$ est écrit à l'adresse fixe `outAddrReg`, **écrasant systématiquement le résultat de l'inférence $k-1$**.
-- **Impact Wave 6** : Bloque le streaming continu vers la DDR, le logging continu des sorties et le spill multi-passes d'accumulateurs (Priorités 1 et 2).
-- **Correction recommandée** :
-  Ajouter un registre de décalage de sortie `outBaseOffset` géré symétriquement à `imgBaseOffset` :
-  ```scala
-  val outBytesAcc = (model.finalType().getBitsWidth / 8) * model.finalShape.product
-  val outBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
-  dmaCmd.address := outAddrReg + outBaseOffset
-  when(frameDone && runActive && writeToDdr) {
-    outBaseOffset := outBaseOffset + outBytesAcc
-  }
-  ctrlFactory.onWrite(0x20) { outBaseOffset := 0 }
-  ```
+- **Correction appliquée & validée** :
+  Ajout du registre `outBaseOffset` et calcul du stride aligné AXI `outBytesAcc = totalOutBeats * (axiConfig.dataWidth / 8)` dans `Accelerator.scala`.
+  `dmaCmd.address` est connecté à `outAddrReg + outBaseOffset`.
+  L'offset s'incrémente lors de `frameDone` lorsque `runActive && writeToDdr`, et se réinitialise lors de l'écriture sur le CSR `0x20`.
+  Validée par le test de simulation `AcceleratorTest` (« Accelerator: Continuous streaming write-back to DDR (CSR 0x1C RUN + CSR 0x24 OUT_CTRL, auto-increment OUT_ADDR) ») et non-régression formelle BMC `AcceleratorFormal`. Statut : ✅ **CORRIGÉ**.
 
 ---
 
@@ -145,12 +136,9 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   Sur le tout dernier battement d'écriture AXI (`finalBeat == True`), le signal `w.strb` vaut `0x00`.
   Selon la spécification AXI4 (section A3.4.4), un octet dont le strobe est à 0 n'est pas écrit en mémoire. Le contrôleur DDR ignore donc l'écriture de ce dernier mot, tronquant silencieusement les dernières données du tenseur écrit en mémoire.
 - **Impact Wave 6** : Corruption directe lors du write-back de tenseurs compressés en FP4/I4 ou de l'Advanced Tiling sur tenseurs sous-octets (Priorités 1 et 3).
-- **Correction recommandée** :
-  Calculer les octets du dernier beat en arrondissant au supérieur ou en travaillant en bits totaux :
-  ```scala
-  val finalBeatElems = totalElements - (totalAxiBeats - 1) * axiLanes
-  val finalBeatBytes = (finalBeatElems * elemWidth + 7) / 8
-  ```
+- **Correction appliquée & validée** :
+  Ligne 210 dans `DMAWriter.scala` corrigée : `finalBeatBytes = (finalBeatElems * elemWidth + 7) / 8`.
+  Validée par `DMAWriterTest` (test sub-byte 4-bit strobe) et `DMAWriterFormal`. Statut : ✅ **CORRIGÉ**.
 
 ---
 
