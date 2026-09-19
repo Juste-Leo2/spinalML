@@ -403,4 +403,137 @@ class SequentialTest extends AnyFunSuite {
       println(f"[SequentialTest] 8x8 BF16 Band Tiling (tileHeight=4, 2 bands) bit-exact: max dev = $dev%.3f in $cycles cycles")
     }
   }
+
+  test("Sequential: Bias double buffer maintains resident and prefetch state across eager reload (BUG-DDR-01)") {
+    val spec = Seq(
+      Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3),
+      ReLU(),
+      Flatten(),
+      Linear(inFeatures = 8, outFeatures = 2)
+    )
+
+    val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(
+      new Accelerator(
+        dataType = I8(),
+        inputShape = Seq(4, 4, 1),
+        modelSpec = spec,
+        axiConfig = axiConfig
+      )
+    )
+
+    compiled.doSim { dut =>
+      dut.clockDomain.forkStimulus(10)
+
+      val memSim = AxiMemorySim(
+        axi = dut.io.axiMaster,
+        clockDomain = dut.clockDomain,
+        config = AxiMemorySimConfig(maxOutstandingReads = 8)
+      )
+      memSim.start()
+
+      val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
+      writeWords(memSim.memory, weightBase, packed.words)
+
+      // Meter AR transactions
+      var weightARs = 0L
+      dut.clockDomain.onSamplings {
+        if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
+          val addr = dut.io.axiMaster.ar.addr.toLong
+          if (addr >= weightBase) weightARs += 1
+        }
+      }
+
+      def writeCsr(addr: BigInt, data: BigInt): Unit = {
+        dut.io.ctrlBus.aw.valid #= true
+        dut.io.ctrlBus.aw.payload.addr #= addr
+        dut.io.ctrlBus.w.valid #= true
+        dut.io.ctrlBus.w.payload.data #= data
+        dut.io.ctrlBus.w.payload.strb #= 0xF
+        dut.io.ctrlBus.b.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.aw.ready.toBoolean && dut.io.ctrlBus.w.ready.toBoolean)
+        dut.io.ctrlBus.aw.valid #= false
+        dut.io.ctrlBus.w.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.b.valid.toBoolean)
+        dut.io.ctrlBus.b.ready #= false
+        dut.clockDomain.waitSampling()
+      }
+
+      dut.io.ctrlBus.aw.valid #= false
+      dut.io.ctrlBus.w.valid #= false
+      dut.io.ctrlBus.ar.valid #= false
+      dut.io.ctrlBus.b.ready #= false
+      dut.io.ctrlBus.r.ready #= false
+      dut.io.outStream.stream.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      writeCsr(0x08, imgBase)
+      writeCsr(0x0C, weightBase)
+      // Enable RESIDENT (bit 0) and PREFETCH_EN (bit 1)
+      writeCsr(0x10, 3)
+
+      def runPass(pass: Int): Seq[Double] = {
+        val inInts = (0 until 16).map(idx => ((idx * 3 + pass * 5) % 7).toLong)
+        val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
+        writeWords(memSim.memory, imgBase, imgWords)
+
+        val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
+        val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
+
+        writeCsr(0x00, 1)
+
+        val collected = scala.collection.mutable.ArrayBuffer[Double]()
+        var cycles = 0
+        val timeout = 10000
+
+        while (collected.length < 2 && cycles < timeout) {
+          if (dut.io.outStream.stream.valid.toBoolean && dut.io.outStream.stream.ready.toBoolean) {
+            collected += decodeData(dut.io.outStream.stream.payload(0))
+          }
+          dut.clockDomain.waitSampling()
+          cycles += 1
+        }
+
+        assert(cycles < timeout, s"Pass $pass timed out after $cycles cycles")
+        assert(collected.length == 2, s"Pass $pass: expected 2 outputs, got ${collected.length}")
+
+        val dev = collected.zip(oracle.logits).map { case (hw, sw) => math.abs(hw - sw) }.max
+        assert(dev == 0.0, s"Pass $pass mismatch: HW $collected vs SW ${oracle.logits}")
+        collected.toSeq
+      }
+
+      // Pass 0: initial fetch into resident buffer
+      val wBefore0 = weightARs
+      runPass(0)
+      val wDelta0 = weightARs - wBefore0
+      assert(wDelta0 > 0, "Initial pass must fetch weights and biases from DDR")
+
+      // Trigger eager reload while idle in prefetch mode
+      val wBeforeIdle1 = weightARs
+      writeCsr(0x14, 1)
+      dut.clockDomain.waitSampling(100)
+      val wDeltaIdle1 = weightARs - wBeforeIdle1
+      assert(wDeltaIdle1 > 0, "Eager prefetch must fetch weights and biases during idle window")
+
+      // Pass 1: second inference; compute must have zero DDR weight/bias ARs
+      val wBeforeActive1 = weightARs
+      runPass(1)
+      val wDeltaActive1 = weightARs - wBeforeActive1
+      assert(wDeltaActive1 == 0L, s"Pass 1: expected 0 weight/bias AR transactions during active compute, got $wDeltaActive1")
+
+      // Trigger next eager reload
+      val wBeforeIdle2 = weightARs
+      writeCsr(0x14, 1)
+      dut.clockDomain.waitSampling(100)
+      val wDeltaIdle2 = weightARs - wBeforeIdle2
+      assert(wDeltaIdle2 > 0, "Second eager prefetch must fetch during idle window")
+
+      // Pass 2: third inference; compute must have zero DDR weight/bias ARs
+      val wBeforeActive2 = weightARs
+      runPass(2)
+      val wDeltaActive2 = weightARs - wBeforeActive2
+      assert(wDeltaActive2 == 0L, s"Pass 2: expected 0 weight/bias AR transactions during active compute, got $wDeltaActive2")
+
+      println("[SequentialTest] BUG-DDR-01: Bias and weight prefetch/resident state verified cleanly across 3 passes")
+    }
+  }
 }

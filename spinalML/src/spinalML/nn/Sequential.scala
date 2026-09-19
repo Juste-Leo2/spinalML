@@ -509,7 +509,7 @@ case class Sequential(
         stagedB := True
       }
       biasDmaFire = reqB.fire
-      bDoubleBuffer.io.reArm := reqB.fire
+      bDoubleBuffer.io.reArm := reqB.fire && !prefetchWorldB
       bStreamer.io.reArm := reqB.fire
       bDoubleBuffer.io.residentHold.foreach(_ := residentMode)
       bDoubleBuffer.io.stageRequest.foreach(_ := stagedB)
