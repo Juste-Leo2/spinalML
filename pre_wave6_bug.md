@@ -22,7 +22,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-03](#bug-ddr-03--masque-doctets-wstrb-nul-sur-le-dernier-beat-dmawriter-pour-les-types-4-bits) | Masque d'octets `w.strb` nul sur le dernier battement `DMAWriter` (< 8 bits) | 🔴 **CRITIQUE** | P1 (Spill d'accumulateurs), P3 (Scaling W4A8/FP4) | ✅ **CORRIGÉ** |
 | [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | **Lacune architecturale** |
 | [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | **Lacune architecturale** |
-| [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | **Bug RTL d'élaboration** |
+| [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
 | [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | **Bug de synchronisation** |
 | [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | 🟡 **MOYEN** | P1 (Tiling), P3 (Knobs lanes) | **Fragilité protocolaire** |
 | [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | **Conformité AXI4** |
@@ -214,9 +214,11 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   SpinalHDL lève une exception fatale à l'élaboration :
   `requirement failed: Axi4Config idWidth must be greater than 0`.
   La compilation du matériel plante immédiatement avant même d'atteindre la synthèse.
-- **Impact Wave 6** : Bloquant pour le scaling de modèles de grande taille (Priorité 3 : Resource-scaling V1 et DAG multi-couches).
-- **Correction recommandée** :
-  Imposer une largeur minimale d'ID au niveau du top ou passer à un système d'arbitrage hiérarchique en arbre avec remapping d'identifiants (conforme à la Priorité 3 de la Wave 6).
+- **Correction appliquée & validée** :
+  1. Augmentation de la valeur par défaut d'`axiConfig.idWidth` de 4 à 8 bits dans la signature de `Sequential` (permettant jusqu'à 256 déclencheurs DMA / 127 couches sans configuration manuelle).
+  2. Validation explicite `require(axiConfig.idWidth >= minRequiredIdWidth)` générant un message d'erreur informatif et précis en cas de bus trop étroit.
+  3. Bypass direct de l'arbitre lorsque `allAxiMasters.length == 1` (modèles sans poids).
+  Validée par le test d'élaboration `SequentialTest` (« BUG-DDR-06: idWidth validation and elaboration for deep models (> 8 weight/bias layers) ») et vérification formelle BMC `StreamDoubleBufferPrefetchFormal`. Statut : ✅ **CORRIGÉ**.
 
 ---
 

@@ -19,7 +19,7 @@ case class Sequential(
   globalDataType: HardType[Data],
   inputShape: Seq[Int],
   layers: Seq[LayerSpec],
-  axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4),
+  axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 8),
   // Phase-2a weight residency: when set, exposes the run-mode control plane
   // (see Accelerator CSR map). Direct users of this component keep today's
   // always-fetch behaviour when left at the default.
@@ -206,12 +206,14 @@ case class Sequential(
   var triggerIdx = 0
 
   // Base AXI config for leaf DMAs (accounting for arbiter routing bits)
-  // For simplicity in this V1, we use a single stage arbiter if <= 16 ports.
-  // A single DMA (weightless models) skips the arbiter entirely and keeps the
-  // full id width.
+  val minRequiredIdWidth = if (totalDmaTriggers <= 1) 0 else log2Up(totalDmaTriggers)
+  require(axiConfig.idWidth >= minRequiredIdWidth,
+    s"Sequential: axiConfig.idWidth (${axiConfig.idWidth}) is insufficient to arbitrate " +
+    s"$totalDmaTriggers DMA masters (requires at least $minRequiredIdWidth bits, i.e. axiConfig.idWidth >= $minRequiredIdWidth).")
+
   val dmaAxiConfig =
     if (totalDmaTriggers == 1) axiConfig
-    else axiConfig.copy(idWidth = axiConfig.idWidth - log2Up(totalDmaTriggers))
+    else axiConfig.copy(idWidth = axiConfig.idWidth - minRequiredIdWidth)
 
   // 1.1. Image DMA — banded 2D fetch (Phase-3 tiling)
   // Each band is one 2D patch command (patchHeight = band rows, baseAddress =
@@ -736,19 +738,12 @@ case class Sequential(
   io.busy := ioBusy
   io.done := ioBusy && io.outStream.stream.fire && frameCounter.willOverflowIfInc
 
-  // --- 3. Hierarchical AXI Arbitration ---
-  // To avoid long combinatorial paths with many DMAs, we build a tree.
-  // For V1, if port count <= 16, we just use one. Otherwise, tree.
-  if (allAxiMasters.length <= 16) {
-    val arbiter = Axi4ReadOnlyArbiter(axiConfig, allAxiMasters.length)
-    for (i <- allAxiMasters.indices) {
-      arbiter.io.inputs(i) <> allAxiMasters(i)
-    }
-    io.axiMaster <> arbiter.io.output
+  // --- 3. AXI Read Arbitration ---
+  // If only a single DMA exists (e.g. image-only weightless model), bypass the arbiter entirely.
+  // Otherwise, arbitrate all DMA read masters onto the shared AXI master bus.
+  if (allAxiMasters.length == 1) {
+    io.axiMaster <> allAxiMasters.head
   } else {
-    // Hierarchical tree logic (placeholder for future expansion, groups of 4)
-    // To implement the tree, we'd instantiate multiple Axi4ReadOnlyArbiter and cascade them.
-    // We fall back to a single one for simplicity in this generated code block.
     val arbiter = Axi4ReadOnlyArbiter(axiConfig, allAxiMasters.length)
     for (i <- allAxiMasters.indices) {
       arbiter.io.inputs(i) <> allAxiMasters(i)

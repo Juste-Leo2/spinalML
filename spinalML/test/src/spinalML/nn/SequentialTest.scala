@@ -536,4 +536,44 @@ class SequentialTest extends AnyFunSuite {
       println("[SequentialTest] BUG-DDR-01: Bias and weight prefetch/resident state verified cleanly across 3 passes")
     }
   }
+
+  test("BUG-DDR-06: idWidth validation and elaboration for deep models (> 8 weight/bias layers)") {
+    // 9 linear layers => 18 DMA triggers for weights/biases + 1 for image = 19 triggers.
+    // log2Up(19) = 5 bits.
+    val layers = (0 until 9).map { _ =>
+      Linear(inFeatures = 4, outFeatures = 4)
+    }
+
+    // 1. If axiConfig.idWidth is too small (< 5 bits), an explicit and informative exception is thrown
+    val ex = intercept[IllegalArgumentException] {
+      SpinalConfig().generateVerilog {
+        Sequential(
+          globalDataType = I8(),
+          inputShape = Seq(1, 4),
+          layers = layers,
+          axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
+        )
+      }
+    }
+    assert(ex.getMessage.contains("insufficient to arbitrate 19 DMA masters"))
+
+    // 2. With adequate idWidth (>= 5 bits), elaboration succeeds cleanly
+    SpinalConfig().generateVerilog {
+      Sequential(
+        globalDataType = I8(),
+        inputShape = Seq(1, 4),
+        layers = layers,
+        axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 5)
+      )
+    }
+
+    // 3. With default axiConfig (idWidth = 8), deep models elaborate without manual configuration
+    SpinalConfig().generateVerilog {
+      Sequential(
+        globalDataType = I8(),
+        inputShape = Seq(1, 4),
+        layers = layers
+      )
+    }
+  }
 }
