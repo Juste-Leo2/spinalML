@@ -19,25 +19,26 @@ def true_sqrt(val):
 async def cocotb_sqrt_i8(dut):
     def expected_fn(val):
         return pwl_sqrt_int(val, 8, index_bits=8)
-    await run_unary_test(dut, "Sqrt", "I8", I8, [16.0, 64.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[127.0])
+    await run_unary_test(dut, "Sqrt", "I8", I8, [16.0, 64.0, -9.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[127.0])
 
 @cocotb.test()
 async def cocotb_sqrt_fp8(dut):
     def expected_fn(val):
         return pwl_sqrt_float(val, FP8_E4M3, index_bits=8)
-    await run_unary_test(dut, "Sqrt", "FP8", FP8_E4M3, [4.0, 16.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[448.0])
+    await run_unary_test(dut, "Sqrt", "FP8", FP8_E4M3, [4.0, 16.0, -4.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[448.0])
 
 @cocotb.test()
 async def cocotb_sqrt_i16(dut):
     def expected_fn(val):
         return pwl_sqrt_int(val, 16, index_bits=8)
-    await run_unary_test(dut, "Sqrt", "I16", I16, [144.0, 1024.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[32767.0])
+    await run_unary_test(dut, "Sqrt", "I16", I16, [144.0, 1024.0, -144.0], is_floatml=False, expected_bits_fn=expected_fn, true_math_fn=true_sqrt, edge_cases=[32767.0])
 
 @cocotb.test()
 async def cocotb_sqrt_bf16(dut):
     def expected_fn(val):
-        return BF16.from_float(true_sqrt(val))
-    await run_unary_test(dut, "Sqrt", "BF16", BF16, [2.0, 100.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_sqrt)
+        # OPS-02: negative inputs saturate to +0 in hardware
+        return BF16.from_float(0.0 if val < 0 else true_sqrt(val))
+    await run_unary_test(dut, "Sqrt", "BF16", BF16, [2.0, 100.0, -4.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_sqrt)
 
 def run_sqrt_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.ops.SqrtTest", dtype_filter, "SqrtTestComp")

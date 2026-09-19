@@ -12,6 +12,15 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 
 SEED = 42
 
+def rounding_mode():
+    """Active rounding policy for goldens (mirrors RoundingConfig.current).
+
+    Reads SPINALML_ROUNDING (or spinalml.rounding JVM prop equivalent):
+    'trunc' | 'truncate' | 'floor' -> 'trunc', anything else (or unset) -> 'rne'.
+    """
+    raw = os.environ.get("SPINALML_ROUNDING", "")
+    return "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+
 def seed_random(seed=None):
     """Seed the random module for reproducible tests (overridable via SPINALML_SEED)."""
     random.seed(seed if seed is not None else int(os.environ.get("SPINALML_SEED", SEED)))

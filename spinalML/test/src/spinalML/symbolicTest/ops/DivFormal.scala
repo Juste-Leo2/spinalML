@@ -9,6 +9,14 @@ import spinalML.dtypes.{I8, FP4_E2M1, FloatML}
 import spinalML.ops.DivTestComp
 import spinalML.utils.MathLUTs
 
+/**
+ * Exact integer division proof (Wave 5, replaces the pre-rewrite reciprocal
+ * ROM + multiply proof). Instead of a golden divider, this checks the
+ * defining characterization of truncating division:
+ *   q = trunc(a / b) <=> r = a - q*b satisfies |r| < |b| and
+ *   sign(r) in {0, sign(a)}, with the engine's saturation policy on the two
+ *   unreachable-by-math cases (b == 0, INT_MIN / -1).
+ */
 class DivFormal_I8 extends Component {
   val dut = FormalDut(DivTestComp(I8()))
 
@@ -22,7 +30,7 @@ class DivFormal_I8 extends Component {
   assume(dut.io.a.stream.valid)
   assume(dut.io.b.stream.valid)
   assume(dut.io.c.stream.ready)
-  
+
   val pastValidA = past(dut.io.a.stream.valid)
   val pastReadyA = past(dut.io.a.stream.ready)
   val pastPayloadA = past(dut.io.a.stream.payload)
@@ -38,41 +46,54 @@ class DivFormal_I8 extends Component {
     assume(dut.io.b.stream.valid)
     assume(dut.io.b.stream.payload === pastPayloadB)
   }
-  
-  // Assume b is not 0 for division
-  for (i <- 0 until 2) {
-    assume(dut.io.b.stream.payload(i).asBits.asUInt =/= 0)
-  }
 
-  val mathFn = (x: Double) => 1.0 / (x + (if (x >= 0) 1e-9 else -1e-9))
-  val valFn = MathLUTs.intValFn(8)
-  val encodeFn = MathLUTs.intEncodeFn(8)
-  val romContent = for(i <- 0 until 256) yield {
-    val resDouble = mathFn(valFn(i))
-    U(encodeFn(resDouble), 8 bits)
-  }
-  val goldenRecipRom = Mem(UInt(8 bits), initialContent = romContent)
+  // No `b =/= 0` assumption: the div-by-zero saturation policy is proven too.
 
-  val trackedExpected = Reg(Vec(I8(), 2))
+  val trackedA = Reg(Vec(I8(), 2))
+  val trackedB = Reg(Vec(I8(), 2))
   val track = RegInit(False)
   val hasChecked = RegInit(False)
-  val fireIn = dut.io.a.stream.valid && dut.io.b.stream.valid && dut.io.a.stream.ready
+
+  val fireIn = dut.io.a.stream.valid && dut.io.b.stream.valid &&
+    dut.io.a.stream.ready && dut.io.b.stream.ready
   when(fireIn && !track && !hasChecked) {
     track := True
-    val expectedPayload = Vec(I8(), 2)
-    for(i <- 0 until 2) {
-      val bBits = dut.io.b.stream.payload(i).asBits.asUInt
-      val goldenRecipBits = goldenRecipRom.readAsync(bBits)
-      val goldenRecipSInt = goldenRecipBits.asSInt
-      expectedPayload(i).assignFrom((dut.io.a.stream.payload(i).asInstanceOf[SInt] * goldenRecipSInt).resized)
-    }
-    trackedExpected := expectedPayload
+    trackedA := dut.io.a.stream.payload
+    trackedB := dut.io.b.stream.payload
   }
-  
+
+  val w = 8
+  val wide = 2 * w
+  val maxVal = S((1 << (w - 1)) - 1, w bits)
+  val minVal = S(-(1 << (w - 1)), w bits)
+
   val fireOut = dut.io.c.stream.valid && dut.io.c.stream.ready
   when(fireOut && track && !hasChecked) {
-    for(i <- 0 until 2) {
-      assert(dut.io.c.stream.payload(i) === trackedExpected(i), s"Div I8 mismatch on lane $i")
+    for (i <- 0 until 2) {
+      val a = trackedA(i).asInstanceOf[SInt]
+      val b = trackedB(i).asInstanceOf[SInt]
+      val q = dut.io.c.stream.payload(i).asInstanceOf[SInt]
+      val aW = a.resize(wide bits)
+      val bW = b.resize(wide bits)
+      val qW = q.resize(wide bits)
+      val r = aW - (qW * bW).resize(wide bits)
+      val rAbs = Mux(r < 0, -r, r)
+      val bAbs = Mux(bW < 0, -bW, bW)
+
+      when(b === 0) {
+        // Saturation of the mathematical infinity, sign-aware.
+        assert(q === Mux(a.msb, minVal, Mux(a === 0, S(0, w bits), maxVal)),
+          s"div0 saturation on lane $i")
+      } otherwise {
+        when(a === minVal && b === S(-1, w bits)) {
+          // INT_MIN / -1: +2^(w-1) not representable -> +max.
+          assert(q === maxVal, s"INT_MIN/-1 saturation on lane $i")
+        } otherwise {
+          assert(rAbs < bAbs, s"|remainder| must be < |divisor| on lane $i")
+          assert(r === 0 || r.msb === a.msb,
+            s"remainder sign must follow the dividend on lane $i")
+        }
+      }
     }
     hasChecked := True
   }

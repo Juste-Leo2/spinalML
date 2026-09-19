@@ -8,13 +8,16 @@ import numpy as np
 import os
 
 from golden_models.dtypes import I8, FP8_E4M3, I16, BF16
+from golden_models.ops import requantize_hw
 from utils.test_layers_utils import get_random_tensor, send_tensor, recv_tensor, log_true_math_error, DEFAULT_NUM_TRIALS
 from utils.tb_utils import run_mill, copy_roms, seed_random, SEED
 
 seed_random()
 
-# AvgPool1D golden model
-def avgpool1d_hw(X, poolSize, stride, dtype):
+# AvgPool1D golden model. Integers follow RequantizeMath: shift with the
+# rounding switch (RNE default, trunc legacy) then saturation (dead for a true
+# average, kept because the datapath is shared with RequantizeOp).
+def avgpool1d_hw(X, poolSize, stride, dtype, rounding=None):
     L_in = len(X)
     channels = len(X[0])
     L_out = (L_in - poolSize) // stride + 1
@@ -33,10 +36,9 @@ def avgpool1d_hw(X, poolSize, stride, dtype):
                 val = sum([w[ch] for w in window]) / poolSize
                 bits = dtype.from_float(val)
             else:
-                # HW integer behavior
+                # HW integer behavior: shared shift+round+saturate datapath
                 acc = sum([int(w[ch]) for w in window])
-                # Shift
-                val = acc >> shift
+                val = requantize_hw(acc, dtype.bit_width, dtype.bit_width, shift, rounding)
                 bits = dtype.from_float(val)
                 
             y_row.append(dtype.to_float(bits))

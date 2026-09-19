@@ -38,8 +38,8 @@ numpy/PyTorch, pour un coût matériel marginal (voir §4).
 | Arithmétique FloatML (`mul`, `add`, `roundTo`, `widen`) | RNE — **déjà** le style maison (guard/sticky) |
 | Cast `SInt → FloatML` (`Float.fromSInt`) | RNE (guard/sticky) — actuellement troncature (DTYPE-06) |
 | Cast `FloatML → FloatML` / `FloatML → SInt` (`CastOp`) | `widen` (exact) / `roundTo` (RNE) — actuellement non branché (OPS-10) |
-| Requantification entière (accus → dtype) | `shift + RNE + saturation symétrique`, un seul primitive partagé (`RequantizeOp`) |
-| Génération des LUT (élaboration) | RNE (`BigDecimal HALF_EVEN`), aligné sur `round()` Python — actuellement `Math.round` half-up |
+| Requantification entière (accus → dtype) | `shift + RNE + saturation symétrique`, un seul datapath partagé `RequantizeMath` (`RequantizeOp`, `BatchNorm1D` SInt, `AvgPool1D/2D` int — fait, Wave 5 step 3 ; saturation inatteignable sur un avgpool, gardée par partage) |
+| Génération des LUT (élaboration) | RNE (`roundRNE` half-even), aligné sur `round()` Python — switch-aware (Option B, fait) ; `Truncate` = legacy `Math.round` half-up bit-exact |
 | Saturation | Toujours vers la valeur max représentable (finie) ; jamais de wrap |
 | `sqrt`/`rsqrt` d'une entrée négative | Politique de domaine : résultat 0 (voir OPS-02) |
 | Sous-normaux | Flush-to-zero (FTZ) documenté, voir §5 |
@@ -66,14 +66,33 @@ object RoundingConfig {
 - **Précédence** : paramètre explicite de l'op > `SPINALML_ROUNDING` /
   `-Dspinalml.rounding` > défaut RNE.
 - **Per-op** : `RequantizeOp(..., rounding: RoundingMode = RoundingConfig.current)`,
-  idem `Float.fromSInt`, `CastOp`, `batchnorm`, `avgpool` si touché.
+  idem `Float.fromSInt`, `CastOp`, `batchnorm`, `avgpool1d/2d` (chemin entier,
+  spec `rounding: Option[RoundingMode] = None` plombée par `Sequential`).
   À l'élaboration : `if (rounding == Truncate) shiftLegacy else shiftRNE`.
+  Le shift+RNE+saturation entier est factorisé dans `ops/requantize.scala`
+  (`RequantizeMath.shiftSaturate` SInt, `shiftRound` UInt) : `RequantizeOp`,
+  `BatchNorm1D` et les deux pools partagent une seule implémentation. Sur un
+  avgpool la saturation est mathématiquement inatteignable (la moyenne d'un
+  fenêtre reste dans la plage d'entrée et l'accumulateur fait `w + shift` bits) ;
+  elle est conservée par partage, jamais par nécessité.
+- **LUT/ROM (Option B, env-only)** : `MathLUTs.generateFloatMantissaROM/intEncodeFn/floatEncodeFn`,
+  `PWLLUTs.generateROMs` + `UnaryPWLOp`, et les 5 feuilles `ExpOp/ReciprocalOp/SqrtOp/RsqrtOp/LogOp`
+  (param `rounding` défauté, compagnons `apply` idem, sites inline sqrt/rsqrt/log dont la
+  constante Q0.16 `log2ToBase`). Les composés (`DivOp`, `SigmoidOp`, `TanhOp`, `Softmax1D`,
+  `LayerNorm1D`) sont **volontairement sans override** : primitifs internes sans `LayerSpec`,
+  ils suivent l'env via les défauts (un futur besoin par-couche passera par une spec,
+  comme Cast/Requantize/BatchNorm).
 - **Per-layer** : `Requantize(shift, targetType, rounding: Option[RoundingMode] = None)`
   et `Cast(..., rounding = None)` ; `None` = config globale.
 - **CLI** : `--rounding {rne|trunc}` sur `generate`/`build` (miroir de
   `--no-dsp`, `cli/spinalml_cli/cli.py:199-203`), affiché dans le bandeau.
 - **Harness de test** : `tests/python/utils/tb_utils.py` lit `SPINALML_ROUNDING`
-  pour sélectionner le golden (défaut RNE).
+  pour sélectionner le golden (défaut RNE). Le replica Scala du moteur
+  universel (`spinalML.replica.HWArithmetic.fromSInt/fromDouble/fmul/fadd`,
+  `LayerReplicas.requantizeInt/castIntToFloat`) suit la même config : il élit
+  RNE par défaut et retombe sur la troncature legacy en mode trunc, comme le
+  RTL (`TransformHandlers` transmet en plus le `rounding` par-layer de
+  `Cast`/`Requantize`).
 - **Garantie legacy** : le chemin trunc reste **bit-identique** à l'existant —
   échappatoire pour les utilisateurs après le changement de sémantique par
   défaut (le défaut RNE change les sorties bit-exactes des modèles actuels,
@@ -89,7 +108,7 @@ supplémentaire. Référence design W4A8 : ~31,7 k LC (cf. `full_roadmap.md`),
 |---|---|---|---|---|
 | Requantize RNE (guard/sticky + incrément étroit) | 10–15 | 0 (ou 1 étage si timing) | 0 | 0 |
 | `fromSInt` RNE (sticky + incrément mantisse + carry) | 12–18 / voie | 0 | 0 | 0 |
-| Génération ROM RNE (constantes d'élaboration) | 0 | 0 | 0 | 0 |
+| Génération ROM RNE (constantes d'élaboration, Option B) | 0 | 0 | 0 | 0 |
 | DTYPE-07 saturation E4M3 448 (params Scala compile-time) | 0 | 0 | 0 | 0 |
 | OPS-02 domaine négatif (1 mux) | 1–2 / voie | 0 | 0 | 0 |
 | FTZ documenté / `require` / docs / tests | 0 | 0 | 0 | 0 |
@@ -114,12 +133,20 @@ dominant du projet reste la table de registres MatMul.
   sous le min normal). Exemple FP8 E4M3 : min normal 2⁻⁶ ≈ 0,0156, le format
   définit des sous-normaux jusqu'à 2⁻⁹, que nous encodons 0. PyTorch
   `float8_e4m3fn` les représente → **divergence assumée**, non implémentée
-  (chantier multi-jours, Wave 5 « optionnel »). Cas visible : LAY-04 résiduel
-  (diff² sous-flue alors que diff ≠ 0).
+  (chantier multi-jours, Wave 5 « optionnel »). Le résiduel LAY-04
+  (diff² sous-flue alors que diff ≠ 0) est corrigé sans sous-normaux : quand
+  `enc(1e-5) == 0`, LayerNorm clampe eps au plus petit normal représentable
+  (E4M3 `2^-6`, E2M1 `1.0`), BF16 gardant 1e-5 (Wave 5 step 4).
 - **NaN E4M3** : convention `e4m3fn` = un seul NaN (mant=111), pas d'infini,
-  saturation à 448. Notre modèle encode la saturation en (exp=all-ones, mant=0)
-  et décode mant=111 comme 480. DTYPE-07 aligne la saturation (448) ; la
-  propagation NaN complète est reportée en Wave 5.
+  saturation à 448. Wave 5 (propagation seule, fait) : `Float.mul/add/gt/roundTo/widen`
+  reconnaissent le slot (helpers `isNaN`/`nanEncoding`) et le propagent (signe du
+  premier opérande NaN, `gt` toujours False, `max` hérite `Mux(gt,a,b)` donc le
+  second opérande gagne sur NaN — asymétrie documentée) ; autres formats : exposant
+  all-ones + mantisse ≠ 0 → NaN canonique `(all-ones, 1)`. Jamais d'émission
+  spontanée (saturation → 448/inf inchangée). **Piège documenté** : les chemins
+  LUT/PWL ne propagent pas — LUT float ≤ 8 bits décodent les bits NaN en 480.0
+  (convention golden), LUT int et coefs PWL tombent à 0/saturé. Goldens Python
+  inchangés (`from_float` flushe NaN→0 côté stimulus, `(15,7)` décode toujours 480).
 - **TFLite** : half-away historique dans les kernels (non mandaté par la spec).
   Référence retenue uniquement pour les scales quantifiées des sigmoïdes
   (Wave 5 : `LOGISTIC scale=1/256 zp=−128`, `TANH scale=1/128 zp=0`).
@@ -139,11 +166,27 @@ dominant du projet reste la table de registres MatMul.
 
 ## 7. Backlog lié
 
-1. **Division Q-format + sigmoid/tanh quantifiés** (OPS-03/12) : `require`
-   explicite sur les types entiers en Wave 4 ; vraie sémantique Qm.n et scales
-   TFLite en Wave 5 (PR dédiée).
-2. **Propagation NaN e4m3fn** (mant=111) : comparateur + mux dans mul/add/gt/
-   roundTo (~1 j + goldens), pendant de DTYPE-07.
+1. **Division entière — sémantique ONNX (fait, Wave 5 steps 5A + 5B)** :
+   `DivOp` int = `Div` ONNX **exact** (troncature vers zéro, I/O même dtype,
+   saturation sur diviseur 0 et `INT_MIN/-1`), float inchangé. SInt/UInt ≤8 bits :
+   divider restoring déroulé combinatoire (`IntDiv`, 1 cycle). >8 bits (I16/I32) :
+   divider restoring série (FSM, 1 beat en vol, latence fixe `width + 2` cycles,
+   backpressure par `ready`), bit-identique au chemin combinatoire. Décision
+   actée : **ONNX est la référence normative** (RNE pour `QuantizeLinear` comme
+   notre défaut, div exacte) ; TFLite ne sert que là où ONNX n'a rien (LUT
+   sigmoïde/tanh). **Sigmoid/Tanh quantifiés — fait (step C)** : LUT 256 entrées
+   pleine échelle I8/U8, `LOGISTIC 1/256 zp -128/0`, `TANH 1/128 zp 0/128`,
+   scale/zp d'entrée par `LayerSpec`, réplica + goldens ; I16 refusé (ROM
+   64K entrées). Q15 LUT abandonné (ONNX ne définit pas de division quantifiée,
+   TFLite n'a pas d'op runtime standard).
+2. **Propagation NaN e4m3fn — fait (Wave 5 step 1)** : voir §5.
 3. **Sous-normaux** : uniquement si un modèle le justifie ; FTZ reste le défaut.
-4. **Rounding avgpool int** (RNE via le switch) si la sémantique entière compte.
-5. **Résiduel FP8 LAY-04** : eps min-normal représentable (décision + golden).
+4. **Rounding avgpool int — fait (Wave 5 step 3)** : RNE via le switch,
+   `RequantizeMath` partagé avec `RequantizeOp` (SInt `shiftSaturate`, UInt
+   `shiftRound`), specs `AvgPool1D/2D(rounding = None)` plombées par `Sequential`,
+   réplica `LayerReplicas.avgPool*Int(outBits, rounding)` via `requantizeScalar`,
+   goldens `avgpool1d_hw`/`avgpool2d_hw` paramétrés par mode, tests RNE + lane
+   trunc.
+5. **Résiduel FP8 LAY-04 — fait (Wave 5 step 4)** : eps = `enc(1e-5)` si
+   représentable sinon plus petit normal (E4M3 `2^-6`, E2M1 `1.0`), réplica +
+   golden alignés.

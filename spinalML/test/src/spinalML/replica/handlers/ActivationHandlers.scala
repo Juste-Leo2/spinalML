@@ -2,7 +2,7 @@
 
 package spinalML.replica.handlers
 
-import spinalML.nn.LeakyReLU
+import spinalML.nn.{LeakyReLU, Sigmoid, Tanh}
 import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object ActivationHandlers {
@@ -35,6 +35,7 @@ object ActivationHandlers {
   }
 
   def evalSigmoid(
+    sm: Sigmoid,
     curTensor: ReplicaTensor,
     curShape: Seq[Int]
   ): (Seq[Int], ReplicaTensor) = {
@@ -42,12 +43,14 @@ object ActivationHandlers {
       case ft: FloatTensor =>
         FloatTensor(curShape, LayerReplicas.sigmoid(ft.asFloats, ft.expBits, ft.mantBits), ft.expBits, ft.mantBits)
       case it: IntTensor =>
-        IntTensor(curShape, LayerReplicas.sigmoidInt(it.asInts, it.bitWidth), it.bitWidth)
+        IntTensor(curShape, LayerReplicas.sigmoidInt(it.asInts, it.bitWidth,
+          sm.inputScale, sm.inputZeroPoint, sm.rounding.getOrElse(spinalML.RoundingConfig.current)), it.bitWidth)
     }
     (curShape, nextTensor)
   }
 
   def evalTanh(
+    th: Tanh,
     curTensor: ReplicaTensor,
     curShape: Seq[Int]
   ): (Seq[Int], ReplicaTensor) = {
@@ -55,7 +58,8 @@ object ActivationHandlers {
       case ft: FloatTensor =>
         FloatTensor(curShape, LayerReplicas.tanh(ft.asFloats, ft.expBits, ft.mantBits), ft.expBits, ft.mantBits)
       case it: IntTensor =>
-        IntTensor(curShape, LayerReplicas.tanhInt(it.asInts, it.bitWidth), it.bitWidth)
+        IntTensor(curShape, LayerReplicas.tanhInt(it.asInts, it.bitWidth,
+          th.inputScale, th.inputZeroPoint, th.rounding.getOrElse(spinalML.RoundingConfig.current)), it.bitWidth)
     }
     (curShape, nextTensor)
   }

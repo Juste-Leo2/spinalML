@@ -1,9 +1,10 @@
+import os
 import re
 import subprocess
 import sys
 import time
 import typer
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pathlib import Path
 
 from .config import load_config, get_bin_path, CLI_DIR, get_project_root, get_active_framework_root
@@ -40,6 +41,22 @@ def clean_cache(
     console = Console()
     clean_coursier_cache(console=console, debug=debug)
     console.print("[bold green]Coursier & Ivy caches cleaned successfully![/bold green]")
+
+def _resolve_rounding(rounding: Optional[str]) -> Tuple[Optional[str], str]:
+    """Resolve the elaboration rounding flag.
+
+    Returns (SPINALML_ROUNDING value to set or None to keep the pre-set env,
+    display label). None keeps the environment untouched; RoundingConfig
+    itself falls back to RNE when neither flag nor env is set.
+    """
+    trunc_values = ("trunc", "truncate", "floor")
+    is_trunc = str(rounding).strip().lower() in trunc_values if rounding is not None \
+        else os.environ.get("SPINALML_ROUNDING", "").strip().lower() in trunc_values
+    label = "Truncate (legacy bit-exact)" if is_trunc else "RNE (default, unbiased)"
+    if rounding is None:
+        return None, label
+    return ("trunc" if is_trunc else "rne"), label
+
 
 def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int:
     """Helper to run an installed tool and pass along arguments."""
@@ -151,7 +168,8 @@ def compile(
     out_count: Optional[int] = typer.Option(None, "--out-count", help="Number of output stream bytes/logits (auto-detected from model if omitted)"),
     word_width: Optional[int] = typer.Option(None, "--word-width", help="AXI data bus width in bits (auto-detected from model if omitted)"),
     bram_words: Optional[int] = typer.Option(None, "--bram-words", help="BRAM capacity in 64-bit words (default: from board or 4096)"),
-    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)")
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)"),
+    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE")
 ):
     """
     Compile a Scala file into Verilog by running it within the workspace module,
@@ -179,6 +197,7 @@ def compile(
     word_width = _unwrap(word_width, None)
     bram_words = _unwrap(bram_words, None)
     no_dsp = _unwrap(no_dsp, False)
+    rounding = _unwrap(rounding, None)
 
     if not file.exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
@@ -202,6 +221,13 @@ def compile(
     elif "SPINALML_NO_DSP" in os.environ:
         del os.environ["SPINALML_NO_DSP"]
 
+    # Rounding policy for elaboration (mirrors RoundingConfig.current):
+    # explicit flag wins, otherwise a pre-set SPINALML_ROUNDING is kept
+    # (RoundingConfig itself falls back to RNE when unset).
+    rounding_value, rounding_label = _resolve_rounding(rounding)
+    if rounding_value is not None:
+        os.environ["SPINALML_ROUNDING"] = rounding_value
+
     model_params = detect_model_parameters(file)
     final_clk = parse_frequency(clk) if clk else board_cfg["clk_freq"]
     final_baud = baud if baud is not None else board_cfg["baud_rate"]
@@ -212,6 +238,7 @@ def compile(
     dsp_status = "Disabled (LUTs only)" if no_dsp else f"Enabled ({vendor} DSP mapping)"
     typer.echo(f"Target Board   : {board_cfg['name']} ({board_cfg.get('fpga', 'FPGA')})")
     typer.echo(f"DSP Policy     : {dsp_status}")
+    typer.echo(f"Rounding       : {rounding_label}")
     typer.echo(f"Hardware Clock : {final_clk/1e6:.2f} MHz | UART: {final_baud} baud (CLK_PER_BIT = {final_clk // final_baud})")
     typer.echo(f"Model Protocol : {final_out_count} output bytes | {final_word_width}-bit AXI | {final_bram_words} words BRAM")
 
@@ -694,13 +721,19 @@ def build(
     synth_only: bool = typer.Option(False, "--synth-only", "--yosys", help="Stop after Yosys synthesis (quick resource check)"),
     pnr_only: bool = typer.Option(False, "--pnr-only", "--nextpnr", help="Stop after nextpnr place-and-route (skip bitstream pack)"),
     clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
-    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)")
+    no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)"),
+    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE")
 ):
     """
     Synthesize, place & route and package FPGA bitstream (Yosys -> nextpnr -> gowin_pack).
     Accepts a Verilog directory, single .v file, or a .scala model file (auto-compiles to Verilog first).
     """
     from .build_runner import run_build
+    import os as _os
+    rounding_value, rounding_label = _resolve_rounding(rounding)
+    if rounding_value is not None:
+        _os.environ["SPINALML_ROUNDING"] = rounding_value
+    typer.echo(f"Rounding       : {rounding_label}")
     code = run_build(
         src=src,
         out_dir=out,
@@ -710,7 +743,8 @@ def build(
         synth_only=synth_only,
         pnr_only=pnr_only,
         clk_override=clk,
-        no_dsp=no_dsp
+        no_dsp=no_dsp,
+        rounding=rounding
     )
     if code != 0:
         raise typer.Exit(code=code)

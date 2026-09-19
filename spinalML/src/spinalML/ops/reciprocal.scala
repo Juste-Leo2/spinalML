@@ -7,8 +7,13 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
 import spinalML.utils.{MathLUTs, UnaryLUTOp}
+import spinalML.{RoundingConfig, RoundingMode}
 
-case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false) extends Component {
+case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false,
+                                   // Option B (switch-aware): ROM/LUT constant rounding
+                                   // follows the elaboration mode (RNE vs legacy).
+                                   // Composed ops instantiate with the default (env).
+                                   rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
     val a = slave(Tensor(dataType, shape, lanes))
@@ -22,9 +27,9 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
     val isFloat = dataType().isInstanceOf[FloatML]
     val (valFn, encodeFn) = if (isFloat) {
       val f = dataType().asInstanceOf[FloatML]
-      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits))
+      (MathLUTs.floatValFn(f.expBits, f.mantBits), MathLUTs.floatEncodeFn(f.expBits, f.mantBits, rounding))
     } else {
-      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth))
+      (MathLUTs.intValFn(bitWidth), MathLUTs.intEncodeFn(bitWidth, rounding))
     }
     
     val lutOp = UnaryLUTOp(dataType, shape, lanes, valFn, encodeFn, mathFn)
@@ -43,7 +48,7 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
       spinalML.utils.MathLUTs.generateFloatMantissaROM(mantBits, mantBits, x => {
         // x is realMant = 1.0 + mantFraction
         if (x == 1.0) 1.0 else (2.0 / x)
-      })
+      }, rounding)
     }
     
     val outPayload = Vec(dataType, lanes)
@@ -72,7 +77,10 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
       val expUnderflow = RegNextWhen(newExpSInt <= 0, io.a.stream.ready)
       val expOverflow = RegNextWhen(newExpSInt >= ((1 << expBits) - 1), io.a.stream.ready)
       val regNewExp = RegNextWhen(newExp.resize(expBits), io.a.stream.ready)
-      
+      // Saturation encoding (448 for E4M3, infinity otherwise; no-op here for
+      // the >8-bit algebraic path, kept uniform with Float.mul/add/roundTo)
+      val (satExp, satMant) = spinalML.utils.Float.satEncoding(expBits, mantBits)
+
       when(expIsZero) {
         outX.exponent := ((1 << expBits) - 1) // 1/0 = Inf
         outX.mantissa := 0
@@ -80,8 +88,8 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
         outX.exponent := 0
         outX.mantissa := 0
       } elsewhen (expOverflow) {
-        outX.exponent := ((1 << expBits) - 1)
-        outX.mantissa := 0
+        outX.exponent := satExp
+        outX.mantissa := satMant
       } otherwise {
         outX.exponent := regNewExp
         outX.mantissa := readMant.asUInt
@@ -112,15 +120,16 @@ case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
       if (isSInt) spinalML.utils.PWLLUTs.createConstantSegmentFn(bitWidth, indexBits, mathFn)
       else spinalML.utils.PWLLUTs.createSegmentFn(bitWidth, false, 0, 0, indexBits, mathFn)
 
-    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn)
+    val pwlOp = spinalML.utils.UnaryPWLOp(dataType, shape, lanes, numSegments, segmentIndexFn, segmentFn, rounding)
     pwlOp.io.a <> io.a
     io.c <> pwlOp.io.c
   }
 }
 
 object reciprocal {
-  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false): Tensor[T] = {
-    val comp = ReciprocalOp(a.dataType, a.shape, a.lanes, forceAlg)
+  def apply[T <: Data](a: Tensor[T], forceAlg: Boolean = false,
+                       rounding: RoundingMode = RoundingConfig.current): Tensor[T] = {
+    val comp = ReciprocalOp(a.dataType, a.shape, a.lanes, forceAlg, rounding)
     comp.io.a <> a
     comp.io.c
   }

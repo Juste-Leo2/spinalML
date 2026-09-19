@@ -3,6 +3,7 @@
 package spinalML.examples
 
 import scala.collection.mutable.ArrayBuffer
+import spinalML.{RoundingConfig, RoundingMode}
 
 /**
  * Software bit-exact replica of the FloatML hardware arithmetic
@@ -17,14 +18,44 @@ import scala.collection.mutable.ArrayBuffer
  *    its mantissa field — this is how subnormal-ENCODED DDR constants
  *    (weights/bias bytes) behave once they reach the datapath;
  *  - rounding is round-to-nearest-even everywhere (mul, add);
- *  - overflow saturates to the infinity encoding (exponent all ones);
- *  - `fromSInt` TRUNCATES the mantissa (no rounding), mirroring the RTL.
+ *  - overflow saturates to 448 for E4M3 (no infinity, DTYPE-07) and to the
+ *    infinity encoding (exponent all ones) otherwise;
+ *  - `fromSInt` rounds the mantissa to nearest-even under [[Rne]] and
+ *    truncates under [[Truncate]] (elaboration switch, DTYPE-06), mirroring
+ *    the RTL. The default follows `RoundingConfig.current`, exactly like
+ *    every `rounding` parameter of the RTL.
  */
 object HWFloat {
 
   final case class F(s: Boolean, e: Int, m: Int)
 
   val PZERO = F(false, 0, 0)
+
+  /** NaN detection/payload mirroring spinalML.utils.Float (Wave 5,
+    * propagation-only). Sign rule: first NaN operand's sign. */
+  private def isE4M3H(expBits: Int, mantBits: Int): Boolean =
+    spinalML.utils.Float.isE4M3(expBits, mantBits)
+
+  def isNaN(f: F, expBits: Int, mantBits: Int): Boolean =
+    if (isE4M3H(expBits, mantBits)) f.e == 15 && f.m == 7
+    else f.e == ((1 << expBits) - 1) && f.m != 0
+
+  def nanOf(sign: Boolean, expBits: Int, mantBits: Int): F =
+    if (isE4M3H(expBits, mantBits)) F(sign, 15, 7)
+    else F(sign, (1 << expBits) - 1, 1)
+
+  def nanProp(a: F, b: F, expBits: Int, mantBits: Int): F =
+    nanOf(if (isNaN(a, expBits, mantBits)) a.s else b.s, expBits, mantBits)
+
+  /** Saturation encoding/predicate mirroring spinalML.utils.Float (DTYPE-07). */
+  private def satFields(expBits: Int, mantBits: Int): (Int, Int) =
+    spinalML.utils.Float.satEncoding(expBits, mantBits)
+
+  private def needsSat(expBits: Int, mantBits: Int, expVal: Int, mant: Int): Boolean =
+    if (spinalML.utils.Float.isE4M3(expBits, mantBits))
+      expVal > 15 || (expVal == 15 && mant == 7)
+    else
+      expVal >= ((1 << expBits) - 1)
 
   /** Decodes a finite field triple to its real value (+0 for the zero class). */
   def decode(f: F, expBits: Int, mantBits: Int): Double = {
@@ -36,7 +67,7 @@ object HWFloat {
 
   /**
    * Port of `spinalML.utils.Float.mul`: full mantissa product, RN-even
-   * rounding, underflow -> +0, overflow -> Inf, zero class on exponent == 0.
+   * rounding, underflow -> +0, overflow -> saturation encoding, zero class on exponent == 0.
    */
   def fmul(a: F, b: F, expBits: Int, mantBits: Int): F = {
     val bias = (1 << (expBits - 1)) - 1
@@ -63,15 +94,20 @@ object HWFloat {
     val expSum = a.e + b.e - bias +
       (if (overflow) 1 else 0) + (if (mantOv) 1 else 0)
 
-    if (aZero || bZero || expSum <= 0) PZERO
-    else if (expSum >= (1 << expBits) - 1) F(sign, (1 << expBits) - 1, 0)
-    else F(sign, expSum, finalMant)
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits))
+      nanProp(a, b, expBits, mantBits)
+    else if (aZero || bZero || expSum <= 0) PZERO
+    else {
+      val (satExp, satMant) = satFields(expBits, mantBits)
+      if (needsSat(expBits, mantBits, expSum, finalMant)) F(sign, satExp, satMant)
+      else F(sign, expSum, finalMant)
+    }
   }
 
   /**
    * Port of `spinalML.utils.Float.add`: magnitude-sorted alignment (field
    * comparison, 3 guard bits, capped shift), RN-even normalization,
-   * underflow -> +0, overflow -> Inf carrying the LARGER operand's sign.
+   * underflow -> +0, overflow -> saturation encoding carrying the LARGER operand's sign.
    */
   def fadd(a: F, b: F, expBits: Int, mantBits: Int): F = {
     val aZero = a.e == 0
@@ -92,6 +128,8 @@ object HWFloat {
     val sameSign = larger.s == smaller.s
     val mantSumExt = if (sameSign) lmExt + smShifted else lmExt - smShifted
 
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits))
+      return nanProp(a, b, expBits, mantBits)
     if (aZero && bZero) return PZERO
     if (mantSumExt == 0) return PZERO
 
@@ -110,8 +148,11 @@ object HWFloat {
     val newExp = larger.e + 1 - lz + (if (mantOvA) 1 else 0)
 
     if (newExp <= 0) PZERO
-    else if (newExp >= (1 << expBits) - 1) F(larger.s, (1 << expBits) - 1, 0)
-    else F(larger.s, newExp, finalMantA)
+    else {
+      val (satExp, satMant) = satFields(expBits, mantBits)
+      if (needsSat(expBits, mantBits, newExp, finalMantA)) F(larger.s, satExp, satMant)
+      else F(larger.s, newExp, finalMantA)
+    }
   }
 
   /**
@@ -129,43 +170,68 @@ object HWFloat {
     else (a.e < b.e) || (a.e == b.e && a.m < b.m)
   }
 
-  def fmax(a: F, b: F, expBits: Int, mantBits: Int): F = if (gt(a, b)) a else b
+  def fmax(a: F, b: F, expBits: Int, mantBits: Int): F =
+    // Wave 5: mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN
+    // (bare triples carry no format, so the guard lives here, not in gt).
+    if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits)) b
+    else if (gt(a, b)) a else b
 
   /**
-   * Port of `spinalML.utils.Float.fromSInt`: mantissa TRUNCATION (no
-   * rounding), saturation keeps the input sign.
+   * Port of `spinalML.utils.Float.fromSInt`: mantissa conversion with
+   * round-to-nearest-even under [[Rne]] (guard + sticky on the dropped
+   * window, increment with carry into the exponent) and legacy truncation
+   * under [[Truncate]] (DTYPE-06). Saturation keeps the input sign and uses
+   * the RTL encoding (DTYPE-07: E4M3 -> 448, others -> inf).
    */
-  def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int): F = {
+  def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int,
+               rounding: RoundingMode = RoundingConfig.current): F = {
     val neg = v < 0
     val abs = math.abs(v) & ((1L << w) - 1)
     if (abs == 0) return PZERO
     val p = 63 - java.lang.Long.numberOfLeadingZeros(abs)
     val bias = (1 << (expBits - 1)) - 1
-    val expS = bias + p
-    if (expS >= (1 << expBits) - 1) return F(neg, (1 << expBits) - 1, 0)
+    var expS = bias + p
     // Align the MSB to bit (w-1) exactly like the RTL's `absVal << lz`,
     // then append sub-mantissa zero padding for narrow targets.
     val padding = math.max(0, mantBits + 1 - w)
     val wp = w + padding
     val padded = abs << ((w - 1 - p) + padding)
-    val mant = ((padded >> (wp - 1 - mantBits)) & ((1 << mantBits) - 1)).toInt
-    F(neg, expS, mant)
+    var mant = ((padded >> (wp - 1 - mantBits)) & ((1 << mantBits) - 1)).toInt
+
+    if (rounding == RoundingMode.Rne) {
+      val dropBits = wp - 1 - mantBits
+      if (dropBits > 0) {
+        val guard = (padded >> (dropBits - 1)) & 1L
+        val sticky = if (dropBits > 1) (padded & ((1L << (dropBits - 1)) - 1)) != 0 else false
+        if (guard == 1L && (sticky || (mant & 1) == 1)) {
+          if (mant + 1 >= (1 << mantBits)) { mant = 0; expS += 1 } else mant += 1
+        }
+      }
+    }
+
+    val (satExp, satMant) = satFields(expBits, mantBits)
+    if (needsSat(expBits, mantBits, expS, mant)) F(neg, satExp, satMant)
+    else F(neg, expS, mant)
   }
 
   /**
    * Verbatim port of `spinalML.utils.Float.doubleToFields`: banker's
-   * rounding on the mantissa, overflow -> infinity, underflow -> zero
-   * (no subnormals).
+   * rounding on the mantissa, overflow -> saturation encoding (448 for
+   * E4M3, infinity otherwise, DTYPE-07), underflow -> zero (no subnormals).
    */
   def fromDouble(value: Double, expBits: Int, mantBits: Int): F = {
     val bias = (1 << (expBits - 1)) - 1
     if (value == 0.0 || value.isNaN) return PZERO
     val signBit = value < 0
     val absVal = math.abs(value)
-    val maxExp = (1 << expBits) - 2
-    val maxMant = (1 << mantBits) - 1
-    val maxVal = (1.0 + maxMant.toDouble / (1 << mantBits)) * math.pow(2, maxExp - bias)
-    if (value.isInfinity || absVal > maxVal) return F(signBit, (1 << expBits) - 1, 0)
+    val (satExp, satMant) = satFields(expBits, mantBits)
+    val maxVal = if (spinalML.utils.Float.isE4M3(expBits, mantBits)) 448.0
+    else {
+      val me = (1 << expBits) - 2
+      val mm = (1 << mantBits) - 1
+      (1.0 + mm.toDouble / (1 << mantBits)) * math.pow(2, me - bias)
+    }
+    if (value.isInfinity || absVal > maxVal) return F(signBit, satExp, satMant)
 
     val e = Math.getExponent(absVal)
     val m = java.lang.Math.scalb(absVal, -e)
@@ -179,9 +245,9 @@ object HWFloat {
       expVal += 1
     }
 
-    if (expVal >= ((1 << expBits) - 1)) {
-      expVal = (1 << expBits) - 1
-      mantVal = 0
+    if (needsSat(expBits, mantBits, expVal, mantVal.toInt)) {
+      expVal = satExp
+      mantVal = satMant
     } else if (expVal <= 0) {
       expVal = 0
       mantVal = 0

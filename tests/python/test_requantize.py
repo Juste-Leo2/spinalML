@@ -8,7 +8,7 @@ import random
 
 from golden_models.dtypes import I32
 from golden_models.ops import requantize_hw
-from utils.tb_utils import run_mill, copy_roms, seed_random
+from utils.tb_utils import run_mill, copy_roms, seed_random, rounding_mode
 
 seed_random()
 
@@ -46,7 +46,7 @@ async def run_requantize_test(dut, op_name, num_transfers, lanes=4):
         dut.io_a_stream_valid.value = 0
         await Timer(1, units="ns")
 
-    expected = [requantize_hw(x, 32, 8, 2) for x in flat_in]
+    expected = [requantize_hw(x, 32, 8, 2, rounding=rounding_mode()) for x in flat_in]
     for i, (out_val, exp_val) in enumerate(zip(flat_out, expected)):
         assert out_val == exp_val, f"HW Mismatch for {op_name} at element {i}: got {out_val} instead of {exp_val}"
 

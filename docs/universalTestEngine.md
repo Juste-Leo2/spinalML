@@ -117,13 +117,13 @@ Layer  5 [Linear    ] : shape 1x10         | first3=[128.000, 128.000, 128.000].
 | `LeakyReLU` | ✅ | ❌ | ❌ | **Supported** in FloatML. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | **Supported** (Line buffers + delay lines bit-exact). |
 | `MaxPool1D` | ✅ | ❌ | ❌ | **Supported** in FloatML. |
-| `AvgPool2D` / `AvgPool1D` | ❌ | ❌ | ❌ | *Hardware RTL ready; pending replica interpreter wiring.* |
+| `AvgPool2D` / `AvgPool1D` | ✅ | ✅ (`I8`, `I16`) | — | **Supported** (Replica wired via `PoolHandlers`/`LayerReplicas`; integer shift shares `RequantizeMath` with the rounding switch, float path is an exact exponent shift). |
 | `Cast` | ✅ (Float -> Float) | ✅ (Int -> Int) | ✅ (Int -> Float + scale) | **Supported** (Bridge between integer and float domains). |
 | `Flatten` | ✅ | ✅ | ✅ | **Supported** (Features-last). |
 | `BatchNorm1D` | ✅ | ❌ | ❌ | **Supported** in FloatML. |
 | `Add` (DAG) | ✅ | ✅ | ✅ | **Supported** (Skip connections). |
 | `Concat` (DAG) | ✅ | ✅ | ✅ | **Supported** (Multi-branch merge). |
-| `Sigmoid` / `Tanh` | ❌ | ❌ | ❌ | *Hardware RTL ready; pending replica interpreter wiring.* |
+| `Sigmoid` / `Tanh` | ✅ (FloatML) | ✅ (`I8`) | — | **Supported.** FloatML is exercised by `UniversalActivationsDemo` (FP8). The int-domain path (TFLite int8 conventions, Wave 5 step C) is wired in the replica but no demo covers it yet. |
 | `Softmax` | ⚠️ | ⚠️ | ⚠️ | *Hardware computes full LUT exp/sum; replica passes logits.* |
 | `ClassicalAttention` | ❌ | ❌ | ❌ | *Hardware RTL ready; pending replica interpreter wiring.* |
 
@@ -166,9 +166,8 @@ Compose models using validated layers (`Conv2D`, `Linear`, `ReLU`, `MaxPool2D`, 
 1. **Pure Integer Dense Layer (`Linear`)**:
    Currently, `Linear` expects a `FloatTensor` input. Pure integer MLP networks (without `Cast` to float) will be supported by implementing an integer accumulator path in `ModelReplica`.
 2. **Extended Layer Coverage in `ModelReplica`**:
-   - `AvgPool2D` and `AvgPool1D`.
-   - `Sigmoid` and `Tanh` non-linearities.
    - Attention blocks (`ClassicalAttention`, `MultiHeadAttention`).
+   - `AvgPool1D/2D` (Wave 5 step 3) and `Sigmoid`/`Tanh` (FloatML + quantized I8, Wave 5 step 5C) are now wired.
 3. **Softmax Output Verification**:
    `ModelReplica` currently treats `Softmax` as a pass-through to verify pre-softmax logits. An exact software LUT model matching `Softmax1D.scala` will enable bit-exact probability verification.
 4. **Input Packing for `I16` and `I32` Image Tensors**:

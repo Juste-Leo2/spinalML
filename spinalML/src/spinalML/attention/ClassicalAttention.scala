@@ -49,6 +49,12 @@ case class ClassicalAttentionHW[T <: Data, TW <: Data, TAcc <: Data](
   weightScales: Seq[Double] = Seq(1.0)
 ) extends Component {
   require(projLanes >= 1, "projLanes must be >= 1")
+  // OPS-07: the Q/K/V projections consume dense repacked streams (K = embedDim
+  // rows of exactly K elements, no padding). A partial K chunk would straddle
+  // column groups in the matmul B buffer and deadlock it, so the projection
+  // width must divide the depth. Fail fast here, not on silicon.
+  require(embedDim % projLanes == 0,
+    s"ClassicalAttention projLanes=$projLanes must divide embedDim=$embedDim (OPS-07 dense-stream contract)")
   require(numHeads >= 1, "numHeads must be >= 1")
   require(isPow2(numHeads), "numHeads must be a power of 2 (V1 head splitting)")
   require(embedDim % numHeads == 0, s"embedDim ($embedDim) must be divisible by numHeads ($numHeads)")

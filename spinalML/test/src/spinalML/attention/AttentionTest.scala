@@ -199,4 +199,13 @@ class MultiHeadAttentionTest extends AnyFunSuite {
     // embedDim = 4 -> four weight columns -> four scales
     spinal.core.SpinalVerilog(MultiHeadQuantTestComp(BF16(), I8(), 4, 4, 2, 4, 4, 4, Seq(0.5, -0.25, 1.5, 2.0)))
   }
+
+  test("OPS-07: projLanes must divide embedDim (dense projection streams)") {
+    // embedDim = 4, projLanes = 3: the Q/K/V projection matmuls consume dense
+    // repacked streams, so a partial K chunk would misalign every column group
+    // and deadlock the B buffer. Reject at elaboration, not on silicon.
+    assertThrows[IllegalArgumentException] {
+      spinal.core.SpinalVerilog(MultiHeadAttentionTestComp(I8(), I32(), 4, 4, 2, 4, 4, 3))
+    }
+  }
 }

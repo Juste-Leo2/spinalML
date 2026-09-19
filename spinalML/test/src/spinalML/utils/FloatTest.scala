@@ -58,4 +58,18 @@ class FloatTest extends AnyFunSuite {
       assert(dut.io.c.mantissa.toInt == 0, s"mantissa: got ${dut.io.c.mantissa.toInt}, expected 0")
     }
   }
+
+  test("doubleToFields saturates E4M3 overflow to 448, other formats to infinity") {
+    // E4M3 (fn, bias 7) has no infinity: max finite is 448 (exp 15, mant 6)
+    assert(Float.doubleToFields(1e10, 4, 3) == ((false, 15, 6)))
+    assert(Float.doubleToFields(-1e10, 4, 3) == ((true, 15, 6)))
+    assert(Float.doubleToFields(Double.PositiveInfinity, 4, 3) == ((false, 15, 6)))
+    // Finite field-15 values (256..448) are preserved, not saturated
+    assert(Float.doubleToFields(256.0, 4, 3) == ((false, 15, 0)))
+    assert(Float.doubleToFields(300.0, 4, 3) == ((false, 15, 1)))
+    assert(Float.doubleToFields(240.0, 4, 3) == ((false, 14, 7)))
+    // Formats with infinity keep the canonical (all-ones, 0) encoding
+    assert(Float.doubleToFields(1e40, 8, 7) == ((false, 255, 0)))
+    assert(Float.doubleToFields(1e10, 5, 2) == ((false, 31, 0)))
+  }
 }

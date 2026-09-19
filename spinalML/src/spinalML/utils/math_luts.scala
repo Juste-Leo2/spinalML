@@ -5,8 +5,19 @@ package spinalML.utils
 import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
+import spinalML.{RoundingConfig, RoundingMode}
 
 object MathLUTs {
+  /**
+   * Elaboration-time round-to-nearest-even (Wave 4 `SemanticsRounding`).
+   * Bit-exact counterpart of Python `round()` / numpy / torch (half-to-even),
+   * unlike `Math.round` (half-up). Intended for LUT/ROM constant generation
+   * (mantissa ROMs, `intEncodeFn`); call sites switch over in the Wave 4
+   * commits that own their re-baseline (one semantic per commit).
+   */
+  def roundRNE(x: Double): Long =
+    BigDecimal(x).setScale(0, BigDecimal.RoundingMode.HALF_EVEN).toLongExact
+
   def generateROM(bitWidth: Int, valFn: Int => Double, encodeFn: Double => BigInt, mathFn: Double => Double): Mem[Bits] = {
     val states = 1 << bitWidth
     val romContent = for (i <- 0 until states) yield {
@@ -18,8 +29,12 @@ object MathLUTs {
     Mem(Bits(bitWidth bits), initialContent = romContent)
   }
 
-  // Generates a ROM specifically for FloatML mantissa fraction processing (Algebraic Separation)
-  def generateFloatMantissaROM(inBits: Int, outBits: Int, mathFn: Double => Double): Mem[Bits] = {
+  // Generates a ROM specifically for FloatML mantissa fraction processing (Algebraic Separation).
+  // Option B (switch-aware): under [[Rne]] the output quantizes half-even
+  // via [[roundRNE]]; [[Truncate]] keeps the legacy `Math.round` (half-up)
+  // bit-exact. Elaboration-only switch.
+  def generateFloatMantissaROM(inBits: Int, outBits: Int, mathFn: Double => Double,
+                               rounding: RoundingMode = RoundingConfig.current): Mem[Bits] = {
     val states = 1 << inBits
     val romContent = for (i <- 0 until states) yield {
       val mantFraction = i.toDouble / states
@@ -27,24 +42,44 @@ object MathLUTs {
       val y = mathFn(realMant) // y should ideally be within [1.0, 2.0)
       val frac = y - 1.0
       val outStates = 1 << outBits
-      val encoded = Math.round(frac * outStates).toInt
+      val encoded = (if (rounding == RoundingMode.Rne) roundRNE(frac * outStates)
+                     else Math.round(frac * outStates)).toInt
       B(if (encoded >= outStates) outStates - 1 else encoded, outBits bits)
     }
     Mem(Bits(outBits bits), initialContent = romContent)
   }
 
-  // Integer codecs (2's complement)
+  // Integer codecs (2's complement). Same Option B switch on the rounding
+  // of the clamped value (half-even vs legacy half-up).
   def intValFn(bitWidth: Int): Int => Double = i => {
     val maxVal = 1 << bitWidth
     val halfVal = 1 << (bitWidth - 1)
     if (i >= halfVal) (i - maxVal).toDouble else i.toDouble
   }
-  
-  def intEncodeFn(bitWidth: Int): Double => BigInt = y => {
+
+  /** Unsigned code -> real (identity): the code IS the value. */
+  def uintValFn(bitWidth: Int): Int => Double = i => i.toDouble
+
+  /** Real -> unsigned code with the switch-aware rounding, saturating to [0, 2^w-1]. */
+  def uintEncodeFn(bitWidth: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
+    val maxVal = (1 << bitWidth) - 1
+    val clampedD = Math.max(0.0, Math.min(maxVal.toDouble, y))
+    val rounded: Long = if (rounding == RoundingMode.Rne) roundRNE(clampedD) else Math.round(clampedD)
+    BigInt(rounded)
+  }
+
+  def intEncodeFn(bitWidth: Int,
+                  rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
     val maxVal = (1 << (bitWidth - 1)) - 1
     val minVal = -(1 << (bitWidth - 1))
-    val clamped = Math.max(minVal.toDouble, Math.min(maxVal.toDouble, Math.round(y)))
-    val intVal = clamped.toInt
+    // Clamp FIRST in the Double domain: segment slopes/intercepts (e.g. exp
+    // on I16) can exceed Long range, and roundRNE.toLongExact throws on
+    // overflow while Math.round saturates. Clamp-then-round is exactly
+    // equivalent (out-of-range values saturate either way).
+    val clampedD = Math.max(minVal.toDouble, Math.min(maxVal.toDouble, y))
+    val rounded: Long = if (rounding == RoundingMode.Rne) roundRNE(clampedD) else Math.round(clampedD)
+    val intVal = rounded.toInt
     if (intVal < 0) BigInt(intVal + (1 << bitWidth)) else BigInt(intVal)
   }
 
@@ -64,12 +99,14 @@ object MathLUTs {
     }
   }
   
-  def floatEncodeFn(expBits: Int, mantBits: Int): Double => BigInt = y => {
+  def floatEncodeFn(expBits: Int, mantBits: Int,
+                    rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
     if (y.isNaN) BigInt(0)
     else if (y.isInfinity) {
-      // Canonical IEEE-like infinity: exponent all ones, mantissa zero
+      // No infinity in E4M3: saturate to max finite (448, sign-preserved).
+      val (satExp, satMant) = Float.satEncoding(expBits, mantBits)
       val sign = if (y < 0) 1 else 0
-      BigInt((sign << (expBits + mantBits)) | (((1 << expBits) - 1) << mantBits))
+      BigInt((sign << (expBits + mantBits)) | (satExp << mantBits) | satMant)
     }
     else if (y == 0.0) BigInt(0)
     else {
@@ -81,16 +118,27 @@ object MathLUTs {
       var mant = (absY / Math.pow(2.0, exp)) - 1.0
       
       var expEnc = exp + bias
-      var mantEnc = Math.round(mant * (1 << mantBits)).toInt
+      // Option B switch: half-even (RNE) vs legacy half-up; the rounding-
+      // overflow carry below is kept in both modes (ties can round up).
+      var mantEnc = (if (rounding == RoundingMode.Rne) roundRNE(mant * (1 << mantBits))
+                     else Math.round(mant * (1 << mantBits))).toInt
       
       if (mantEnc == (1 << mantBits)) { // Rounding overflow
          mantEnc = 0
          expEnc += 1
       }
-      
-      if (expEnc >= (1 << expBits)) { // Overflow (Saturate to canonical infinity)
-        expEnc = (1 << expBits) - 1
-        mantEnc = 0
+
+      // E4M3 keeps finite field-15 values (256..448); only past-the-max or
+      // the NaN slot (mantissa 7 at field 15) saturates to 448.
+      val expMax = (1 << expBits) - 1
+      val needsSat = if (Float.isE4M3(expBits, mantBits))
+        expEnc > expMax || (expEnc == expMax && mantEnc == (1 << mantBits) - 1)
+      else
+        expEnc >= expMax
+      if (needsSat) { // Overflow (saturate: 448 for E4M3, canonical infinity otherwise)
+        val (satExp, satMant) = Float.satEncoding(expBits, mantBits)
+        expEnc = satExp
+        mantEnc = satMant
       } else if (expEnc <= 0) { // Underflow
         expEnc = 0
         mantEnc = 0

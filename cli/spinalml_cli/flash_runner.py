@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -55,15 +56,30 @@ def run_flash(
             return 1
     else:
         bitstream_name = board_cfg.get("build", {}).get("bitstream_name", "top.fs")
-        default_path = project_root / "hw_build" / board_slug / bitstream_name
-        if default_path.exists():
-            target_bitstream = default_path
+        hw_build_root = project_root / "hw_build"
+        candidates = []
+        if hw_build_root.exists():
+            candidates = sorted(
+                (p for p in hw_build_root.rglob(bitstream_name) if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if candidates:
+            target_bitstream = candidates[0]
+            if len(candidates) > 1:
+                console.print("[yellow]Multiple bitstreams found, using the most recent:[/yellow]")
+                for cand in candidates[:5]:
+                    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(cand.stat().st_mtime))
+                    marker = "->" if cand == target_bitstream else "  "
+                    console.print(f"  {marker} {cand.relative_to(project_root)} ({stamp})")
+                console.print("[yellow]Hint: pass an explicit path to flash another variant.[/yellow]")
         else:
             # Check legacy build/ directory
             legacy_path = project_root / "build" / board_slug / bitstream_name
             if legacy_path.exists():
                 target_bitstream = legacy_path
             else:
+                default_path = project_root / "hw_build" / board_slug / bitstream_name
                 console.print(f"[bold red]Error: No bitstream found at {default_path}[/bold red]")
                 console.print(f"[yellow]Please run 'spinalml build --board {board}' first to generate the bitstream.[/yellow]")
                 return 1
@@ -78,6 +94,7 @@ def run_flash(
 
     size_kib = target_bitstream.stat().st_size / 1024.0
     rel_bitstream = target_bitstream.relative_to(project_root) if target_bitstream.is_relative_to(project_root) else target_bitstream
+    sha = hashlib.sha256(target_bitstream.read_bytes()).hexdigest()
 
     # Display programmer panel
     info_text = Text()
@@ -89,8 +106,12 @@ def run_flash(
     info_text.append(f"{target_mode_desc}\n", style="magenta")
     info_text.append("File       : ", style="bold")
     info_text.append(f"{rel_bitstream} ({size_kib:.1f} KiB)\n", style="green")
+    info_text.append("SHA-256    : ", style="bold")
+    info_text.append(f"{sha[:16]}...\n", style="green")
 
     console.print(Panel(info_text, title="[bold cyan]spinalML Device Programmer[/bold cyan]", border_style="cyan"))
+    if flash_mem:
+        console.print("[yellow]Note: SPI flash is only booted after a power cycle; the FPGA keeps running the previous SRAM image until then.[/yellow]")
 
     prog_bin = get_bin_path(prog_tool)
     cmd = [str(prog_bin), "-b", board_target, mode_flag, str(target_bitstream)]

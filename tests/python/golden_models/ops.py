@@ -2,7 +2,7 @@
 
 import math
 import numpy as np
-from golden_models.dtypes import FloatML
+from golden_models.dtypes import FloatML, resolve_rounding
 
 def floatml_mul(a: float, b: float, dtype: FloatML) -> float:
     """Golden model for FloatML hardware multiplication (matches HW truncation)."""
@@ -238,15 +238,20 @@ def log_b(x: float, base: float = math.e) -> float:
         return 0.0
     return math.log(x) / math.log(base)
 
-def pwl_log_int(x_val: float, bit_width: int, base: float = math.e, index_bits: int = 8) -> int:
+def pwl_log_int(x_val: float, bit_width: int, base: float = math.e, index_bits: int = 8, rounding=None) -> int:
     def log_fn(x):
         return 0.0 if x <= 0 else math.log(x) / math.log(base)
-    return pwl_int(x_val, bit_width, log_fn, index_bits)
+    return pwl_int(x_val, bit_width, log_fn, index_bits, rounding)
 
-def pwl_log_float(x_val: float, dtype, base: float = math.e, index_bits: int = 8) -> int:
+def pwl_log_float(x_val: float, dtype, base: float = math.e, index_bits: int = 8, rounding=None) -> int:
     """Golden model replicating exactly the LogOp algebraic separation branch for FloatML > 8 bits:
-    log_b(x) = log2(x) * ln(2)/ln(b), with Q8.8 fixed point, Q0.16 constant and LZD re-quantization."""
-    x_bits = dtype.from_float(x_val)
+    log_b(x) = log2(x) * ln(2)/ln(b), with Q8.8 fixed point, Q0.16 constant and LZD re-quantization.
+
+    Option B: the Q0.16 constant and the Q8.8 ROM entries quantize half-even
+    (Python round, like the RTL roundRNE) under RNE, legacy half-up under
+    trunc. None follows SPINALML_ROUNDING."""
+    rounding = resolve_rounding(rounding)
+    x_bits = dtype.from_float(x_val, rounding)
     exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
     mant = x_bits & ((1 << dtype.mant_bits) - 1)
     sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
@@ -254,10 +259,16 @@ def pwl_log_float(x_val: float, dtype, base: float = math.e, index_bits: int = 8
     if exp == 0 or sign:
         return 0
 
-    log2ToBase = round(math.log(2.0) / math.log(base) * 65536.0)
+    if rounding != "trunc":
+        log2ToBase = round(math.log(2.0) / math.log(base) * 65536.0)
+    else:
+        log2ToBase = math.floor(math.log(2.0) / math.log(base) * 65536.0 + 0.5)
 
     expTrueSInt = exp - dtype.bias
-    frac = round(math.log(1.0 + mant / (1 << dtype.mant_bits)) / math.log(2.0) * 256.0)
+    if rounding != "trunc":
+        frac = round(math.log(1.0 + mant / (1 << dtype.mant_bits)) / math.log(2.0) * 256.0)
+    else:
+        frac = math.floor(math.log(1.0 + mant / (1 << dtype.mant_bits)) / math.log(2.0) * 256.0 + 0.5)
     log2Fixed = (expTrueSInt << 8) | frac
 
     yFixedFull = log2Fixed * log2ToBase
@@ -313,11 +324,16 @@ def softmax(x: np.ndarray, dtype: FloatML = None) -> np.ndarray:
     return final
 
 import math
-def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8) -> int:
-    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les entiers, pour n'importe quelle fonction."""
+def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8, rounding=None) -> int:
+    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les entiers, pour n'importe quelle fonction.
+
+    Option B: les coefficients encodés (intEncodeFn miroir) arrondissent
+    half-even sous RNE, legacy half-up sous trunc. None suit
+    SPINALML_ROUNDING."""
+    rounding = resolve_rounding(rounding)
     # The input bits exactly as injected by Cocotb
     from golden_models.dtypes import SIntML
-    x_int = SIntML(bit_width).from_float(x_val)
+    x_int = SIntML(bit_width).from_float(x_val, rounding)
     # Si x_int représente un nombre négatif en complément à 2, x_int > 0 dans sa version binaire non-signée
     # Mais le segment index a besoin des bits bruts
     x_bits = x_int
@@ -356,7 +372,8 @@ def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8) -> int:
     def intEncodeFn(y):
         minVal = -(1 << (bit_width - 1))
         maxVal = (1 << (bit_width - 1)) - 1
-        return int(max(float(minVal), min(float(maxVal), math.floor(y + 0.5))))
+        q = round(y) if rounding != "trunc" else math.floor(y + 0.5)
+        return int(max(float(minVal), min(float(maxVal), q)))
         
     a_enc = intEncodeFn(a)
     b_enc = intEncodeFn(b)
@@ -370,26 +387,31 @@ def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8) -> int:
     res = res & ((1 << bit_width) - 1)
     return res
 
-def pwl_rsqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+def pwl_rsqrt_int(x_val: float, bit_width: int, index_bits: int = 8, rounding=None) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-9)
-    return pwl_int(x_val, bit_width, rsqrt_fn, index_bits)
+        return 0.0 if x < 0 else 1.0 / np.sqrt(x + 1e-9)
+    return pwl_int(x_val, bit_width, rsqrt_fn, index_bits, rounding)
 
-def pwl_sqrt_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+def pwl_sqrt_int(x_val: float, bit_width: int, index_bits: int = 8, rounding=None) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def sqrt_fn(x):
-        return np.sqrt(abs(x))
-    return pwl_int(x_val, bit_width, sqrt_fn, index_bits)
+        return 0.0 if x < 0 else np.sqrt(x)
+    return pwl_int(x_val, bit_width, sqrt_fn, index_bits, rounding)
 
-def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+def pwl_exp_int(x_val: float, bit_width: int, index_bits: int = 8, rounding=None) -> int:
     def exp_fn(x):
         return math.exp(x)
-    return pwl_int(x_val, bit_width, exp_fn, index_bits)
+    return pwl_int(x_val, bit_width, exp_fn, index_bits, rounding)
 
-def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8) -> int:
+def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8, rounding=None) -> int:
     """Golden of the SInt PWL reciprocal: piecewise-CONSTANT per segment
     (sampled at the first abscissa with |x| >= 1). Mirrors
     PWLLUTs.createConstantSegmentFn; the old linear fit saturated its int
-    coefficients on steep 1/x slopes (recip(1) evaluated to -1)."""
+    coefficients on steep 1/x slopes (recip(1) evaluated to -1).
+
+    Option B: the encoded sample follows `rounding` like intEncodeFn."""
+    rounding = resolve_rounding(rounding)
     from golden_models.dtypes import SIntML
 
     def signed(raw):
@@ -400,10 +422,11 @@ def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8) -> int
     def encode(y):
         min_v = -(1 << (bit_width - 1))
         max_v = (1 << (bit_width - 1)) - 1
-        v = int(max(float(min_v), min(float(max_v), math.floor(y + 0.5))))
+        q = round(y) if rounding != "trunc" else math.floor(y + 0.5)
+        v = int(max(float(min_v), min(float(max_v), q)))
         return v & ((1 << bit_width) - 1)
 
-    x_int = SIntML(bit_width).from_float(x_val)
+    x_int = SIntML(bit_width).from_float(x_val, rounding)
     shift = bit_width - index_bits
     segment = (x_int >> shift) & ((1 << index_bits) - 1)
 
@@ -416,11 +439,16 @@ def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8) -> int
         y = 0.0
     return encode(y)
 
-def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8) -> int:
-    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les flottants."""
+def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8, rounding=None) -> int:
+    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les flottants.
+
+    Option B: les coefficients (a_bits/b_bits via from_float, miroir de
+    floatEncodeFn dans generateROMs) suivent `rounding`. None suit
+    SPINALML_ROUNDING."""
+    rounding = resolve_rounding(rounding)
     bit_width = dtype.exp_bits + dtype.mant_bits + 1
-    
-    x_bits = dtype.from_float(x_val)
+
+    x_bits = dtype.from_float(x_val, rounding)
     shift = bit_width - index_bits
     segment_index = (x_bits >> shift) & ((1 << index_bits) - 1)
     
@@ -445,9 +473,9 @@ def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8) -> int:
     
     if math.isnan(a) or math.isinf(a): a = 0.0
     if math.isnan(b) or math.isinf(b): b = ys if not math.isinf(ys) else 0.0
-    
-    a_bits = dtype.from_float(a)
-    b_bits = dtype.from_float(b)
+
+    a_bits = dtype.from_float(a, rounding)
+    b_bits = dtype.from_float(b, rounding)
     
     a_hw = dtype.to_float(a_bits)
     b_hw = dtype.to_float(b_bits)
@@ -510,8 +538,12 @@ def floatml_algebraic_pack(dtype, sign, new_exp, mant_val):
         out_mant = mant_val
     return (sign << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
 
-def pwl_exp_float(x_val: float, dtype, index_bits: int = 8) -> int:
-    x_bits = dtype.from_float(x_val)
+def pwl_exp_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
+    """Algebraic-path golden (mantissa ROM). Option B: the ROM entry
+    quantizes half-even under RNE (like generateFloatMantissaROM), legacy
+    half-up under trunc. None follows SPINALML_ROUNDING."""
+    rounding = resolve_rounding(rounding)
+    x_bits = dtype.from_float(x_val, rounding)
     exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
     mant = x_bits & ((1 << dtype.mant_bits) - 1)
     sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
@@ -546,24 +578,31 @@ def pwl_exp_float(x_val: float, dtype, index_bits: int = 8) -> int:
     numEntries = 256
     frac = F / numEntries
     mantFloat = math.pow(2.0, frac)
-    newM = round((mantFloat - 1.0) * (1 << dtype.mant_bits))
+    if rounding != "trunc":
+        newM = round((mantFloat - 1.0) * (1 << dtype.mant_bits))
+    else:
+        newM = math.floor((mantFloat - 1.0) * (1 << dtype.mant_bits) + 0.5)
     readMant = max(0, min(newM, (1 << dtype.mant_bits) - 1))
     
     newExpSInt = I + dtype.bias
     return floatml_algebraic_pack(dtype, 0, newExpSInt, readMant)
 
-def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
+def pwl_rsqrt_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def rsqrt_fn(x):
-        return 1.0 / np.sqrt(abs(x) + 1e-9)
-    return pwl_float(x_val, dtype, rsqrt_fn, index_bits)
+        return 0.0 if x < 0 else 1.0 / np.sqrt(x + 1e-9)
+    return pwl_float(x_val, dtype, rsqrt_fn, index_bits, rounding)
 
-def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8) -> int:
+def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
+    # OPS-02: negative inputs saturate to +0 (mirrors the RTL ROM content).
     def sqrt_fn(x):
-        return np.sqrt(abs(x))
-    return pwl_float(x_val, dtype, sqrt_fn, index_bits)
+        return 0.0 if x < 0 else np.sqrt(x)
+    return pwl_float(x_val, dtype, sqrt_fn, index_bits, rounding)
 
-def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
-    x_bits = dtype.from_float(x_val)
+def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
+    """Algebraic-path golden (mantissa ROM). Option B: like pwl_exp_float."""
+    rounding = resolve_rounding(rounding)
+    x_bits = dtype.from_float(x_val, rounding)
     exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
     mant = x_bits & ((1 << dtype.mant_bits) - 1)
     sign = (x_bits >> (dtype.exp_bits + dtype.mant_bits)) & 1
@@ -577,7 +616,10 @@ def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8) -> int:
     else:
         floatM = 1.0 + mant / numEntries
         recipM = 2.0 / floatM
-        newM = round((recipM - 1.0) * numEntries)
+        if rounding != "trunc":
+            newM = round((recipM - 1.0) * numEntries)
+        else:
+            newM = math.floor((recipM - 1.0) * numEntries + 0.5)
         readMant = max(0, min(newM, numEntries - 1))
         
     shift = 0 if mant == 0 else 1
@@ -630,6 +672,25 @@ def sigmoid_hw(x: float, dtype) -> int:
         v_add = min(maxV, v_exp + 1)
         # 4. Reciprocal
         return pwl_reciprocal_int(v_add, bit_width)
+
+def sigmoid_q_hw(q, dtype, input_scale=1.0, input_zp=0, rounding=None):
+    """Golden of the quantized (TFLite-convention) logistic: out scale 1/256,
+    int8 zp -128. `q` is the raw input code, x = (q - input_zp) * input_scale.
+    Rounding follows the switch (None = SPINALML_ROUNDING, default RNE)."""
+    import math
+    code = int(q)
+    val = 1.0 / (1.0 + math.exp(-((code - input_zp) * input_scale)))
+    return dtype.from_float(val * 256.0 - 128.0, rounding)
+
+
+def tanh_q_hw(q, dtype, input_scale=1.0, input_zp=0, rounding=None):
+    """Golden of the quantized (TFLite-convention) tanh: out scale 1/128,
+    int8 zp 0. `q` is the raw input code, x = (q - input_zp) * input_scale."""
+    import math
+    code = int(q)
+    val = math.tanh((code - input_zp) * input_scale)
+    return dtype.from_float(val * 128.0, rounding)
+
 
 def tanh_hw(x: float, dtype) -> int:
     """Golden model replicating exactly the TanhOp composition: x*2 -> sigmoid -> 2*sig - 1."""
@@ -904,7 +965,14 @@ def adder_tree_hw(vals, dtype):
         current = next_sums
     return current[0]
 
-def batchnorm_hw(X, gamma, beta, dtype):
+def batchnorm_hw(X, gamma, beta, dtype, shift=0, rounding=None):
+    """Golden model of BatchNorm1D.
+
+    Integer path (LAY-05): exact MAC in a 2N+1-bit accumulator, then the shared
+    RequantizeOp semantics (shift + RNE/trunc + saturation). Legacy behavior was
+    a 2's-complement wrap; the saturation is now unconditional (rounding mode
+    only affects the shift). Float path unchanged.
+    """
     is_float = hasattr(dtype, 'exp_bits')
     Y = []
     for row in X:
@@ -920,9 +988,9 @@ def batchnorm_hw(X, gamma, beta, dtype):
                 vx = sign_extend(dtype.from_float(row[i]), dtype.bit_width)
                 vg = sign_extend(dtype.from_float(gamma[i][0]), dtype.bit_width)
                 vb = sign_extend(dtype.from_float(beta[i][0]), dtype.bit_width)
-                res = (vx * vg) + vb
-                out_bits = res & ((1 << dtype.bit_width) - 1)
-                y_row.append(dtype.to_float(out_bits))
+                sat = requantize_hw((vx * vg) + vb, dtype.bit_width * 2 + 1,
+                                    dtype.bit_width, shift, rounding)
+                y_row.append(dtype.to_float(sat & ((1 << dtype.bit_width) - 1)))
         Y.append(y_row)
     return Y
 
@@ -987,17 +1055,18 @@ def layernorm_hw(X, gamma, beta, dtype):
         sq_diffs = [mul(d, d) for d in diffs]
         sum_sq = adder_tree_hw(sq_diffs, dtype)
         var = div_n(sum_sq, channels)
-        
-        # Rsqrt
+
+        # Rsqrt. LAY-04 epsilon: encoded 1e-5 when representable, else the
+        # smallest positive normal (E4M3 2^-6, E2M1 1.0) — mirrors the RTL
+        # constant; without it a zero/underflowed variance hits rsqrt(0).
         if is_float:
-            # For FloatML we should use floatml_algebraic_pack and floatml_rsqrt if available.
-            # But ops.py uses pwl_int for integers and Alg+LUT for FloatML.
-            # Wait, in rsqrt.scala, FloatML uses Alg+LUT. For exact bit-match, we can use exact float math if not implemented fully, but wait!
-            # The test will fail if it's not exact.
-            # Let's use the Python approximation. Actually, wait! The user has FloatML Rsqrt which does 2^(exp_sint) * LUT.
-            pass
-        # I will leave rsqrt as a fallback to rsqrt(x, dtype) for now and see if it fails.
-        inv_std = rsqrt(var, dtype) if is_float else dtype.to_float(pwl_int(var, dtype.bit_width, lambda x: 1.0/np.sqrt(x) if x>0 else 0))
+            eps_bits = dtype.from_float(1e-5)
+            if eps_bits == 0:
+                eps_bits = 1 << dtype.mant_bits
+            var_eps = floatml_add(var, dtype.to_float(eps_bits), dtype)
+            inv_std = rsqrt(var_eps, dtype)
+        else:
+            inv_std = dtype.to_float(pwl_int(var, dtype.bit_width, lambda x: 1.0/np.sqrt(x) if x>0 else 0))
         
         # Final Norm
         for i in range(channels):
@@ -1010,17 +1079,45 @@ def layernorm_hw(X, gamma, beta, dtype):
     return Y
 
 
-def requantize_hw(x, in_bits, out_bits, shift):
-    """Golden model of RequantizeOp: arithmetic shift right then saturation clamp."""
-    shifted = x >> shift
+def requantize_hw(x, in_bits, out_bits, shift, rounding=None):
+    """Golden model of RequantizeOp: shift (RNE by default, trunc legacy) then saturation clamp.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    RNE on an arithmetic shift: guard = dropped bit shift-1, sticky = OR of the
+    lower dropped bits, round-up on tie goes to even. Bit-exact with RequantizeOp.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    if rounding != "trunc" and shift > 0:
+        import math
+        truncated = math.floor(x / (1 << shift))
+        rem = x - truncated * (1 << shift)
+        half = 1 << (shift - 1)
+        if rem > half or (rem == half and (truncated & 1) != 0):
+            truncated += 1
+        shifted = truncated
+    else:
+        # Legacy path: arithmetic shift right (floor for negatives in Python)
+        import math as _math
+        shifted = _math.floor(x / (1 << shift)) if shift > 0 else x
     max_val = (1 << (out_bits - 1)) - 1
     min_val = -(1 << (out_bits - 1))
     return max(min_val, min(max_val, shifted))
 
 
-def cast_hw(x, in_bits, out_dtype):
+def cast_hw(x, in_bits, out_dtype, rounding=None):
     """Golden model of CastOp (SInt -> FloatML), bit-exact with Float.fromSInt.
-    Replicates the LZD normalization and truncated mantissa rounding."""
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    RNE rounds the dropped mantissa bits (guard + sticky, tie-to-even) with
+    carry into the exponent; 'trunc' keeps the legacy truncated window.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
     exp_bits = out_dtype.exp_bits
     mant_bits = out_dtype.mant_bits
     bias = (1 << (exp_bits - 1)) - 1
@@ -1037,14 +1134,137 @@ def cast_hw(x, in_bits, out_dtype):
     width = max(in_bits, mant_bits + 1)
     aligned = absv << (lz + (width - in_bits))  # MSB (leading 1) now at bit width-1
 
+    drop = width - 1 - mant_bits               # bits below the mantissa window
+    mant_out = (aligned >> drop) & ((1 << mant_bits) - 1)
+    if rounding != "trunc" and drop > 0:
+        guard = (aligned >> (drop - 1)) & 1
+        sticky = (aligned & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if guard and (sticky or (mant_out & 1)):
+            mant_out += 1
+            if mant_out >= (1 << mant_bits):
+                mant_out = 0
+                exp_val += 1
+
     if exp_val >= ((1 << exp_bits) - 1):
         exp_out = (1 << exp_bits) - 1
         mant_out = 0
     else:
         exp_out = exp_val
-        mant_out = (aligned >> (width - 1 - mant_bits)) & ((1 << mant_bits) - 1)
 
     return (sign << (exp_bits + mant_bits)) | (exp_out << mant_bits) | mant_out
+
+
+def _is_e4m3(exp_bits, mant_bits):
+    return exp_bits == 4 and mant_bits == 3
+
+
+def cast_float_to_float_hw(bits_in, in_dtype, out_dtype, rounding=None):
+    """Golden model of CastOp (FloatML -> FloatML), bit-exact with Float.roundTo.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    Same-format is a passthrough; narrowing rounds the dropped mantissa bits
+    (guard + sticky, tie-to-even, carry into exponent); widening is exact.
+    Overflow saturates (448 for E4M3, inf-encoding otherwise), underflow -> +0.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    ie, im = in_dtype.exp_bits, in_dtype.mant_bits
+    oe, om = out_dtype.exp_bits, out_dtype.mant_bits
+    in_bias = (1 << (ie - 1)) - 1
+    out_bias = (1 << (oe - 1)) - 1
+
+    sign = (bits_in >> (ie + im)) & 1
+    exp = (bits_in >> im) & ((1 << ie) - 1)
+    mant = bits_in & ((1 << im) - 1)
+
+    if exp == 0 and mant == 0:
+        return 0
+
+    if im > om:
+        drop = im - om
+        mant_ext = (1 << im) | mant
+        kept = (mant_ext >> drop) & ((1 << (om + 1)) - 1)
+        guard = (mant_ext >> (drop - 1)) & 1
+        sticky = (mant_ext & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if rounding != "trunc" and guard and (sticky or (kept & 1)):
+            kept += 1
+        if kept >= (1 << (om + 1)):
+            mant_ov, mant_out = 1, 0
+        else:
+            mant_ov, mant_out = 0, kept & ((1 << om) - 1)
+        exp_s = exp + (out_bias - in_bias) + mant_ov
+    else:
+        mant_out = (mant << (om - im)) & ((1 << om) - 1) if om > 0 else 0
+        exp_s = exp + (out_bias - in_bias)
+
+    exp_max = (1 << oe) - 1
+    if _is_e4m3(oe, om):
+        sat = exp_s > exp_max or (exp_s == exp_max and mant_out == (1 << om) - 1)
+        sat_exp, sat_mant = 15, 6
+    else:
+        sat = exp_s >= exp_max
+        sat_exp, sat_mant = exp_max, 0
+    if sat:
+        return (sign << (oe + om)) | (sat_exp << om) | sat_mant
+    if exp_s <= 0:
+        return 0
+    return (sign << (oe + om)) | (exp_s << om) | mant_out
+
+
+def cast_float_to_sint_hw(bits_in, in_dtype, out_bits, rounding=None):
+    """Golden model of CastOp (FloatML -> SInt), bit-exact with Float.toSInt.
+
+    rounding: 'rne' | 'trunc' | None (None = SPINALML_ROUNDING env, default 'rne').
+    Round-then-saturate into the two's-complement range; exponent-zero flushes
+    to +0; the exact -2^(W-1) is preserved. Returns unsigned bit pattern.
+    """
+    import os
+    if rounding is None:
+        raw = os.environ.get("SPINALML_ROUNDING", "")
+        rounding = "trunc" if raw.strip().lower() in ("trunc", "truncate", "floor") else "rne"
+    ie, im = in_dtype.exp_bits, in_dtype.mant_bits
+    bias = (1 << (ie - 1)) - 1
+
+    sign = (bits_in >> (ie + im)) & 1
+    exp = (bits_in >> im) & ((1 << ie) - 1)
+    mant = bits_in & ((1 << im) - 1)
+
+    if exp == 0:
+        return 0
+
+    e = exp - bias
+    full = (1 << im) | mant
+    shift = e - im
+    rounded_up = False
+    if shift >= 0:
+        mag = full << shift
+    else:
+        drop = min(-shift, im + 1)
+        # When the binary point lies further left than the clamp (-shift > im+1,
+        # i.e. |value| < 0.5), the clamped guard is the hidden bit, not the true
+        # guard: RNE of |value| < 0.5 is zero, so the increment must be gated.
+        tiny = -shift > im + 1
+        kept = full >> drop
+        guard = (full >> (drop - 1)) & 1 if drop >= 1 else 0
+        sticky = (full & ((1 << (drop - 1)) - 1)) != 0 if drop > 1 else False
+        if rounding != "trunc" and not tiny and guard and (sticky or (kept & 1)):
+            kept += 1
+            rounded_up = True
+        mag = kept
+
+    max_pos = (1 << (out_bits - 1)) - 1
+    max_neg = 1 << (out_bits - 1)
+    pos_sat = e >= out_bits - 1 or mag > max_pos
+    neg_sat = e > out_bits - 1 or \
+        (e == out_bits - 1 and not (mant == 0 and not rounded_up)) or \
+        mag > max_neg
+    if sign:
+        v = -max_neg if neg_sat else -mag
+    else:
+        v = max_pos if pos_sat else mag
+    return v & ((1 << out_bits) - 1)
 
 
 def bias_add_hw(a_elements, bias, dtype):
@@ -1210,10 +1430,11 @@ def maxpool2d_hw(X, K, stride, dtype):
         Y.append(row)
     return Y
 
-def avgpool2d_hw(X, K, stride, dtype):
+def avgpool2d_hw(X, K, stride, dtype, rounding=None):
     """Golden model of AvgPool2DOp. Input [H, W] or [H, W, C]; output [H_out, W_out(, C)].
     Floats: pairwise adder-tree (floatml_add) then exact exponent shift by log2(K*K).
-    Integers: exact sum then arithmetic right shift (floor division)."""
+    Integers: exact sum then the shared RequantizeMath datapath (shift with the
+    rounding switch, RNE default / trunc legacy, then saturation)."""
     import math
     H = len(X)
     W_in = len(X[0])
@@ -1239,7 +1460,7 @@ def avgpool2d_hw(X, K, stride, dtype):
                     val = _floatml_exp_shift(acc_val, shift, dtype)
                 else:
                     acc = sum(int(w) for w in window)
-                    val = acc >> shift
+                    val = requantize_hw(acc, dtype.bit_width, dtype.bit_width, shift, rounding)
                 bits = dtype.from_float(val)
                 pix.append(dtype.to_float(bits))
             row.append(pix if is_3d else pix[0])

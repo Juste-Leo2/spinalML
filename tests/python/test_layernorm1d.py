@@ -74,8 +74,11 @@ async def run_layernorm1d_test(dut, op_name, dtype_name, dtype, X, gamma, beta, 
             exp_bits = dtype.from_float(exp_val)
             out_bits = Y_out_bits[m][n]
             out_val = Y_out[m][n]
-            # The hardware uses an eps addition before Rsqrt, which might slightly diverge from layernorm_hw
-            # The exact error checking is skipped here, but the average error is printed in the logs via log_true_math_error.
+            # layernorm_hw models the RTL epsilon (encoded 1e-5, or the smallest
+            # positive normal when it underflows). The exact per-element check is
+            # still skipped here because the golden rsqrt is an approximation of
+            # the RTL LUT/Alg path; the average error is logged via
+            # log_true_math_error.
             pass
 
 def prepare_ln_data(channels, seqLen, max_val, is_integer):

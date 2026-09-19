@@ -431,6 +431,12 @@ case class Sequential(
 
       layerWeights = Tensor(wType, wShape, requiredLanes)
       layerWeights.stream << wStreamer.io.streamOut
+      // OPS-07: this weight stream is dense (exactly `elements` values, no
+      // padding beats). It satisfies the MatMulOp per-line padded-group
+      // contract iff the beat framing divides K: Linear enforces lanes | K
+      // (`LayerSpec` require on weightLanes), so dense beats == column groups
+      // and no padding is needed. Any future producer with K % lanes != 0
+      // must zero-pad each line BEFORE this point, or the B buffer starves.
       auditWeightLanes += requiredLanes
       auditWeightElements += elements
       auditWeightBeats += beats
@@ -560,7 +566,9 @@ case class Sequential(
       case bn: BatchNorm1D =>
         val targetLanes = if (bn.lanes > 0) bn.lanes else bn.features
         val inRepacked = if (inTensor.lanes != bn.features) repack(inTensor, bn.features) else inTensor
-        val bnOut = batchnorm(inRepacked, layerWeights, layerBias, reArm = Option(weightDmaFire))
+        val bnOut = batchnorm(inRepacked, layerWeights, layerBias,
+          reArm = Option(weightDmaFire), shift = bn.shift,
+          rounding = bn.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (bnOut.lanes != targetLanes) repack(bnOut, targetLanes) else bnOut
 
       case ln: LayerNorm1D =>
@@ -586,7 +594,8 @@ case class Sequential(
         val c = if (nodeShapes(i).length > 1) nodeShapes(i)(1) else 1
         val targetLanes = if (ap.lanes > 0) ap.lanes else c
         val repacked = if (inTensor.lanes != c) repack(inTensor, c) else inTensor
-        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride)
+        val pooled = avgpool1d(repacked, ap.poolSize, ap.stride,
+          rounding = ap.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (pooled.lanes != targetLanes) repack(pooled, targetLanes) else pooled
 
       case mp2: MaxPool2D =>
@@ -594,18 +603,22 @@ case class Sequential(
         if (pooled.lanes != mp2.lanes) repack(pooled, mp2.lanes) else pooled
 
       case ap2: AvgPool2D =>
-        val pooled = avgpool2d(inTensor, ap2.poolSize, ap2.stride)
+        val pooled = avgpool2d(inTensor, ap2.poolSize, ap2.stride,
+          rounding = ap2.rounding.getOrElse(spinalML.RoundingConfig.current))
         if (pooled.lanes != ap2.lanes) repack(pooled, ap2.lanes) else pooled
 
-      case _: Sigmoid =>
-        sigmoid(inTensor)
+      case sm: Sigmoid =>
+        sigmoid(inTensor, sm.inputScale, sm.inputZeroPoint,
+          rounding = sm.rounding.getOrElse(spinalML.RoundingConfig.current))
 
-      case _: Tanh =>
-        tanh(inTensor)
+      case th: Tanh =>
+        tanh(inTensor, th.inputScale, th.inputZeroPoint,
+          rounding = th.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case c: Cast =>
         val scalePort = if (c.runtimeScale) io.dequantScale else None
-        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort)
+        cast(inTensor, lType, c.scales, runtimeScalePort = scalePort,
+          rounding = c.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case _: Flatten =>
         reshape(flatten(inTensor), Seq(1, inTensor.shape.product))
@@ -636,7 +649,7 @@ case class Sequential(
         if (linOut.lanes != l.lanes) repack(linOut, l.lanes) else linOut
 
       case rq: Requantize =>
-        spinalML.ops.requantize(inTensor, rq.targetType, rq.shift)
+        spinalML.ops.requantize(inTensor, rq.targetType, rq.shift, rq.rounding.getOrElse(spinalML.RoundingConfig.current))
 
       case rp: Repack =>
         repack(inTensor, rp.newLanes)
@@ -650,10 +663,10 @@ case class Sequential(
       case cc: Concat =>
         val ta0 = inputFor(cc.a, i)
         val tb0 = inputFor(cc.b, i)
-        // ConcatenateAxis0Op treats shape.head as the per-axis cell count, each
-        // beat carrying `lanes` elements. Repack both inputs to one full row
-        // per beat so the cell count == the streamed beat count (bit-exact
-        // against the universal replica concat).
+        // OPS-04: ConcatenateAxis0Op counts streamed beats (one axis-0 cell
+        // = tailProduct/lanes beats). Repack both inputs to one full row per
+        // beat so the beat count is exactly L_A + L_B (bit-exact against the
+        // universal replica concat).
         val rowLanes = ta0.shape.drop(1).product
         val ta = if (ta0.lanes != rowLanes) repack(ta0, rowLanes) else ta0
         val tb = if (tb0.lanes != rowLanes) repack(tb0, rowLanes) else tb0

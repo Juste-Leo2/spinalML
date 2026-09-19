@@ -4,11 +4,18 @@ package spinalML.layers
 
 import spinal.core._
 import spinal.lib._
+import spinalML.{RoundingConfig, RoundingMode}
 import spinalML.tensors.Tensor
 import spinalML.dtypes.FloatML
-import spinalML.ops.repack
+import spinalML.ops.{RequantizeOp, repack}
 
-case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: Int) extends Component {
+case class BatchNorm1D[T <: Data](
+  dataType: HardType[T],
+  channels: Int,
+  seqLen: Int,
+  shift: Int = 0,
+  rounding: RoundingMode = RoundingConfig.current
+) extends Component {
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
     val gamma = slave(Tensor(dataType, Seq(channels), lanes = channels))
@@ -46,26 +53,43 @@ case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   val runMode = state === 2
   
   val outPayload = Vec(dataType, channels)
-  for (i <- 0 until channels) {
-    val px = io.x.stream.payload(i)
-    val pa = gammaReg(i)
-    val pb = betaReg(i)
-    
-    (px, pa, pb) match {
-      case (vx: SInt, va: SInt, vb: SInt) =>
+  val computeStream = Stream(Vec(dataType, channels))
+  computeStream.valid := io.x.stream.valid && runMode
+
+  // LAY-05: the SInt MAC reuses RequantizeOp (shift + rounding + saturation)
+  // instead of the legacy 2's-complement wrap. UInt/Float paths are unchanged.
+  dataType() match {
+    case vIn: SInt =>
+      val accWidth = vIn.getWidth * 2 + 1
+      val rq = RequantizeOp(SInt(accWidth bits), dataType, Seq(1), channels, shift, rounding)
+      for (i <- 0 until channels) {
+        val vx = io.x.stream.payload(i).asInstanceOf[SInt]
+        val va = gammaReg(i).asInstanceOf[SInt]
+        val vb = betaReg(i).asInstanceOf[SInt]
+        rq.io.a.stream.payload(i) := ((vx * va) + vb).resize(accWidth)
+      }
+      rq.io.a.stream.valid := computeStream.valid
+      rq.io.c.stream.ready := computeStream.ready
+      outPayload := rq.io.c.stream.payload
+    case _: UInt =>
+      for (i <- 0 until channels) {
+        val vx = io.x.stream.payload(i).asInstanceOf[UInt]
+        val va = gammaReg(i).asInstanceOf[UInt]
+        val vb = betaReg(i).asInstanceOf[UInt]
         outPayload(i).assignFrom(((vx * va) + vb).resized.asInstanceOf[T])
-      case (vx: UInt, va: UInt, vb: UInt) =>
-        outPayload(i).assignFrom(((vx * va) + vb).resized.asInstanceOf[T])
-      case (vx: FloatML, va: FloatML, vb: FloatML) =>
+      }
+    case _: FloatML =>
+      for (i <- 0 until channels) {
+        val vx = io.x.stream.payload(i).asInstanceOf[FloatML]
+        val va = gammaReg(i).asInstanceOf[FloatML]
+        val vb = betaReg(i).asInstanceOf[FloatML]
         val mulRes = spinalML.utils.Float.mul(vx, va)
         val addRes = spinalML.utils.Float.add(mulRes, vb)
         outPayload(i).assignFrom(addRes.asInstanceOf[T])
-      case _ => throw new Exception("Unsupported data type")
-    }
+      }
+    case _ => throw new Exception("Unsupported data type")
   }
-  
-  val computeStream = Stream(Vec(dataType, channels))
-  computeStream.valid := io.x.stream.valid && runMode
+
   computeStream.payload := outPayload
   io.x.stream.ready := computeStream.ready && runMode
   
@@ -74,14 +98,22 @@ case class BatchNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
 }
 
 object batchnorm {
-  def apply[T <: Data](x: Tensor[T], gamma: Tensor[T], beta: Tensor[T], outLanes: Int = -1, reArm: Option[Bool] = None): Tensor[T] = {
+  def apply[T <: Data](
+    x: Tensor[T],
+    gamma: Tensor[T],
+    beta: Tensor[T],
+    outLanes: Int = -1,
+    reArm: Option[Bool] = None,
+    shift: Int = 0,
+    rounding: RoundingMode = RoundingConfig.current
+  ): Tensor[T] = {
     val seqLen = x.shape(0)
     val channels = if (x.shape.length > 1) x.shape(1) else 1
     val inX = if (x.lanes != channels) repack(x, channels) else x
     val inGamma = if (gamma.lanes != channels) repack(gamma, channels) else gamma
     val inBeta = if (beta.lanes != channels) repack(beta, channels) else beta
 
-    val comp = BatchNorm1D(inX.dataType, channels, seqLen)
+    val comp = BatchNorm1D(inX.dataType, channels, seqLen, shift, rounding)
     comp.io.reArm := reArm.getOrElse(False)
     comp.io.x <> inX
     comp.io.gamma <> inGamma

@@ -4,6 +4,7 @@ package spinalML.layers
 
 import spinal.core._
 import spinal.lib._
+import spinalML.{RoundingConfig, RoundingMode}
 import spinalML.tensors.Tensor
 import spinalML.ops._
 
@@ -12,19 +13,32 @@ case class RequantizeLayer[T <: Data, TOut <: Data](
   dataTypeOut: HardType[TOut],
   shape: Seq[Int],
   lanes: Int,
-  shift: Int
+  shift: Int,
+  rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
   val io = new Bundle {
     val x = slave(Tensor(dataTypeIn, shape, lanes))
     val y = master(Tensor(dataTypeOut, shape, lanes))
   }
   
-  io.y <> requantize(io.x, dataTypeOut, shift)
+  io.y <> requantize(io.x, dataTypeOut, shift, rounding)
 }
 
 object RequantizeLayer {
-  def apply[T <: Data, TOut <: Data](x: Tensor[T], dataTypeOut: HardType[TOut], shift: Int): Tensor[TOut] = {
-    val comp = new RequantizeLayer(x.dataType, dataTypeOut, x.shape, x.lanes, shift)
+  def apply[T <: Data, TOut <: Data](
+    x: Tensor[T],
+    dataTypeOut: HardType[TOut],
+    shift: Int
+  ): Tensor[TOut] =
+    apply(x, dataTypeOut, shift, RoundingConfig.current)
+
+  def apply[T <: Data, TOut <: Data](
+    x: Tensor[T],
+    dataTypeOut: HardType[TOut],
+    shift: Int,
+    rounding: RoundingMode
+  ): Tensor[TOut] = {
+    val comp = new RequantizeLayer(x.dataType, dataTypeOut, x.shape, x.lanes, shift, rounding)
     comp.io.x <> x
     comp.io.y
   }

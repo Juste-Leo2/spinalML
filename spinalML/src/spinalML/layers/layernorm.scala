@@ -188,7 +188,17 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   
   val epsVal: T = (dataType() match {
     case f: FloatML => 
-      val epsBits = B(spinalML.utils.MathLUTs.floatEncodeFn(f.expBits, f.mantBits)(1e-5), f.getBitsWidth bits)
+      // LAY-04: 1e-5 must stay representable, otherwise a zero variance (or a
+      // variance whose diff^2 underflowed) reaches the rsqrt LUT at input 0 and
+      // the guard saturates the inverse standard deviation. If the encoded
+      // epsilon underflows to 0, fall back to the smallest positive normal
+      // (exp=1, mant=0): 2^-6 in E4M3, 1.0 in E2M1. BF16 keeps 1e-5. The
+      // fallback never applies to a format where 1e-5 is representable, so no
+      // existing dtype changes beyond the underflowing ones (FTZ has no
+      // subnormal escape hatch).
+      val epsEncoded = spinalML.utils.MathLUTs.floatEncodeFn(f.expBits, f.mantBits)(1e-5)
+      val epsLiteral: BigInt = if (epsEncoded != 0) epsEncoded else BigInt(1 << f.mantBits)
+      val epsBits = B(epsLiteral, f.getBitsWidth bits)
       val epsFloat = FloatML(f.expBits, f.mantBits)
       epsFloat.assignFromBits(epsBits)
       epsFloat

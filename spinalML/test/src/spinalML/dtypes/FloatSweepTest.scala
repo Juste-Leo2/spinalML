@@ -38,11 +38,37 @@ object FloatGolden {
   private def unpack(bits: Int, e: Int, m: Int): (Boolean, Int, Int) =
     (((bits >> (e + m)) & 1) == 1, (bits >> m) & ((1 << e) - 1), bits & ((1 << m) - 1))
 
+  /** E4M3 (`fn`, e=4/m=3) is the only format without infinity. */
+  def isE4M3(e: Int, m: Int): Boolean = e == 4 && m == 3
+
+  /** Saturation output encoding (mirrors `Float.satEncoding`: 448 for E4M3, inf otherwise). */
+  def satBits(sign: Boolean, e: Int, m: Int): Int =
+    if (isE4M3(e, m)) pack(sign, 15, 6, e, m) else pack(sign, (1 << e) - 1, 0, e, m)
+
+  /** NaN input class (Wave 5, propagation-only): E4M3 single slot (15, 7),
+    * other formats all-ones exponent with nonzero mantissa. Never emitted
+    * spontaneously, but flows from host/DDR inputs. */
+  def isNaNBits(bits: Int, e: Int, m: Int): Boolean = {
+    val (_, exp, mant) = unpack(bits, e, m)
+    if (isE4M3(e, m)) exp == 15 && mant == 7
+    else exp == ((1 << e) - 1) && mant != 0
+  }
+
+  /** Canonical NaN output (mirrors `Float.nanEncoding`), sign = first NaN operand's. */
+  def nanBits(aBits: Int, bBits: Int, e: Int, m: Int): Int = {
+    val (sa, _, _) = unpack(aBits, e, m)
+    val (sb, _, _) = unpack(bBits, e, m)
+    val sign = if (isNaNBits(aBits, e, m)) sa else sb
+    if (isE4M3(e, m)) pack(sign, 15, 7, e, m) else pack(sign, (1 << e) - 1, 1, e, m)
+  }
+
   /** Encodings whose value round-trips through the format (only these flow in real datapaths). */
   def isCanonical(bits: Int, e: Int, m: Int): Boolean = {
     val (_, exp, mant) = unpack(bits, e, m)
     if (exp == 0) bits == 0                       // zero: single encoding (no subnormals)
-    else if (exp == (1 << e) - 1) mant == 0       // infinity: mantissa must be zero
+    else if (exp == (1 << e) - 1)
+      if (isE4M3(e, m)) mant <= 6                 // E4M3: field 15 holds finite 256..448; mant 7 is NaN
+      else mant == 0                              // infinity: mantissa must be zero
     else true                                      // normals: always round-trip
   }
 
@@ -50,6 +76,9 @@ object FloatGolden {
     val bias = (1 << (e - 1)) - 1
     val (sa, ea, ma) = unpack(aBits, e, m)
     val (sb, eb, mb) = unpack(bBits, e, m)
+
+    // Wave 5: NaN propagates (beats zero: mul(NaN, 0) is NaN, like the RTL).
+    if (isNaNBits(aBits, e, m) || isNaNBits(bBits, e, m)) return nanBits(aBits, bBits, e, m)
 
     if (ea == 0 || eb == 0) return 0              // zero operand -> zero product
 
@@ -73,14 +102,22 @@ object FloatGolden {
 
     val expSum = ea + eb - bias + ovf             // unbounded: cannot wrap
 
+    // Saturation (mirrors `Float.saturates`: E4M3 keeps finite field-15
+    // values and only saturates past-the-max or onto the NaN slot).
+    val maxExp = (1 << e) - 1
     if (expSum <= 0) pack(false, 0, 0, e, m)      // underflow -> zero
-    else if (expSum >= ((1 << e) - 1)) pack(sign, (1 << e) - 1, 0, e, m) // saturate
+    else if (expSum > maxExp || (!isE4M3(e, m) && expSum == maxExp) ||
+             (isE4M3(e, m) && expSum == maxExp && normMant == 7)) satBits(sign, e, m)
     else pack(sign, expSum, normMant, e, m)
   }
 
   def add(aBits: Int, bBits: Int, e: Int, m: Int): Int = {
     val (sa, ea, ma) = unpack(aBits, e, m)
     val (sb, eb, mb) = unpack(bBits, e, m)
+
+    // Wave 5: NaN propagates (beats the zero class, like the RTL).
+    if (isNaNBits(aBits, e, m) || isNaNBits(bBits, e, m)) return nanBits(aBits, bBits, e, m)
+
     val aZero = ea == 0
     val bZero = eb == 0
 
@@ -122,8 +159,10 @@ object FloatGolden {
 
     val newExp = lExp + 1 - lzAdj
 
+    val maxExpA = (1 << e) - 1
     if (sumIsZeroEnc || raw == 0 || newExp <= 0) pack(false, 0, 0, e, m)
-    else if (newExp >= ((1 << e) - 1)) pack(lSign, (1 << e) - 1, 0, e, m)
+    else if (newExp > maxExpA || (!isE4M3(e, m) && newExp == maxExpA) ||
+             (isE4M3(e, m) && newExp == maxExpA && finalMant == 7)) satBits(lSign, e, m)
     else pack(lSign, newExp, finalMant, e, m)
   }
 }
@@ -216,5 +255,31 @@ class FloatSweepTest extends AnyFunSuite {
     }
     val pairs = for (a <- ones; b <- smalls) yield (a, b)
     runSweep(e, m, pairs)
+  }
+
+  /** Wave 5 NaN propagation: every NaN encoding crossed with every canonical
+    * (narrow/medium exhaustive) or sampled (wide) value, both orders, add+mul.
+    * NaN beats zero and saturations; output sign follows the first NaN operand.
+    */
+  private def nanPairs(e: Int, m: Int, nanMants: Seq[Int], sampleN: Int): Seq[(Int, Int)] = {
+    val total = 1 << (1 + e + m)
+    val canon = (0 until total).filter(b => FloatGolden.isCanonical(b, e, m))
+    val sampled = if (canon.length <= sampleN) canon else new Random(7).shuffle(canon).take(sampleN)
+    val maxExp = (1 << e) - 1
+    val nans = for (s <- Seq(0, 1); mant <- nanMants)
+      yield (s << (e + m)) | (maxExp << m) | mant
+    for (n <- nans; c <- sampled; p <- Seq((n, c), (c, n))) yield p
+  }
+
+  test("NaN propagation narrow format") {
+    runSweep(2, 1, nanPairs(2, 1, Seq(1), 1000000))
+  }
+
+  test("NaN propagation medium format") {
+    runSweep(4, 3, nanPairs(4, 3, Seq(7), 1000000))
+  }
+
+  test("NaN propagation wide format") {
+    runSweep(8, 7, nanPairs(8, 7, Seq(1, 64, 127), 2000))
   }
 }

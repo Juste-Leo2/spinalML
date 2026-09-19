@@ -250,17 +250,18 @@ class FloatMathSaturateTest extends AnyFunSuite {
       sleep(1)
       assert(getBits(dut.io.mul4) == 0xE, s"FP4 2*-inf should be -inf, got ${getBits(dut.io.mul4).toBinaryString}")
 
-      // FP8: inf + inf -> +inf (newExp 15+1 wrapped negative before the fix)
+      // FP8 E4M3 has no infinity (DTYPE-07): (15,0) is the finite 256.0,
+      // so inf+inf is really 256+256 = 512 -> saturate to max finite 448 (15,6).
       dut.io.a8.sign #= false; dut.io.a8.exponent #= 15; dut.io.a8.mantissa #= 0
       dut.io.b8.sign #= false; dut.io.b8.exponent #= 15; dut.io.b8.mantissa #= 0
       sleep(1)
-      assert(getBits(dut.io.add8) == 0x78, s"FP8 inf+inf should be +inf, got ${getBits(dut.io.add8).toBinaryString}")
+      assert(getBits(dut.io.add8) == 0x7E, s"FP8 256+256 should saturate to 448, got ${getBits(dut.io.add8).toBinaryString}")
 
-      // FP8: max normal * max normal -> saturate +inf
+      // FP8: max normal * max normal -> saturate 448 (15,6), not +inf
       dut.io.a8.sign #= false; dut.io.a8.exponent #= 14; dut.io.a8.mantissa #= 7
       dut.io.b8.sign #= false; dut.io.b8.exponent #= 14; dut.io.b8.mantissa #= 7
       sleep(1)
-      assert(getBits(dut.io.mul8) == 0x78, s"FP8 240*240 should saturate to +inf, got ${getBits(dut.io.mul8).toBinaryString}")
+      assert(getBits(dut.io.mul8) == 0x7E, s"FP8 240*240 should saturate to 448, got ${getBits(dut.io.mul8).toBinaryString}")
     }
   }
 }

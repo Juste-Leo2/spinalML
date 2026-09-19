@@ -8,24 +8,19 @@ either via physical FPGA hardware over UART (W4A8 architecture) or via the local
 """
 
 import sys
+import json
 import time
 import math
 import struct
+import argparse
 from pathlib import Path
 import numpy as np
-from PIL import Image
 
 try:
     import serial
     HAS_SERIAL = True
 except ImportError:
     HAS_SERIAL = False
-
-try:
-    import gradio as gr
-except ImportError:
-    print("[ERROR] Gradio is required. Run 'pip install -r requirements.txt'")
-    sys.exit(1)
 
 # Protocol opcodes matching UartBridge & docs/uart_bridge.md
 CMD_CSR_WRITE   = 0x43  # 'C'
@@ -36,6 +31,7 @@ CMD_VERSION     = 0x56  # 'V'
 
 DEFAULT_PORT = "COM8" if sys.platform == "win32" else "/dev/ttyUSB0"
 DEFAULT_BAUD = 115200
+RUNTIME_PORT = DEFAULT_PORT
 
 IMG_BASE_ADDR    = 0x10000  # Virtual BRAM index 0
 WEIGHT_BASE_ADDR = 0x20000  # Virtual BRAM index 2048
@@ -114,6 +110,7 @@ def preprocess_canvas_image(image_input):
         canvas_28: (28, 28) uint8 array with values in {0, 1}
         raw_bytes: 784 bytes (0x00 or 0x01) formatted for FPGA upload
     """
+    from PIL import Image
     if image_input is None:
         return None, None
 
@@ -414,61 +411,247 @@ input[type="range"], .brush-size, [aria-label="Brush size"] {
 }
 """
 
+
+# ---------------------------------------------------------------------------
+# Deterministic self-test bitmap (terminal-only baseline, hidden from the demo UI)
+#
+# A single 5x7 digit bitmap (0/1 only, no font dependency) upscaled x4 and
+# centred in the 28x28 network input. Enough to A/B two bitstreams (RNE vs
+# trunc); --save-results dumps the logits. See build_selftest_input().
+#
+# Note: on this W4A8 model RNE and trunc bitstreams legitimately produce the
+# same output on almost every input - the Cast rounds the integer to FP8 and
+# then multiplies by the runtime scale (a second rounding), which absorbs the
+# difference, and the FP8 Linear accumulation absorbs the rest. Identical
+# self-test results across builds are therefore expected, not a flash failure.
+# ---------------------------------------------------------------------------
+
+# A single 5x7 bitmap digit ('3'), upscaled x4 and centred in the 28x28 network
+# input. One deterministic vector is enough to A/B two bitstreams (RNE vs trunc).
+_SELFTEST_LABEL = 3
+_SELFTEST_BITMAP = [".###.", "#...#", "....#", "..##.", "....#", "....#", ".###."]
+
+
+def build_selftest_input():
+    """Builds the deterministic self-test vector: (label, 28x28 uint8, raw 784 bytes)."""
+    canvas = np.zeros((28, 28), dtype=np.uint8)
+    for y, row in enumerate(_SELFTEST_BITMAP):
+        for x, ch in enumerate(row):
+            if ch == "#":
+                canvas[y * 4:y * 4 + 4, x * 4 + 4:x * 4 + 8] = 1
+    return _SELFTEST_LABEL, canvas, canvas.tobytes()
+
+
+def find_responsive_port(explicit_port=None):
+    """Returns the first UART port answering protocol v1 ('V'), or None."""
+    if not HAS_SERIAL:
+        return None
+
+    candidates = []
+    if explicit_port:
+        candidates.append(explicit_port)
+    else:
+        candidates.append(DEFAULT_PORT)
+        try:
+            from serial.tools import list_ports
+            for info in list_ports.comports():
+                dev = info.device
+                if dev in candidates:
+                    continue
+                low = dev.lower()
+                if low.startswith("com") or "usb" in low or "acm" in low:
+                    candidates.append(dev)
+        except Exception:
+            pass
+
+    for port in candidates:
+        try:
+            ser = serial.Serial(port=port, baudrate=DEFAULT_BAUD, timeout=0.5, write_timeout=0.5)
+            ser.reset_input_buffer()
+            ser.write(bytes([CMD_VERSION]))
+            ser.flush()
+            resp = ser.read(1)
+            ser.close()
+            if len(resp) == 1 and resp[0] == 0x01:
+                return port
+        except Exception:
+            continue
+    return None
+
+
+def run_selftest(port=None, save_results=None, selftest_only=False):
+    """
+    Single-bitmap baseline: NumPy reference vs FPGA on a deterministic '3'.
+
+    Prints to the terminal only (the Gradio end-user never sees it). With an
+    FPGA answering, the weights are uploaded once, which also pre-warms the UI.
+    Returns the responsive port (or None).
+    """
+    label, canvas_28, raw_bytes = build_selftest_input()
+
+    print()
+    print("=" * 66)
+    print(f" MNIST self-test bitmap (digit {label}, deterministic) - hardware vs NumPy baseline")
+    print("=" * 66)
+
+    hw_port = find_responsive_port(port)
+    if hw_port is None and port:
+        print(f" FPGA        : {port} did not answer (protocol v1 ping failed)")
+    elif hw_port is None:
+        print(" FPGA        : offline (no UART port answering protocol v1)")
+    else:
+        print(f" FPGA        : {hw_port}")
+
+    sw_logits = infer_locally_numpy(canvas_28)
+    sw_probs = softmax(sw_logits)
+    sw_pred = int(np.argmax(sw_probs))
+
+    row = {
+        "digit": label,
+        "sw_logits": [float(v) for v in sw_logits],
+        "sw_pred": sw_pred,
+        "sw_conf": float(sw_probs[sw_pred]),
+        "sw_correct": sw_pred == label,
+    }
+
+    if hw_port is not None:
+        hw_logits, _uploaded = infer_on_hardware(raw_bytes, port=hw_port)
+        hw_probs = softmax(hw_logits)
+        hw_pred = int(np.argmax(hw_probs))
+        row.update({
+            "hw_logits": [float(v) for v in hw_logits],
+            "hw_pred": hw_pred,
+            "hw_conf": float(hw_probs[hw_pred]),
+            "hw_correct": hw_pred == label,
+            "agree": hw_pred == sw_pred,
+            "max_delta": float(np.max(np.abs(hw_logits - sw_logits))),
+            "exact": bool(np.array_equal(hw_logits, sw_logits)),
+        })
+        print(f" {'digit':>5} | {'HW':>4} {'conf':>6} | {'NumPy':>5} {'conf':>6} | {'agree':>5} | {'max|dLogit|':>11}")
+        print("-" * 66)
+        print(
+            f" {label:>5} | {hw_pred:>4} {row['hw_conf']*100:>5.1f}% | "
+            f"{sw_pred:>5} {row['sw_conf']*100:>5.1f}% | "
+            f"{'yes' if row['agree'] else 'NO':>5} | {row['max_delta']:>11.4f}"
+            f"{'' if row['hw_correct'] else '  <- HW MISS'}"
+        )
+        print("-" * 66)
+        print(f" HW==NumPy : {'yes' if row['agree'] else 'NO'}"
+              f"   |  logits bit-exact : {'yes' if row['exact'] else 'no'}")
+        print(" HW logits : " + " ".join(f"{v:+.2f}" for v in hw_logits))
+    else:
+        print(f" {'digit':>5} | {'NumPy':>5} {'conf':>6} | {'expected':>8}")
+        print("-" * 40)
+        print(f" {label:>5} | {sw_pred:>5} {row['sw_conf']*100:>5.1f}% | "
+              f"{'ok' if row['sw_correct'] else 'MISS':>8}")
+
+    if save_results:
+        Path(save_results).write_text(
+            json.dumps({"port": hw_port, "row": row}, indent=2), encoding="utf-8"
+        )
+        print(f" [selftest] results written to {save_results}")
+    print("=" * 66)
+    print()
+
+    if selftest_only and hw_port is None:
+        sys.exit(1)
+    return hw_port
+
 # --- Gradio User Interface ---
-with gr.Blocks(title="SpinalML Tang Primer 20K MNIST Demo") as demo:
-    gr.Markdown("# SpinalML: Real-Time MNIST Hardware vs Software Inference")
-    gr.Markdown(
-        "Draw a digit from **0 to 9** on the canvas. "
-        "The system simultaneously runs the **physical Tang Primer 20K FPGA** accelerator over UART "
-        "and the **NumPy reference** side-by-side for live in-circuit verification."
+def create_demo():
+    """Builds the Gradio UI. The default port reacts to --port/auto-detection."""
+    try:
+        import gradio as gr
+    except ImportError:
+        print("[ERROR] Gradio is required. Run 'pip install -r requirements.txt'")
+        sys.exit(1)
+    with gr.Blocks(title="SpinalML Tang Primer 20K MNIST Demo") as demo:
+        gr.Markdown("# SpinalML: Real-Time MNIST Hardware vs Software Inference")
+        gr.Markdown(
+            "Draw a digit from **0 to 9** on the canvas. "
+            "The system simultaneously runs the **physical Tang Primer 20K FPGA** accelerator over UART "
+            "and the **NumPy reference** side-by-side for live in-circuit verification."
+        )
+
+        with gr.Row():
+            # Column 1: Canvas & Hardware Connection Controls
+            with gr.Column(scale=4):
+                canvas = gr.Sketchpad(
+                    label="Digit Canvas (280x280)",
+                    type="numpy",
+                    image_mode="L",
+                    canvas_size=(280, 280),
+                    brush=gr.Brush(colors=["#000000"], color_mode="fixed", default_size=12),
+                )
+
+                gr.Markdown("#### FPGA Hardware Link")
+                with gr.Row():
+                    port_input = gr.Textbox(label="UART Port", value=RUNTIME_PORT, scale=1)
+                    init_btn = gr.Button("Connect & Load Weights", variant="primary", scale=1)
+
+            # Column 2: Side-by-Side FPGA vs NumPy outputs + Link Status below
+            with gr.Column(scale=7):
+                with gr.Row():
+                    # Sub-column: Tang Primer 20K Physical Hardware Output
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Tang Primer 20K (Physical FPGA)")
+                        hw_label = gr.Label(label="FPGA Confidence Scores", num_top_classes=3)
+                        hw_info = gr.Textbox(label="Hardware Telemetry", interactive=False)
+
+                    # Sub-column: NumPy Reference Output
+                    with gr.Column(scale=1):
+                        gr.Markdown("### NumPy Reference (Software Golden)")
+                        sw_label = gr.Label(label="Software Confidence Scores", num_top_classes=3)
+                        sw_info = gr.Textbox(label="Software Telemetry", interactive=False)
+
+                conn_status = gr.Textbox(label="Link Status", interactive=False)
+
+        gr.Markdown(
+            "<div style='text-align: center; color: #6b7280; font-size: 0.8rem; margin-top: 1.5rem;'>"
+            "Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT"
+            "</div>"
+        )
+
+        # Event handlers
+        canvas.change(
+            fn=classify_digit,
+            inputs=[canvas, port_input],
+            outputs=[hw_label, hw_info, sw_label, sw_info]
+        )
+        init_btn.click(fn=test_or_initialize_fpga, inputs=[port_input], outputs=[conn_status])
+
+    return demo
+
+
+def main():
+    global RUNTIME_PORT
+    parser = argparse.ArgumentParser(
+        description="SpinalML MNIST demo: Tang Primer 20K hardware vs NumPy reference."
     )
+    parser.add_argument("--selftest-only", action="store_true",
+                        help="Run the deterministic bitmap baseline and exit (no Gradio)")
+    parser.add_argument("--no-selftest", action="store_true",
+                        help="Skip the terminal baseline entirely")
+    parser.add_argument("--port", default=None,
+                        help=f"UART port for the baseline and the UI default (default: {DEFAULT_PORT})")
+    parser.add_argument("--save-results", default=None, metavar="JSON",
+                        help="Write baseline logits/predictions (use it to A/B two bitstreams)")
+    args = parser.parse_args()
 
-    with gr.Row():
-        # Column 1: Canvas & Hardware Connection Controls
-        with gr.Column(scale=4):
-            canvas = gr.Sketchpad(
-                label="Digit Canvas (280x280)",
-                type="numpy",
-                image_mode="L",
-                canvas_size=(280, 280),
-                brush=gr.Brush(colors=["#000000"], color_mode="fixed", default_size=12),
-            )
+    baseline_port = None
+    if args.selftest_only or not args.no_selftest:
+        baseline_port = run_selftest(
+            port=args.port,
+            save_results=args.save_results,
+            selftest_only=args.selftest_only,
+        )
+    if args.selftest_only:
+        sys.exit(0)
 
-            gr.Markdown("#### FPGA Hardware Link")
-            with gr.Row():
-                port_input = gr.Textbox(label="UART Port", value=DEFAULT_PORT, scale=1)
-                init_btn = gr.Button("Connect & Load Weights", variant="primary", scale=1)
+    RUNTIME_PORT = baseline_port or args.port or DEFAULT_PORT
+    demo = create_demo()
+    demo.launch(server_name="127.0.0.1", server_port=7860, share=False, css=CUSTOM_CSS)
 
-        # Column 2: Side-by-Side FPGA vs NumPy outputs + Link Status below
-        with gr.Column(scale=7):
-            with gr.Row():
-                # Sub-column: Tang Primer 20K Physical Hardware Output
-                with gr.Column(scale=1):
-                    gr.Markdown("### Tang Primer 20K (Physical FPGA)")
-                    hw_label = gr.Label(label="FPGA Confidence Scores", num_top_classes=3)
-                    hw_info = gr.Textbox(label="Hardware Telemetry", interactive=False)
-
-                # Sub-column: NumPy Reference Output
-                with gr.Column(scale=1):
-                    gr.Markdown("### NumPy Reference (Software Golden)")
-                    sw_label = gr.Label(label="Software Confidence Scores", num_top_classes=3)
-                    sw_info = gr.Textbox(label="Software Telemetry", interactive=False)
-
-            conn_status = gr.Textbox(label="Link Status", interactive=False)
-
-    gr.Markdown(
-        "<div style='text-align: center; color: #6b7280; font-size: 0.8rem; margin-top: 1.5rem;'>"
-        "Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT"
-        "</div>"
-    )
-
-    # Event handlers
-    canvas.change(
-        fn=classify_digit,
-        inputs=[canvas, port_input],
-        outputs=[hw_label, hw_info, sw_label, sw_info]
-    )
-    init_btn.click(fn=test_or_initialize_fpga, inputs=[port_input], outputs=[conn_status])
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", server_port=7860, share=False, css=CUSTOM_CSS)
+    main()

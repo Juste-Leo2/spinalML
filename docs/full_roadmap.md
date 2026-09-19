@@ -25,6 +25,7 @@ This document provides the exhaustive technical implementation history, backlog,
 - [x] **Multi-Feature Linear Layers**: Upgrade `LinearLayer` to output multiple features instead of hardcoding `outFeatures = 1` (leverage the GEMM matmul).
 - [x] Implement Normalization layers (BatchNorm, LayerNorm).
 - [x] Test and validate advanced operations, ensuring correct pipeline behavior and throughput.
+- [x] **ONNX integer Div & quantized Sigmoid/Tanh (Wave 5, ex-OPS-03/12)**: reference switched from Q15 to **ONNX** for division (the only stable contract: `QuantizeLinear` is round-nearest-even like our default; TFLite kernels diverge on tie rounding and define no runtime int8 `Div`), and to **TFLite int8** for the activations ONNX core does not define. DONE (steps 5A/5B/5C): `DivOp` SInt/UInt ≤32 bits (combinational restoring divider ≤8 bits, serial FSM >8 bits, exact ONNX truncation + saturation) with Scala + Python exact goldens; quantized I8/U8 `Sigmoid`/`Tanh` (full-range 256-entry LUT, LOGISTIC out 1/256 zp −128/0, TANH out 1/128 zp 0/128, input scale/zp via `LayerSpec`) with Scala sims, I8 formals, Python full sweeps and replica alignment. See `docs/rounding_policy.md` §7 and `docs/wave4_wave5_plan.md` §4.
 
 ## 4. System Integration & Advanced Improvements (Future Work)
 

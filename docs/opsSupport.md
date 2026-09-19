@@ -14,7 +14,7 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | `Add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise addition of two tensors. |
 | `Sub` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise subtraction of two tensors. |
 | `Mul` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise multiplication (Hadamard product). |
-| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division (Mul + Reciprocal). |
+| `Div` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Element-wise division. FloatML: Mul + Reciprocal (LUT/PWL). All SInt/UInt (≤32 bits): exact ONNX `Div` semantics (truncation toward zero, saturating on div-by-zero and `INT_MIN/-1`) — ≤8 bits combinational `IntDiv`, I16/I32 serial restoring FSM (fixed `width + 2` cycle latency, one beat in flight; Wave 5 steps 5A/5B). |
 | `BiasAdd` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Broadcast add of a bias vector over the last dimension (columns). |
 | `Exp` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Exponential. |
 | `Log` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Element-wise logarithm, compile-time base (default `e` = ln, `10` = log10). Domain `x <= 0 -> 0` (industry convention, like `Rsqrt`). |
@@ -69,23 +69,23 @@ To ensure optimal synthesis on FPGA, operations must follow these memory guideli
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `ReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Rectified Linear Unit. |
 | `LeakyReLU` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Leaky Rectified Linear Unit. |
-| `Sigmoid` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). Composition of Negation -> Exp -> +1 -> Reciprocal (ints ⚠️: PWL chain, degenerate for large |x|). |
-| `Tanh` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent = 2·sigmoid(2x) - 1. Composition of Mul(×2) -> Sigmoid -> ×2 - 1. |
+| `Sigmoid` | ✅ (I8/U8) | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Sigmoid = 1/(1+e^(-x)). FloatML: composition of Negation -> Exp -> +1 -> Reciprocal. I8/U8: quantized TFLite LOGISTIC convention (full-range 256-entry LUT, out scale 1/256, int8 zp -128 / uint8 zp 0, input scale+zp via `LayerSpec`; Wave 5 step C). I16 refused (64K-entry ROM); I4 refused. |
+| `Tanh` | ✅ (I8/U8) | ❌ | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Hyperbolic tangent. FloatML: Mul(×2) -> Sigmoid -> ×2 - 1. I8/U8: quantized TFLite TANH convention (full-range 256-entry LUT, out scale 1/128, int8 zp 0 / uint8 zp 128; Wave 5 step C). I16 refused (64K-entry ROM); I4 refused. |
 | `Softmax` | [⚠️](#methodology-notes) (LUT) | [⚠️](#methodology-notes) (PWL) | ✅ (LUT) | ✅ ([Alg+LUT](#methodology-notes)) | ✅ | ✅ | Softmax function (uses Max-Tree, Exp, Adder-Tree, Reciprocal). |
 
 ## Normalization
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). |
-| `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. |
+| `BatchNorm1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Inference-only (Scale & Shift via DSP). Integer path requantizes via `RequantizeOp` (shift + RNE + saturation, LAY-05). |
+| `LayerNorm1D` | [⚠️](#methodology-notes) | [⚠️](#methodology-notes) | ✅ | ✅ | ✅ | ✅ | Pipelined Adder Tree for Mean/Var, LUT/Alg+LUT for Rsqrt. Epsilon: encoded 1e-5 when representable (BF16), else smallest positive normal (E4M3 2^-6, E2M1 1.0) — LAY-04 residual fix. |
 
 ## Pooling Operations
 | Operation | I4 / I8 | I16 / I32 | FP4 / FP8 | BF16 / FP32 | Math Validated | Symbolically Verified | Notes |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | `MaxPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D max pooling. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D max pooling, multi-channel. BRAM delay-line line buffers (`Mem` + `readSync`). |
-| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. |
-| `AvgPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D average pooling (isPow2(K*K), shift-based). Same BRAM line buffers as MaxPool2D. |
+| `AvgPool1D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 1D average pooling. Integer path shift+RNE via the rounding switch (`RequantizeMath`, same datapath as `RequantizeOp`); `rounding` per layer via `LayerSpec`. |
+| `AvgPool2D` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 2D average pooling (isPow2(K*K), shift-based). Same BRAM line buffers as MaxPool2D. Integer path shift+RNE via the rounding switch (`RequantizeMath`). |
 
 ## Infrastructure Modules
 
@@ -117,12 +117,12 @@ See [universalTestEngine.md](universalTestEngine.md) for full architectural docu
 | `LeakyReLU` | ✅ | ❌ | ❌ | Arithmetic shift right in float. |
 | `MaxPool2D` | ✅ | ✅ | ✅ | Bit-exact spatial pooling. |
 | `MaxPool1D` | ✅ | ❌ | ❌ | Bit-exact 1D pooling. |
-| `AvgPool2D` / `AvgPool1D` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` interpreter wiring. |
+| `AvgPool2D` / `AvgPool1D` | ✅ | ✅ (`I8`, `I16`) | — | Replica wired (`PoolHandlers` + `LayerReplicas.avgPool*`); integer path shares `RequantizeMath` (shift+RNE via the rounding switch, Wave 5 step 3). Float path: exponent shift. |
 | `Cast` | ✅ (Float -> Float) | ✅ (Int -> Int) | ✅ (Int -> Float + scale) | Bridging integer and float domains. |
 | `Flatten` | ✅ | ✅ | ✅ | Features-last flatten. |
 | `BatchNorm1D` | ✅ | ❌ | ❌ | Floating-point scale & bias. |
 | `Add` / `Concat` (DAG) | ✅ | ✅ | ✅ | Skip connections & branch merges. |
-| `Sigmoid` / `Tanh` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` LUT wiring. |
+| `Sigmoid` / `Tanh` | ✅ | ✅ (`I8`) | — | Replica wired (`ActivationHandlers` + `LayerReplicas.sigmoidInt/tanhInt`); FloatML is exercised by `UniversalActivationsDemo`, the int-domain path (TFLite int8 conventions) is wired by Wave 5 step C but no demo covers it yet. |
 | `Softmax` | ⚠️ | ⚠️ | ⚠️ | Pass-through in replica (compares pre-softmax logits). |
 | `ClassicalAttention` | ❌ | ❌ | ❌ | Hardware RTL ready; pending `ModelReplica` attention block interpreter. |
 
@@ -130,7 +130,7 @@ See [universalTestEngine.md](universalTestEngine.md) for full architectural docu
 
 spinalML aims to quantize per layer with the industry scheme naming `wXaY`: **X = bits of the weights, Y = bits of the activations**. `Linear` and `Classical/Multi-Head Attention` are wired for all six schemes below; the remaining ops are still exposed through their uniform per-op dtype columns only. This section documents the target quantization architecture.
 
-**Policy: activations are float-only.** The tensors flowing between layers (activations) exist only in the float family `{BF16, FP8, FP4}`. Non-linear ops (Softmax, Exp, Sigmoid, ...) are therefore never instantiated in integer — the integer variants are mathematically meaningless (0 / overflow on unquantized integers). Integer formats are reserved for **weights**, as compact storage plus a scale (per-tensor / per-channel): the weights are dequantized to the activation dtype before the (float) matrix multiply. *(Weight-only quantization.)*
+**Policy: activations are float-only, except explicit int8 quantization.** The tensors flowing between layers (activations) exist in the float family `{BF16, FP8, FP4}`; 8-bit integer activations are also supported when their quantization is explicit. Since Wave 5 step C, `Sigmoid`/`Tanh` accept I8/U8 codes with `LayerSpec` input scale/zero-point and the TFLite int8 output conventions, and `Requantize`/`Cast`/`AvgPool`/`Div` cover the integer-domain linear ops. Wider (I16/I32) or 4-bit non-linear activations remain refused: without a fixed-point contract they are mathematically meaningless (0 / overflow on unquantized integers). Integer weight storage (`wXaY`) is unchanged: weights are dequantized to the activation dtype before the matrix multiply. *(Weight-only quantization.)*
 
 ### Operations Requiring the Conversion
 

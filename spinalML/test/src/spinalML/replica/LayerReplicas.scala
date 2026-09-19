@@ -3,6 +3,7 @@
 package spinalML.replica
 
 import scala.collection.mutable.ArrayBuffer
+import spinalML.{RoundingConfig, RoundingMode}
 import spinalML.nn._
 import HWArithmetic._
 
@@ -281,12 +282,13 @@ object LayerReplicas {
     inWidth: Int,
     outExp: Int,
     outMant: Int,
-    scales: Seq[Double]
+    scales: Seq[Double],
+    rounding: RoundingMode = RoundingConfig.current
   ): Seq[F] = {
     val useScale = scales.nonEmpty && !(scales.length == 1 && scales.head == 1.0)
     val scaleLits = if (useScale) scales.map(s => fromDouble(s, outExp, outMant)) else Nil
     input.zipWithIndex.map { case (v, idx) =>
-      val converted = fromSInt(v, inWidth, outExp, outMant)
+      val converted = fromSInt(v, inWidth, outExp, outMant, rounding)
       if (useScale) {
         val scaleLit = if (scaleLits.length == 1) scaleLits.head else scaleLits(idx % scaleLits.length)
         fmul(converted, scaleLit, outExp, outMant)
@@ -312,7 +314,8 @@ object LayerReplicas {
     out
   }
 
-  def avgPool2DInt(input: Array[Array[Array[Long]]], poolSize: Int, stride: Int): Array[Array[Array[Long]]] = {
+  def avgPool2DInt(input: Array[Array[Array[Long]]], poolSize: Int, stride: Int, outBits: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Array[Array[Array[Long]]] = {
     val c = input.length; val h = input(0).length; val w = input(0)(0).length
     val hOut = (h - poolSize) / stride + 1
     val wOut = (w - poolSize) / stride + 1
@@ -324,12 +327,13 @@ object LayerReplicas {
       for (r <- 0 until poolSize; k <- 0 until poolSize) {
         acc += input(i)(y * stride + r)(x * stride + k)
       }
-      out(i)(y)(x) = acc >> shift
+      out(i)(y)(x) = requantizeScalar(acc, shift, outBits, rounding)
     }
     out
   }
 
-  def avgPool1DInt(input: Array[Array[Long]], poolSize: Int, stride: Int): Array[Array[Long]] = {
+  def avgPool1DInt(input: Array[Array[Long]], poolSize: Int, stride: Int, outBits: Int,
+                   rounding: RoundingMode = RoundingConfig.current): Array[Array[Long]] = {
     val l = input.length; val c = input(0).length
     val lOut = (l - poolSize) / stride + 1
     val out = Array.ofDim[Long](lOut, c)
@@ -340,7 +344,7 @@ object LayerReplicas {
       for (k <- 0 until poolSize) {
         acc += input(pos * stride + k)(ch)
       }
-      out(pos)(ch) = acc >> shift
+      out(pos)(ch) = requantizeScalar(acc, shift, outBits, rounding)
     }
     out
   }
@@ -375,20 +379,21 @@ object LayerReplicas {
     }
   }
 
-  def sigmoidInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
-    val valFn = spinalML.utils.MathLUTs.intValFn(bitWidth)
-    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth)
-    val minVal = -(1L << (bitWidth - 1))
-    val maxVal = (1L << (bitWidth - 1)) - 1
+  /** Two's-complement bits -> signed Long (replica IntTensor convention). */
+  private def bitsToSigned(bits: Long, bitWidth: Int): Long =
+    if (bits >= (1L << (bitWidth - 1))) bits - (1L << bitWidth) else bits
+
+  /**
+   * Quantized logistic, TFLite int8/uint8 convention (out scale 1/256, int8
+   * zp -128). Mirrors the RTL `QuantActivation` ROM: same formula, same
+   * switch-aware encoding function.
+   */
+  def sigmoidInt(input: Seq[Long], bitWidth: Int, inputScale: Double = 1.0, inputZeroPoint: Int = 0,
+                 rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
+    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth, rounding)
     input.map { v =>
-      val neg = math.max(minVal, -v)
-      val expReal = Math.exp(neg.toDouble)
-      val expBits = encFn(expReal).toLong
-      val expSigned = if (expBits >= (1L << (bitWidth - 1))) expBits - (1L << bitWidth) else expBits
-      val addVal = math.min(maxVal, expSigned + 1)
-      val recReal = if (addVal == 0) 0.0 else 1.0 / addVal.toDouble
-      val recBits = encFn(recReal).toLong
-      if (recBits >= (1L << (bitWidth - 1))) recBits - (1L << bitWidth) else recBits
+      val x = (v - inputZeroPoint) * inputScale
+      bitsToSigned(encFn(1.0 / (1.0 + math.exp(-x)) * 256.0 - 128.0).toLong, bitWidth)
     }
   }
 
@@ -400,16 +405,16 @@ object LayerReplicas {
     sig.map(s => fadd(fmul(s, two, expBits, mantBits), minusOne, expBits, mantBits))
   }
 
-  def tanhInt(input: Seq[Long], bitWidth: Int): Seq[Long] = {
-    val minVal = -(1L << (bitWidth - 1))
-    val maxVal = (1L << (bitWidth - 1)) - 1
-    val mask = if (bitWidth >= 64) -1L else (1L << bitWidth) - 1
+  /**
+   * Quantized tanh, TFLite int8/uint8 convention (out scale 1/128, int8 zp 0).
+   * Same oracle as the RTL `QuantActivation` tanh ROM.
+   */
+  def tanhInt(input: Seq[Long], bitWidth: Int, inputScale: Double = 1.0, inputZeroPoint: Int = 0,
+              rounding: RoundingMode = RoundingConfig.current): Seq[Long] = {
+    val encFn = spinalML.utils.MathLUTs.intEncodeFn(bitWidth, rounding)
     input.map { v =>
-      val x2 = (v * 2) & mask
-      val x2Signed = if (bitWidth < 64 && (x2 & (1L << (bitWidth - 1))) != 0) x2 - (1L << bitWidth) else x2
-      val sig = sigmoidInt(Seq(x2Signed), bitWidth).head
-      val twice = math.max(minVal, math.min(maxVal, 2 * sig))
-      math.max(minVal, math.min(maxVal, twice - 1))
+      val x = (v - inputZeroPoint) * inputScale
+      bitsToSigned(encFn(math.tanh(x) * 128.0).toLong, bitWidth)
     }
   }
 
@@ -525,7 +530,17 @@ object LayerReplicas {
       val sumSq = tree(sqDiffs, expBits, mantBits)
       val variance = divN(sumSq)
 
-      val varDouble = decode(variance, expBits, mantBits)
+      // LAY-04: same epsilon policy as the RTL. Encoded 1e-5 when
+      // representable (BF16), otherwise the smallest positive normal
+      // (E4M3 2^-6, E2M1 1.0) — without it, a zero (or underflowed) variance
+      // reaches rsqrt at input 0 and saturates the inverse standard deviation.
+      val epsF = {
+        val enc = fromDouble(1e-5, expBits, mantBits)
+        if (enc.e == 0) F(false, 1, 0) else enc
+      }
+      val varWithEps = fadd(variance, epsF, expBits, mantBits)
+
+      val varDouble = decode(varWithEps, expBits, mantBits)
       val rsqrtVal = if (varDouble <= 0) PZERO else fromDouble(1.0 / math.sqrt(varDouble), expBits, mantBits)
 
       for (ch <- 0 until channels) {
@@ -540,13 +555,30 @@ object LayerReplicas {
   }
 
   // --- Requantize ---
-  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int): Seq[Long] = {
+  /**
+   * Mirror of RequantizeOp: shift (RNE by default, trunc legacy) then
+   * saturation. RNE on an arithmetic shift rounds guard/sticky ties to even;
+   * the switch follows [[spinalML.RoundingConfig]] like the elaborated RTL.
+   */
+  def requantizeScalar(v: Long, shift: Int, outBits: Int,
+                       rounding: RoundingMode = RoundingConfig.current): Long = {
     val maxVal = (1L << (outBits - 1)) - 1
     val minVal = -(1L << (outBits - 1))
-    input.map { v =>
-      val shifted = v >> shift
-      math.max(minVal, math.min(maxVal, shifted))
-    }
+    val useRne = rounding == RoundingMode.Rne
+    val shifted =
+      if (shift <= 0) v
+      else if (!useRne) v >> shift
+      else {
+        val truncated = v >> shift
+        val rem = v - (truncated << shift)
+        val half = 1L << (shift - 1)
+        if (rem > half || (rem == half && (truncated & 1L) != 0)) truncated + 1 else truncated
+      }
+    math.max(minVal, math.min(maxVal, shifted))
   }
+
+  def requantizeInt(input: Seq[Long], shift: Int, outBits: Int,
+                    rounding: RoundingMode = RoundingConfig.current): Seq[Long] =
+    input.map(requantizeScalar(_, shift, outBits, rounding))
 }
 
