@@ -27,7 +27,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | ⚪ **FAUX POSITIF** | P1 (Tiling), P3 (Knobs lanes) | ⚪ **FAUX POSITIF DÉMONTRÉ** |
 | [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | ✅ **CORRIGÉ** |
 | [BUG-DDR-10](#bug-ddr-10--flakiness-du-banc-dmasdbtb-lié-à-labsence-de-resetflush-du-streamer) | Flakiness non-déterministe du banc DDR `DmaSdbTb` (stale FIFO) | 🟢 **TEST** | P0 (Filet de sécurité) | ✅ **CORRIGÉ** |
-| [BUG-DDR-11](#bug-ddr-11--désactivation-totale-en-ci-des-suites-end-to-end-ddr-archivées) | Exclusion complète des suites de tests end-to-end DDR du build CI | 🟢 **TEST** | P0 (Priorité 0 Wave 6) | **Dette de couverture** |
+| [BUG-DDR-11](#bug-ddr-11--désactivation-totale-en-ci-des-suites-end-to-end-ddr-archivées) | Exclusion complète des suites de tests end-to-end DDR du build CI | 🟢 **TEST** | P0 (Priorité 0 Wave 6) | ✅ **INTÉGRÉ (AcceleratorTest)** |
 
 ---
 
@@ -366,6 +366,12 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   - Les évolutions récentes (notamment la **Wave 5 sur les arrondis RNE**, le refactoring des divisions entières et la requantification) **n'ont jamais été testées sur le pipeline DDR**.
   - On ignore aujourd'hui si des régressions fonctionnelles affectent le comportement de la DDR sous ces nouveaux modes d'arrondi.
 - **Impact Wave 6** : Constitue l'objectif n°1 de la **Priorité 0 (Filet de sécurité)** du plan Wave 6.
+- **Résolution appliquée & validée** :
+  1. Plutôt que de réimporter du vieux code monolithique et spécifique à MNIST (`archive/test/examples/`), les protocoles matériels essentiels ont été extraits et intégrés sous forme de tests modernes, génériques et déterministes dans [`spinalML/test/src/spinalML/nn/AcceleratorTest.scala`](file:///e:/spinalML/spinalML/test/src/spinalML/nn/AcceleratorTest.scala) :
+     - **Résidence des poids** (`Accelerator: Weight residency`) : validation du mode CSR `0x10 = 1` avec trafic DDR nul en régime établi et rechargement explicite via CSR `0x14 = 1`.
+     - **Tiling vertical par bandes** (`Accelerator: Vertical band tiling`) : validation du découpage en bandes (`tileHeight = 2`), continuité des coutures (*seams*) et conformité bit-exacte avec `ModelReplica`.
+     - **Préchargement anticipé (*eager prefetch*)** (`Accelerator: Weight eager prefetch`) : validation du mode CSR `0x10 = 3` (`PREFETCH_EN = 1`), remplissage en arrière-plan de la banque IDLE avant `START`, zéro trafic DDR durant l'inférence active et basculement fluide sur la nouvelle banque.
+  2. Validation complète sur la suite `spinalML.nn.AcceleratorTest` (8 tests, 81.4s) ✅ et `spinalML.accelerator.MLAcceleratorTest` (68.5s) ✅. Statut : ✅ **INTÉGRÉ & VALIDÉ DANS LES TESTS GÉNÉRIQUES**.
 
 ---
 
