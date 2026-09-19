@@ -25,7 +25,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
 | [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | ✅ **CORRIGÉ** |
 | [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | 🟡 **MOYEN** | P1 (Tiling), P3 (Knobs lanes) | **Fragilité protocolaire** |
-| [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | **Conformité AXI4** |
+| [BUG-DDR-09](#bug-ddr-09--violation-du-protocole-axi4-sur-bid-dans-ddradapter-et-bramadapter) | Forçage en dur de `b.id := 0` (Non-conformité AXI4) dans les adaptateurs | 🟡 **MOYEN** | P5 (Interconnexion SoC / Bring-up) | ✅ **CORRIGÉ** |
 | [BUG-DDR-10](#bug-ddr-10--flakiness-du-banc-dmasdbtb-lié-à-labsence-de-resetflush-du-streamer) | Flakiness non-déterministe du banc DDR `DmaSdbTb` (stale FIFO) | 🟢 **TEST** | P0 (Filet de sécurité) | **Dette de test / Flakiness** |
 | [BUG-DDR-11](#bug-ddr-11--désactivation-totale-en-ci-des-suites-end-to-end-ddr-archivées) | Exclusion complète des suites de tests end-to-end DDR du build CI | 🟢 **TEST** | P0 (Priorité 0 Wave 6) | **Dette de couverture** |
 
@@ -304,8 +304,13 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   Dans `DdrAdapter`, l'ID du maître est écrasé par `0` lors de la transmission vers le contrôleur externe.
   Si le maître émetteur (ou un switch AXI interconnectant plusieurs accélérateurs) utilise un identifiant différent de 0, la réponse B arrive avec un mauvais ID, désynchronisant ou faisant planter l'interconnect AXI.
 - **Impact Wave 6** : Incompatibilité avec les interconnects AXI4 multi-maîtres lors de l'intégration système (Priorité 5).
-- **Correction recommandée** :
-  Enregistrer `aw.id` lors du handshake `aw.fire` et le propager sur `b.payload.id`.
+- **Correction appliquée & validée** :
+  1. Mémorisation et propagation de l'ID d'écriture AXI :
+     - Dans [`BramAdapter.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/BramAdapter.scala) et [`SramAsicAdapter.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/SramAsicAdapter.scala) : ajout du registre `awIdR = Reg(UInt(axiConfig.idWidth bits))` échantillonné lors du handshake `when(io.axi.aw.valid && io.axi.aw.ready) { awIdR := io.axi.aw.payload.id }`.
+     - Assignation de la réponse d'écriture `io.axi.b.payload.id := awIdR`, assurant la conformité stricte avec la spécification ARM AXI4 (IHI 0022E §A3.4.3).
+     - Dans [`DdrAdapter.scala`](file:///e:/spinalML/spinalML/src/spinalML/memory/DdrAdapter.scala) : mémorisation et propagation de l'ID d'écriture vers le contrôleur externe `extIo.ddrMaster.aw.payload.id := Mux(busHost, U(0, axiConfig.idWidth bits), accIdR)` et ré-acheminement de `extIo.ddrMaster.b.payload` vers `io.axi.b.payload`.
+  2. Validée par le test unitaire Scala `MemoryAdapterTest` (« BUG-DDR-09: AXI4 write response B.ID must reflect AW.ID in BramAdapter and SramAsicAdapter ») validant bit-exact le renvoi de transactions d'ID non nuls (`testId = 7` sur BramAdapter, `testId = 11` sur SramAsicAdapter). Non-régression formelle BMC `AxiReadMemFormal` (26.1s). Statut : ✅ **CORRIGÉ**.
+
 
 ---
 

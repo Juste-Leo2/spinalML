@@ -122,6 +122,71 @@ class MemoryAdapterTest extends AnyFunSuite {
     }
   }
 
+  test("BUG-DDR-09: AXI4 write response B.ID must reflect AW.ID in BramAdapter and SramAsicAdapter") {
+    val words = 64
+    // 1. Check BramAdapter
+    SimConfig.compile(new BramAdapter(axiConfig, memoryWords = words, imgBase = 0x1000, weightBase = 0x2000)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.wrEnable #= false
+      dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      val testId = 7
+      dut.io.axi.aw.valid #= true
+      dut.io.axi.aw.payload.addr #= 0x1000
+      dut.io.axi.aw.payload.len #= 0
+      dut.io.axi.aw.payload.id #= testId
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.aw.ready.toBoolean)
+      dut.io.axi.aw.valid #= false
+
+      dut.io.axi.w.valid #= true
+      dut.io.axi.w.payload.data #= BigInt("1234567890ABCDEF", 16)
+      dut.io.axi.w.payload.strb #= 0xFF
+      dut.io.axi.w.payload.last #= true
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.w.ready.toBoolean)
+      dut.io.axi.w.valid #= false
+
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.b.valid.toBoolean)
+      assert(dut.io.axi.b.payload.id.toLong == testId,
+        s"BramAdapter B.ID was ${dut.io.axi.b.payload.id.toLong}, expected $testId (AXI4 violation)")
+    }
+
+    // 2. Check SramAsicAdapter
+    SimConfig.compile(new SramAsicAdapter(axiConfig, memoryWords = words, imgBase = 0x1000, weightBase = 0x2000, pdk = PdkFamily.Sky130)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.wrEnable #= false
+      dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
+      dut.clockDomain.waitSampling(5)
+
+      val testId = 11
+      dut.io.axi.aw.valid #= true
+      dut.io.axi.aw.payload.addr #= 0x1000
+      dut.io.axi.aw.payload.len #= 0
+      dut.io.axi.aw.payload.id #= testId
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.aw.ready.toBoolean)
+      dut.io.axi.aw.valid #= false
+
+      dut.io.axi.w.valid #= true
+      dut.io.axi.w.payload.data #= BigInt("CAFEBABE00112233", 16)
+      dut.io.axi.w.payload.strb #= 0xFF
+      dut.io.axi.w.payload.last #= true
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.w.ready.toBoolean)
+      dut.io.axi.w.valid #= false
+
+      dut.clockDomain.waitSamplingWhere(dut.io.axi.b.valid.toBoolean)
+      assert(dut.io.axi.b.payload.id.toLong == testId,
+        s"SramAsicAdapter B.ID was ${dut.io.axi.b.payload.id.toLong}, expected $testId (AXI4 violation)")
+    }
+  }
+
   test("DdrAdapter: Host write translation to AXI master write") {
     SimConfig.compile(new DdrAdapter(axiConfig)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
