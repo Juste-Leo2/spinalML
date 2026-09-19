@@ -46,9 +46,11 @@ class DoubleBufferStreamerFormal extends Component {
     }
     
     // 4. Handshake NextTile logic
-    // nextTile is combinatorial and should only be asserted when the counter overflows this cycle
+    // BUG-DDR-07: nextTile must only be asserted when the very last word of the tile is delivered downstream
+    val popFire = dut.io.streamOut.fire.pull()
+    val popWillOverflow = dut.popCounter.willOverflowIfInc.pull()
     when(dut.io.nextTile) {
-      assert(isReading && reqStreamFire && willOverflow, "nextTile asserted spuriously!")
+      assert(popFire && popWillOverflow, "nextTile asserted spuriously before full tile delivery!")
     }
   }
 }

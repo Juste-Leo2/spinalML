@@ -136,6 +136,7 @@ class DmaSdbDut(axiConfig: Axi4Config) extends Component {
   sdb.io.readAddr := streamer.io.readAddr
   streamer.io.readData := sdb.io.readData
   sdb.io.reArm := io.cmd.fire
+  streamer.io.reArm := io.cmd.fire
   sdb.io.residentHold.foreach(_ := False)
   sdb.io.stageRequest.foreach(_ := False)
   io.tileFilledOut := sdb.io.tileFilled
@@ -187,12 +188,8 @@ class DmaSdbTb extends AnyFunSuite {
     (sign * mag).toFloat
   }
 
-  // FLAKY — seed-dependent race in DmaSdbDut (streamer repeats beat 0:
-  // 2832/2880 with seed 2094212935/2014737886, exact with 1481499482).
-  // See docs/bugs/2026-08-prefetch-eager-stale-fifo-session.md §5bis.
-  // TODO: de-flake after the LUT re-implementation (probe cmd.fire /
-  // reArm / startGate / readAddr in the DUT).
-  ignore("DMA->SDB full path serves the W4A8 FC weight exactly") {
+  // De-flaked by connecting streamer.io.reArm := io.cmd.fire (BUG-DDR-10).
+  test("DMA->SDB full path serves the W4A8 FC weight exactly") {
     val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
     val fw = Mnistw4a8Weights.fcW.flatten // 2880 floats
     val bytes = fw.map(fp8Bits)

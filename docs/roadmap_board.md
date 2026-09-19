@@ -52,10 +52,24 @@ Adding support for a new board involves two configuration files in the [`boards/
    ```
 
 2. **Pin Constraints (`boards/constraints/<slug>.<ext>`)**:
-   Physical pin mappings for:
-   - System clock input
-   - Hardware reset pin (active low or high)
-   - UART TX / RX pins (for host communication and inference streaming)
-   - Status LEDs (optional, for idle/busy/done visual indicators)
+    Physical pin mappings for:
+    - System clock input
+    - Hardware reset pin (active low or high)
+    - UART TX / RX pins (for host communication and inference streaming)
+    - Status LEDs (optional, for idle/busy/done visual indicators)
+
+## 4. Memory per Board (Phase-3 DDR Plumbing)
+
+Source of truth: the `memory` block of each `boards/<slug>.json`
+(parsed by `cli/spinalml_cli/board.py` into `config["memory"]`), not this
+table. Conventions: `onchip_words` (64-bit words) + `onchip_addr`
+(`imgBase`/`weightBase`, default `0x10000`/`0x20000`, cf. `nn/MemorySpec`),
+`ddr.present = false` until the external DRAM is pinned (`.cst`/`.xdc`),
+constrained and calibrated on silicon (see `docs/ddr_impl.md` Phase 5b).
+
+| Board | On-chip | External DRAM |
+| :--- | :--- | :--- |
+| Sipeed Tang Primer 20K | 4096 words (BSRAM 46) | not present (`ddr.present = false`, `.cst` = clk/reset/UART only) |
+| All other targets | — (no `memory` block yet, loader falls back to legacy defaults) | — |
 
 If you have verified SpinalML on a new board, please open a pull request with your board profile and reproduction steps!

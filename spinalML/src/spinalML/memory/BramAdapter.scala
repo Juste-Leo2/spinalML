@@ -101,15 +101,18 @@ class BramAdapter(
   val bValidR    = RegInit(False)
   val wRemaining = Reg(UInt(beatCountW bits)) init (0)
   val wAddrR     = Reg(UInt(axiConfig.addressWidth bits)) init (0)
+  val awIdR      = Reg(UInt(axiConfig.idWidth bits)) init (0)
 
   io.axi.aw.ready := !awPending && !bValidR
   when(io.axi.aw.valid && io.axi.aw.ready) {
     awPending  := True
     wRemaining := (io.axi.aw.payload.len +^ 1).resize(beatCountW bits)
     wAddrR     := io.axi.aw.payload.addr
+    awIdR      := io.axi.aw.payload.id
   }
 
   io.axi.w.ready := awPending && !bValidR && !io.wrEnable
+  io.wrReady := True
 
   // Single physical write port shared by the host loader and the accelerator
   // write-back (host priority; the accelerator beat is stalled, never
@@ -140,6 +143,6 @@ class BramAdapter(
   }
 
   io.axi.b.valid        := bValidR
-  io.axi.b.payload.id   := 0
+  io.axi.b.payload.id   := awIdR
   io.axi.b.payload.resp := B"00"
 }

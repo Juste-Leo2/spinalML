@@ -81,6 +81,42 @@ case class DMAWriterPartialTestWrapper() extends Component {
   io.axiMaster.r.ready := False
 }
 
+// Sub-byte transfer wrapper: 8 SInt(4 bits) elements = 32 bits = 4 bytes on a 64-bit AXI bus.
+// The single W beat must carry w.strb = 0x0F (4 bytes valid), NOT 0x00.
+case class DMAWriterSubByteTestWrapper() extends Component {
+  val axiDataWidth = 64
+  val inLanes = 4
+  val axiConfig = Axi4Config(
+    addressWidth = 32,
+    dataWidth = axiDataWidth,
+    idWidth = 4
+  )
+
+  val dataType = SInt(4 bits)
+  val io = new Bundle {
+    val cmd       = slave(Stream(WriteRequest(32)))
+    val inStream  = slave(Tensor(dataType, Seq(8), inLanes))
+    val axiMaster = master(Axi4(axiConfig))
+    val busy      = out Bool()
+    val done      = out Bool()
+  }
+
+  val writer = DMAWriter(dataType, Seq(8), inLanes, axiConfig, maxBurstBeats = 4)
+  writer.io.cmd << io.cmd
+  writer.io.inStream <> io.inStream
+  io.busy := writer.io.busy
+  io.done := writer.io.done
+
+  io.axiMaster.aw << writer.io.axiMaster.aw
+  io.axiMaster.w  << writer.io.axiMaster.w
+  writer.io.axiMaster.b << io.axiMaster.b
+
+  // Read channels tied off
+  io.axiMaster.ar.valid := False
+  io.axiMaster.ar.payload.assignDontCare()
+  io.axiMaster.r.ready := False
+}
+
 class DMAWriterTest extends AnyFunSuite {
 
   test("DMAWriter Hardware Sim - Basic Burst Write") {
@@ -213,6 +249,72 @@ class DMAWriterTest extends AnyFunSuite {
         assert(memWord == expectedWord,
           f"Boundary Word $w at 0x$wordAddr%X: read 0x$memWord%016X != expected 0x$expectedWord%016X")
       }
+    }
+  }
+
+  test("DMAWriter Hardware Sim - Sub-byte 4-bit write strobe (BUG-DDR-03)") {
+    SimConfig.withVerilator.workspacePath("sim_build").compile {
+      val dut = DMAWriterSubByteTestWrapper()
+      dut.setDefinitionName("DMAWriterSubByteTestComp")
+      dut
+    }.doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.cmd.valid #= false
+      dut.io.cmd.address #= 0
+      dut.io.cmd.length #= 0
+      dut.io.inStream.stream.valid #= false
+
+      val memorySim = AxiMemorySim(
+        axi = dut.io.axiMaster,
+        clockDomain = dut.clockDomain,
+        config = AxiMemorySimConfig(maxOutstandingReads = 4)
+      )
+      memorySim.start()
+      dut.clockDomain.waitSampling(5)
+
+      val baseAddr = 0x3000
+      // Pre-fill memory with sentinel bytes 0xEE to detect strobe masking
+      for (i <- 0 until 8) {
+        memorySim.memory.writeBigInt(baseAddr + i, BigInt(0xEE), 1)
+      }
+
+      // 8 elements of 4-bit nibbles: 1, 2, 3, 4, 5, 6, 7, 0 (fits SInt[4 bits] [-8, 7])
+      val testValues = Seq[BigInt](1, 2, 3, 4, 5, 6, 7, 0)
+
+      dut.io.cmd.valid #= true
+      dut.io.cmd.address #= baseAddr
+      dut.io.cmd.length #= 0 // 1 beat
+      dut.clockDomain.waitSamplingWhere(dut.io.cmd.ready.toBoolean)
+      dut.io.cmd.valid #= false
+
+      // Stream 8 elements in 2 cycles of 4 lanes
+      var elemIdx = 0
+      while (elemIdx < 8) {
+        dut.io.inStream.stream.valid #= true
+        for (l <- 0 until 4) {
+          dut.io.inStream.stream.payload(l) #= testValues(elemIdx + l)
+        }
+        dut.clockDomain.waitSamplingWhere(dut.io.inStream.stream.ready.toBoolean)
+        elemIdx += 4
+      }
+      dut.io.inStream.stream.valid #= false
+
+      var cycles = 0
+      while (dut.io.busy.toBoolean && cycles < 100) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(!dut.io.busy.toBoolean, "DMAWriter timed out on sub-byte test")
+
+      // Check byte strobes: bytes 0..3 must be written (4 bytes = 32 bits = 8 nibbles),
+      // bytes 4..7 must remain untouched (0xEE)
+      val memWord = memorySim.memory.readBigInt(baseAddr, 8)
+      // Nibbles: 1, 2 in byte 0 -> 0x21; 3, 4 in byte 1 -> 0x43; 5, 6 in byte 2 -> 0x65; 7, 0 in byte 3 -> 0x07
+      val expectedLow32 = BigInt("07654321", 16)
+      val expectedWord = expectedLow32 | (BigInt("EEEEEEEE", 16) << 32)
+      assert(memWord == expectedWord,
+        f"Read 0x$memWord%016X != expected 0x$expectedWord%016X (strobe was 0x00 if bytes 0-3 are still 0xEE)")
     }
   }
 

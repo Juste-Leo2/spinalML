@@ -26,6 +26,13 @@ class UartSoC[T <: Data](
   val memoryWords: Int = 4096,
   val imgBase: Int    = 0x10000,
   val weightBase: Int = 0x20000,
+  // Phase-1 DDR plumbing note (docs/ddr_impl.md): the SoC `target` selects the
+  // default memory implementation, while `acceleratorFactory` independently
+  // carries `Accelerator.target` into `Sequential`. Keep both consistent by
+  // hand for now (e.g. ASIC SoC + Accelerator(Target.ASIC(...))); Phase 2
+  // (MemorySpec) will construct both from a single descriptor instead of
+  // relying on two defaults. No strict require here: existing tops elaborate
+  // with the Simulation default inside FPGA/ASIC SoCs in unit tests.
   val memoryAdapterFactory: Option[(Axi4Config) => spinalML.memory.MemoryAdapter] = None,
   val outCount: Int   = 10,
   val version: Int    = 0x01,

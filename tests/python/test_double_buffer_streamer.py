@@ -81,8 +81,14 @@ async def cocotb_test_double_buffer_streamer(dut):
 
 def test_double_buffer_streamer_runner():
     """Pytest runner for test_double_buffer_streamer"""
-    # 1. Compile the Scala code to Verilog
-    v_file = run_mill("spinalML.memory.DoubleBufferStreamerTest", "", "DoubleBufferStreamer")
+    # Filter on generate_verilog ONLY: the Scala suite also elaborates a
+    # depth=8 instance for its sim test under the same toplevel filename, and
+    # run_mill copies the newest DoubleBufferStreamer.v it finds. Running the
+    # whole suite would intermittently hand cocotb the depth=8 build while
+    # this bench drives 16 beats (repeat-8 data mismatch). Rule going forward:
+    # any new sim elaboration in DoubleBufferStreamerTest must use a distinct
+    # setDefinitionName so this filename stays unique to the depth=16 build.
+    v_file = run_mill("spinalML.memory.DoubleBufferStreamerTest", "generate_verilog", "DoubleBufferStreamer")
     
     from utils.test_layers_utils import safe_run_sim as run
     run(
