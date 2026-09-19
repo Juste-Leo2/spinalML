@@ -28,6 +28,7 @@ abstract class MemoryAdapter(val axiConfig: Axi4Config) extends Component {
     val wrAddr   = in(UInt(32 bits))
     val wrData   = in(Bits(axiConfig.dataWidth bits))
     val wrStrb   = in(Bits((axiConfig.dataWidth / 8) bits))
+    val wrReady  = out(Bool())
   }
 }
 

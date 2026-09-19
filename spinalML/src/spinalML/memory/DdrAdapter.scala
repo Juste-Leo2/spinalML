@@ -53,7 +53,11 @@ class DdrAdapter(
   val accAddrR      = Reg(UInt(axiConfig.addressWidth bits)) init(0)
   val accWRemaining = Reg(UInt(beatCountW bits)) init(0)
 
-  when(io.wrEnable) {
+  val accBusy = accAwPending || accStreaming || accWaitB
+  val hostWrReady = !hostActive && !accBusy
+  io.wrReady := hostWrReady
+
+  when(io.wrEnable && hostWrReady) {
     hostActive := True
     hostAwDone := False
     hostWDone  := False
@@ -62,7 +66,6 @@ class DdrAdapter(
     wrStrbReg  := io.wrStrb
   }
 
-  val accBusy = accAwPending || accStreaming || accWaitB
   val busHost = hostActive && !accBusy
 
   // Accelerator AW is accepted only while the bus is fully idle (host first).

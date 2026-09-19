@@ -21,7 +21,7 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
 | [BUG-DDR-02](#bug-ddr-02--absence-dincrément-de-ladresse-de-sortie-en-mode-flux-continu-writetoddr) | Écrasement systématique des sorties en mode continu `writeToDdr` | 🔴 **CRITIQUE** | P1 (Advanced Tiling), P2 (Flux continu) | ✅ **CORRIGÉ** |
 | [BUG-DDR-03](#bug-ddr-03--masque-doctets-wstrb-nul-sur-le-dernier-beat-dmawriter-pour-les-types-4-bits) | Masque d'octets `w.strb` nul sur le dernier battement `DMAWriter` (< 8 bits) | 🔴 **CRITIQUE** | P1 (Spill d'accumulateurs), P3 (Scaling W4A8/FP4) | ✅ **CORRIGÉ** |
 | [BUG-DDR-04](#bug-ddr-04--absence-de-barrière-raw-et-de-port-de-lecture-hôte-dans-ddradapter) | Absence de barrière RAW et de port de lecture hôte dans `DdrAdapter` | 🟠 **MAJEUR** | P1 (Spill/Read-Modify-Write), P5 (Bring-up DDR3) | **Lacune architecturale** |
-| [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | **Lacune architecturale** |
+| [BUG-DDR-05](#bug-ddr-05--absence-de-contrôle-de-flux-wrready-sur-le-port-décriture-hôte-de-ddradapter) | Absence de backpressure `wrReady` sur l'écriture hôte de `DdrAdapter` | 🟠 **MAJEUR** | P5 (Bring-up DDR3 / Pilote hôte) | ✅ **CORRIGÉ** |
 | [BUG-DDR-06](#bug-ddr-06--crash-délaboration-sur-lidwidth-de-larbitre-axi-read-au-delà-de-8-couches) | Crash d'élaboration sur `idWidth` de l'arbitre AXI Read dès > 8 couches | 🟠 **MAJEUR** | P3 (Resource Scaling), P0 (Tests) | ✅ **CORRIGÉ** |
 | [BUG-DDR-07](#bug-ddr-07--émission-prématurée-de-nexttile-dans-doublebufferstreamer) | Émission prématurée de `nextTile` dans `DoubleBufferStreamer` sous backpressure | 🟡 **MOYEN** | P2 (Flux continu), P4 (Prefetch / Folding) | **Bug de synchronisation** |
 | [BUG-DDR-08](#bug-ddr-08--risque-de-deadlock-dans-dmareader2d-si-rowwords--axilanes--outlanes--0) | Risque d'interblocage dans `DMAReader2D` si les battements de ligne ne divisent pas `outLanes` | 🟡 **MOYEN** | P1 (Tiling), P3 (Knobs lanes) | **Fragilité protocolaire** |
@@ -188,8 +188,11 @@ L'analyse approfondie du code existant (`DdrAdapter`, `DMAWriter`, `DMAReader`, 
   L'interface abstraite `MemoryAdapter.io` ne fournit aucun signal `wrReady` en retour vers l'hôte.
   Si l'hôte ou la passerelle UART envoie un nouveau mot mémoire via `io.wrEnable` pendant que la transaction précédente est encore en vol ou en attente d'arbitrage (`accBusy`), `wrAddrReg`, `wrDataReg` et `wrStrbReg` sont écrasés dans le même cycle. Le mot mémoire précédent est irrémédiablement perdu sans aucune notification d'erreur.
 - **Impact Wave 6** : Risque de corruption des poids et des images lors du flashage ou du transfert haute vitesse vers la DDR3 (Priorité 5).
-- **Correction recommandée** :
-  Étendre `MemoryAdapter.io` avec un signal `val wrReady = out(Bool())` et le piloter dans `DdrAdapter` par `!hostActive && !accBusy`.
+- **Correction appliquée & validée** :
+  1. Ajout de `val wrReady = out(Bool())` sur l'interface commune `MemoryAdapter.io`.
+  2. Pilotage dans `DdrAdapter` par `val hostWrReady = !hostActive && !accBusy` et protection de l'échantillonnage par `when(io.wrEnable && hostWrReady)`.
+  3. Maintien de `io.wrReady := True` sur `BramAdapter` et `SramAsicAdapter` (écritures synchrones 1 cycle).
+  Validée par le test de simulation dédié `MemoryAdapterTest` (« DdrAdapter: Flow control wrReady backpressures host writes until AXI b.valid ») confirmant le blocage des écritures prématurées et la non-corruption d'une transaction en vol. Statut : ✅ **CORRIGÉ**.
 
 ---
 

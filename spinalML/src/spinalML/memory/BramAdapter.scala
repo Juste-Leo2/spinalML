@@ -110,6 +110,7 @@ class BramAdapter(
   }
 
   io.axi.w.ready := awPending && !bValidR && !io.wrEnable
+  io.wrReady := True
 
   // Single physical write port shared by the host loader and the accelerator
   // write-back (host priority; the accelerator beat is stalled, never

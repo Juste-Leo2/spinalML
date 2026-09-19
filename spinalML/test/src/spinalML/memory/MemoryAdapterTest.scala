@@ -165,6 +165,71 @@ class MemoryAdapterTest extends AnyFunSuite {
     }
   }
 
+  test("DdrAdapter: Flow control wrReady backpressures host writes until AXI b.valid") {
+    SimConfig.compile(new DdrAdapter(axiConfig)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+
+      dut.io.wrEnable #= false
+      dut.io.wrAddr #= 0
+      dut.io.wrData #= 0
+      dut.io.wrStrb #= 0xFF
+      dut.io.axi.ar.valid #= false
+      dut.io.axi.aw.valid #= false
+      dut.io.axi.w.valid #= false
+      dut.io.axi.b.ready #= true
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.extIo.ddrMaster.w.ready #= false
+      dut.extIo.ddrMaster.r.valid #= false
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.clockDomain.waitSampling(5)
+
+      // Initially, DDR adapter must be ready for host writes
+      assert(dut.io.wrReady.toBoolean, "DdrAdapter must be wrReady initially when idle")
+
+      // First host write
+      dut.io.wrEnable #= true
+      dut.io.wrAddr #= 0x80000000L
+      dut.io.wrData #= BigInt("1111111111111111", 16)
+      dut.clockDomain.waitSampling()
+      dut.io.wrEnable #= false
+      dut.clockDomain.waitSampling()
+
+      assert(!dut.io.wrReady.toBoolean, "DdrAdapter must drop wrReady while host write is in-flight")
+
+      // Attempting an untimely write while !wrReady must NOT clobber in-flight transaction
+      dut.io.wrEnable #= true
+      dut.io.wrAddr #= 0x80000008L
+      dut.io.wrData #= BigInt("2222222222222222", 16)
+      dut.clockDomain.waitSampling()
+      dut.io.wrEnable #= false
+
+      // In-flight AXI signals must still carry the FIRST write's address and data
+      assert(dut.extIo.ddrMaster.aw.valid.toBoolean)
+      assert(dut.extIo.ddrMaster.aw.payload.addr.toLong == 0x80000000L, "aw.addr was clobbered by untimely write!")
+      assert(dut.extIo.ddrMaster.w.payload.data.toBigInt == BigInt("1111111111111111", 16), "w.data was clobbered by untimely write!")
+
+      // Complete the first transaction on AXI
+      dut.extIo.ddrMaster.aw.ready #= true
+      dut.extIo.ddrMaster.w.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.aw.ready #= false
+      dut.extIo.ddrMaster.w.ready #= false
+
+      // Still waiting for B response: wrReady must remain false
+      assert(!dut.io.wrReady.toBoolean, "wrReady must remain false until B response arrives")
+
+      // Send B response
+      dut.extIo.ddrMaster.b.valid #= true
+      dut.extIo.ddrMaster.b.payload.resp #= 0
+      dut.clockDomain.waitSampling()
+      dut.extIo.ddrMaster.b.valid #= false
+      dut.clockDomain.waitSampling()
+
+      // Now the adapter must be wrReady again!
+      assert(dut.io.wrReady.toBoolean, "DdrAdapter must return to wrReady after B response")
+    }
+  }
+
 
 
 
