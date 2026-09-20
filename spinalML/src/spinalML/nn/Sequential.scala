@@ -577,7 +577,18 @@ case class Sequential(
           (r * U(sliceBytes, axiConfig.addressWidth bits)).resize(axiConfig.addressWidth bits)
         case None => U(0, axiConfig.addressWidth bits)
       }
-      reqW.address := io.weightsBaseAddress + wRegionOffset + spillPassOff
+      // S2d-2 rerun lesson: a START-triggered fetch is ALWAYS pass 0, hence
+      // slice 0 — never trust the pass-index register here. That register
+      // follows ctrl.passIdx with a one-cycle delay, so at the START edge of
+      // a second run it still holds the PREVIOUS run's final index (the
+      // controller resets cnt on the same edge the follow samples the old
+      // value). The run-2 pass-0 W fetch would then read the last slice
+      // while the A window stays on slice 0 — silent wrong GEMM, y and the
+      // spill region both shifted (RERUN replay). The mux is stable for
+      // the whole sticky START request window (startPathW tracks
+      // startTriggers.valid, which clears exactly on reqW.fire).
+      val startSliceOffW = Mux(startPathW, U(0, axiConfig.addressWidth bits), spillPassOff)
+      reqW.address := io.weightsBaseAddress + wRegionOffset + startSliceOffW
       val elementsPerBeatW = axiConfig.dataWidth / wType.getBitsWidth
       require(elementsPerBeatW >= 1,
         s"Weight dtype (${wType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported weight element size")

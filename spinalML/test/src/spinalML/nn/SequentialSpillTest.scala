@@ -105,7 +105,8 @@ class SequentialSpillTest extends AnyFunSuite {
 
   def runCase(spec: Seq[LayerSpec], prog: Seq[(Long, Seq[Int])], oracleY: Seq[Int],
       oraclePartials: Option[Seq[Int]], label: String,
-      inShape: Seq[Int] = Seq(1, 4), capacity: Option[Long] = Some(128)): Unit = {
+      inShape: Seq[Int] = Seq(1, 4), capacity: Option[Long] = Some(128),
+      runs: Int = 1): Unit = {
     val compiled = SimConfig.withWave.compile(
       new Accelerator(
         dataType = I8(),
@@ -175,7 +176,27 @@ class SequentialSpillTest extends AnyFunSuite {
       writeCsr(0x0C, weightBase)
       // 0x34 spill base defaults to the MemorySpec descriptor (init path
       // under test — no CSR write here).
-      writeCsr(0x00, 1)
+
+      def readCsr(addr: BigInt): BigInt = {
+        dut.io.ctrlBus.ar.valid #= true
+        dut.io.ctrlBus.ar.payload.addr #= addr
+        dut.io.ctrlBus.r.ready #= true
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.ar.ready.toBoolean)
+        dut.io.ctrlBus.ar.valid #= false
+        dut.clockDomain.waitSamplingWhere(dut.io.ctrlBus.r.valid.toBoolean)
+        val data = dut.io.ctrlBus.r.payload.data.toBigInt
+        dut.io.ctrlBus.r.ready #= false
+        dut.clockDomain.waitSampling()
+        data
+      }
+
+      // S2d-2 run coherence: the same inference re-runs back-to-back (one
+      // START per run, DDR left programmed). runs=1 default keeps every
+      // existing case single-shot.
+      var runTag = label
+      for (run <- 1 to runs) {
+        if (runs > 1) runTag = s"$label-run$run"
+        writeCsr(0x00, 1)
 
       // Authoritative controller trace (bench reads, not VCD): levels and
       // pulses around both preludes. Prints on change only.
@@ -187,7 +208,7 @@ class SequentialSpillTest extends AnyFunSuite {
         val s = s"pf=${ctrl.io.passFirst.toBoolean} pl=${ctrl.io.passLast.toBoolean} " +
           s"pi=${ctrl.io.passIdx.toInt} rw=${ctrl.io.refetchW.toBoolean} " +
           s"br=${ctrl.io.biasReArm.toBoolean} ra=${ctrl.io.restartA.toBoolean}"
-        if (s != lastCtl) { println(s"S2c ctl [$label cyc=$cycles]: $s"); lastCtl = s }
+        if (s != lastCtl) { println(s"S2c ctl [$runTag cyc=$cycles]: $s"); lastCtl = s }
       }
 
       // Collect up to 8 beats
@@ -213,39 +234,54 @@ class SequentialSpillTest extends AnyFunSuite {
         if (label != "P=1") traceCtl()
         val wab = (winLoSig.toInt, aBeatSig.toInt)
         if (wab != lastWin) {
-          println(s"S2c winmon [$label cyc=$cycles]: winLo=${wab._1} aBeat=${wab._2} pi=${ctrl.io.passIdx.toInt}")
+          println(s"S2c winmon [$runTag cyc=$cycles]: winLo=${wab._1} aBeat=${wab._2} pi=${ctrl.io.passIdx.toInt}")
           lastWin = wab
         }
         if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
-          println(s"S2c busmon [$label cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
+          println(s"S2c busmon [$runTag cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
         }
         if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean) {
-          println(s"S2c busmon [$label cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
+          println(s"S2c busmon [$runTag cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
         }
         tick(); cycles += 1
         if (cycles % 4 == 0) {
           val mon = memSim.memory.readBigInt(spillBase, 4)
-          if (mon != lastMon) { println(s"S2c spillmon [$label cyc=$cycles]: region=0x${mon.toString(16)}"); lastMon = mon }
+          if (mon != lastMon) { println(s"S2c spillmon [$runTag cyc=$cycles]: region=0x${mon.toString(16)}"); lastMon = mon }
         }
       }
-      println(s"S2c e2e debug [$label]: all-y=${collected.toSeq}")
+      println(s"S2c e2e debug [$runTag]: all-y=${collected.toSeq}")
       assert(collected.length == 4, s"expected exactly 4 y beats, got ${collected.length}: ${collected.toSeq}")
 
       // Spill region: pass-0 partials, verbatim (final pass reads, never
       // rewrites). Signed bytes, little-endian. Read BEFORE asserting y so
       // a failure localizes to pass 0 (region) vs pass 1 (y).
       val region = memSim.memory.readBigInt(spillBase, 4)
-      println(s"S2c e2e debug [$label]: y=${collected.toSeq} oracleY=$oracleY region=0x${region.toString(16)}")
+      println(s"S2c e2e debug [$runTag]: y=${collected.toSeq} oracleY=$oracleY region=0x${region.toString(16)}")
       oraclePartials.foreach { op =>
         val expectedRegion = op.zipWithIndex.map { case (v, j) =>
           (BigInt(v & 0xFF) << (j * 8))
         }.reduce(_ | _)
-        println(s"S2c e2e debug [$label]: expectedRegion=0x${expectedRegion.toString(16)}")
+        println(s"S2c e2e debug [$runTag]: expectedRegion=0x${expectedRegion.toString(16)}")
         assert(region == expectedRegion,
           f"spill region 0x$region%08X != pass-0 partials 0x$expectedRegion%08X")
       }
       assert(collected.toSeq == oracleY, s"e2e y ${collected.toSeq} != oracle $oracleY")
       tick(); tick()
+
+      // S2d-2 run coherence, read back per run (CsrMap, same package):
+      // TILE_CNT counts FRAMES (one multi-pass inference = 1), status is
+      // idle after the drain (STOP: no busy, no stray valid), MODE reads 0
+      // (STREAM_PER_PASS held for the whole run), and 0x34 still reads the
+      // descriptor base (no CSR aliasing by the pass loop).
+      val tileCnt = readCsr(CsrMap.TileCnt)
+      assert(tileCnt == run, s"TILE_CNT=$tileCnt after run $run (expected $run)")
+      val status = readCsr(CsrMap.Status)
+      assert(status == 0, s"status=0x${status.toString(16)} after run $run (expected idle STOP)")
+      val mode = readCsr(CsrMap.Mode)
+      assert(mode == 0, s"MODE=0x${mode.toString(16)} after run $run (expected STREAM_PER_PASS)")
+      val spillRb = readCsr(CsrMap.SpillBase)
+      assert(spillRb == spillBase, f"CSR 0x34=0x$spillRb%X after run $run (expected 0x$spillBase%X)")
+      }
     }
   }
 
@@ -353,5 +389,14 @@ class SequentialSpillTest extends AnyFunSuite {
       Seq(imgBase -> A16, weightBase -> programmedW16(4), (weightBase + 64) -> B),
       expectedY16(A16), Some(expectedCumulative16(A16)), label = "K16-P4",
       inShape = Seq(1, 16), capacity = Some(104))
+  }
+
+  test("S2d run coherence: back-to-back rerun reproduces y, TILE_CNT/STOP/cursors coherent") {
+    // Same P=2 node-0 model twice on one programmed DDR: y and region
+    // identical both runs, TILE_CNT counts frames (multi-pass = 1).
+    runCase(Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 2)),
+      Seq(imgBase -> AFull, weightBase -> programmedW(2), (weightBase + 16) -> B),
+      expectedY(AFull), Some(expectedPartials(AFull)), label = "RERUN",
+      runs = 2)
   }
 }
