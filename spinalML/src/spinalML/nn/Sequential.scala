@@ -832,15 +832,46 @@ case class Sequential(
           // spill ports. One uniform call for both dtype paths — same-dtype
           // and wXaY dequant decide inside the component (weightScales
           // default Seq(1.0) keeps same-dtype exact).
+          // SLICE GEOMETRY (S1 proven): the engine is shaped [M,Ks]x[Ks,N]
+          // per pass — full shapes would starve its shape-driven B/A
+          // counters on partial streams. W already streams slices (S2a
+          // fetch); A re-streams WHOLE (re-fire/tap) and is windowed here.
+          // S2c K-window on A: pass p consumes cols [p*Ks,(p+1)*Ks) = beats
+          // [p*B1,(p+1)*B1) of each R-beat row (beat-aligned by S0
+          // Ks%effLanes==0). Non-window beats are accepted-and-dropped so
+          // upstream never stalls; passIdx is prelude-stable during flow.
+          val rowBeatsA = l.inFeatures / l.effLanes
+          val winBeatsA = l.spillKSlice / l.effLanes
+          val aWinT = Tensor(repackedTensor.dataType, repackedTensor.shape, repackedTensor.lanes)
+          val aBeatInRow = Reg(UInt((log2Up(rowBeatsA) max 1) bits)) init(0)
+          val winLo = (spillPassIdxOf(i) * U(winBeatsA, 16 bits)).resize(16 bits)
+          val inWin = aBeatInRow.resize(16 bits) >= winLo &&
+            aBeatInRow.resize(16 bits) < winLo + U(winBeatsA, 16 bits)
+          aWinT.stream.valid := repackedTensor.stream.valid && inWin
+          aWinT.stream.payload := repackedTensor.stream.payload
+          repackedTensor.stream.ready := !inWin || aWinT.stream.ready
+          when(repackedTensor.stream.fire) {
+            when(aBeatInRow === U(rowBeatsA - 1, (log2Up(rowBeatsA) max 1) bits)) {
+              aBeatInRow := 0
+            } otherwise {
+              aBeatInRow := aBeatInRow + 1
+            }
+          }
+          // Slice views (stream aliases, S1 geometry): windowed A [M,Ks],
+          // fetched W slice [Ks,N]. Beat counts match the flows exactly.
+          val aSlice = Tensor(repackedTensor.dataType, Seq(rows, l.spillKSlice), repackedTensor.lanes)
+          aSlice.stream << aWinT.stream
+          val wSlice = Tensor(layerWeights.dataType, Seq(l.spillKSlice, l.outFeatures), repackedTensor.lanes)
+          wSlice.stream << layerWeights.stream
           // The spill region offset of this layer (single region per layer,
           // captured before the += in the sizing block below).
           val layerSpillOffset = spillBytesAcc
           val linComp = spinalML.layers.LinearLayer(repackedTensor.dataType, layerWeights.dataType, lType,
-            repackedTensor.shape, layerWeights.shape, repackedTensor.lanes,
+            Seq(rows, l.spillKSlice), Seq(l.spillKSlice, l.outFeatures), repackedTensor.lanes,
             l.weightScales, 1024, false, temporal, spill = true)
           linComp.io.reArm := weightDmaFire
-          linComp.io.a <> repackedTensor
-          linComp.io.w <> layerWeights
+          linComp.io.a.stream << aSlice.stream
+          linComp.io.w.stream << wSlice.stream
           linComp.io.b <> layerBias
           val ctrl = spillCtrl.get // Some <=> spilling (v1 single layer)
           // M*N full-width partial geometries (accType = lType, as noted in
@@ -871,7 +902,14 @@ case class Sequential(
           // Per-pass bias re-arm WITHOUT bias re-fetch: the bias stays
           // parked from the START fetch and is consumed on the final pass
           // only (non-final passes feed the on-chip zero mux, S1).
-          linComp.io.biasReArm := biasDmaFire || ctrl.io.biasReArm
+          // S2c e2e lesson: gate the controller pulse to the FINAL prelude.
+          // An every-prelude pulse can catch BiasAddOp mid-load across a
+          // passLast flip, letting a stale partial load complete with mixed
+          // zero/real beats. The final-only pulse always finds settled
+          // levels (loaded at entry) and a parked bias, so its reload is
+          // atomic-real; earlier episodes (reset-auto, bias-fetch) always
+          // complete with stable levels too.
+          linComp.io.biasReArm := biasDmaFire || (ctrl.io.biasReArm && ctrl.io.passLast)
           // The S2a pass index follows the controller (single source of
           // truth for the slice addressing in the fetch plane above).
           spillPassIdxOf(i) := ctrl.io.passIdx

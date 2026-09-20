@@ -3,6 +3,7 @@
 package spinalML.nn
 
 import spinal.core._
+import spinal.core.sim._
 import spinal.lib._
 import spinalML.memory.{FetchRequest, WriteRequest}
 
@@ -65,6 +66,16 @@ case class SpillPassController(
     val busy = out Bool()
     val done = out Bool() // one-cycle pulse when the final pass drains
   }
+  // S2c e2e observability: bench-side reads of the pass levels/pulses.
+  // Zero behavior change (test-only visibility into an internal controller).
+  io.passFirst.simPublic()
+  io.passLast.simPublic()
+  io.passIdx.simPublic()
+  io.refetchW.simPublic()
+  io.biasReArm.simPublic()
+  io.restartA.simPublic()
+  io.busy.simPublic()
+  io.done.simPublic()
 
   val state = RegInit(State.sIdle)
   val prevState = RegInit(State.sIdle)
@@ -106,7 +117,14 @@ case class SpillPassController(
     writerFired := True
   }
   // W-slice refetch (passes > 0), suppressed under residency (fail-safe).
-  io.refetchW := (state === State.sPrelude) && (cnt =/= 0) && !fetchSeen && !io.residentMode
+  // S2c e2e lesson: refetchW must assert one cycle AFTER the pass index is
+  // stable — the fetch plane addresses from the passIdx register, which
+  // settles the cycle after cnt advances. Firing on the entry cycle would
+  // re-fetch the PREVIOUS slice (same-cycle stale address). preludeHeld is
+  // True from the second Prelude cycle (register delay by construction).
+  val preludeHeld = RegInit(False)
+  preludeHeld := (state === State.sPrelude)
+  io.refetchW := (state === State.sPrelude) && (cnt =/= 0) && !fetchSeen && !io.residentMode && preludeHeld
   when(io.wFetchFire && state === State.sPrelude && cnt =/= 0) {
     fetchSeen := True
   }
