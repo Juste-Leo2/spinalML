@@ -57,11 +57,19 @@ class Accelerator[T <: Data](
     target = target)
 
   // Instantiate DMAWriter for optional DDR write-back of final output tensor
+  // S2b: on spilling models this writer shares the AXI write path with the
+  // spill drain writer through a 2:1 arbiter below — both leaves drop one ID
+  // bit for the route bit (mirror of the read-side routeBits in Sequential).
+  val spillActive = modelSpec.exists { case l: Linear if l.spilling => true; case _ => false }
+  if (spillActive)
+    require(axiConfig.idWidth >= 1,
+      s"Accelerator: axiConfig.idWidth (${axiConfig.idWidth}) leaves no route bit for the spill write arbiter")
+  val dmaWriterCfg = if (spillActive) axiConfig.copy(idWidth = axiConfig.idWidth - 1) else axiConfig
   val dmaWriter = DMAWriter(
     dataType = model.finalType,
     shape = model.finalShape,
     inLanes = model.finalLanes,
-    axiConfig = axiConfig
+    axiConfig = dmaWriterCfg
   )
 
   val outLanesAxi = axiConfig.dataWidth / model.finalType.getBitsWidth
@@ -118,31 +126,61 @@ class Accelerator[T <: Data](
   io.axiMaster.ar << model.io.axiMaster.ar
   model.io.axiMaster.r << io.axiMaster.r
 
-  // Write channels: routed to DMAWriter when writeToDdr is active, grounded otherwise
-  when(writeToDdr) {
-    io.axiMaster.aw.valid := dmaWriter.io.axiMaster.aw.valid
-    io.axiMaster.aw.payload := dmaWriter.io.axiMaster.aw.payload
-    dmaWriter.io.axiMaster.aw.ready := io.axiMaster.aw.ready
+  // Write channels: the final-output dmaWriter, plus the spill drain writer
+  // on spilling models. S2b: a 2:1 arbiter, never a mux-on-hope — the output
+  // writer may already hold an early address phase (commanded at START) while
+  // spill traffic is live; both are strictly ordered by fences, arbitration
+  // only serializes the AXI bursts. Legacy models keep the direct wiring
+  // below verbatim.
+  model.io.spillWrite match {
+    case Some(spillPort) =>
+      // Route buffer: each writer serializes its bursts (≤ a couple of
+      // outstanding B responses); 8 entries cover both with margin.
+      val spillWriteArb = Axi4WriteOnlyArbiter(axiConfig, 2,
+        routeBufferSize = 8, routeBufferLatency = 0,
+        routeBufferS2mPipe = false, routeBufferM2sPipe = false)
+      spillWriteArb.io.inputs(0) <> spillPort
+      spillWriteArb.io.inputs(1) <> dmaWriter.io.axiMaster
+      // Spill models always route writes (the spill writer is live during
+      // inference; the output writer sits idle unless commanded at START and
+      // writeToDdr routes its stream — same gating as the legacy path).
+      io.axiMaster.aw.valid := spillWriteArb.io.output.aw.valid
+      io.axiMaster.aw.payload := spillWriteArb.io.output.aw.payload
+      spillWriteArb.io.output.aw.ready := io.axiMaster.aw.ready
 
-    io.axiMaster.w.valid := dmaWriter.io.axiMaster.w.valid
-    io.axiMaster.w.payload := dmaWriter.io.axiMaster.w.payload
-    dmaWriter.io.axiMaster.w.ready := io.axiMaster.w.ready
+      io.axiMaster.w.valid := spillWriteArb.io.output.w.valid
+      io.axiMaster.w.payload := spillWriteArb.io.output.w.payload
+      spillWriteArb.io.output.w.ready := io.axiMaster.w.ready
 
-    dmaWriter.io.axiMaster.b.valid := io.axiMaster.b.valid
-    dmaWriter.io.axiMaster.b.payload := io.axiMaster.b.payload
-    io.axiMaster.b.ready := dmaWriter.io.axiMaster.b.ready
-  } otherwise {
-    io.axiMaster.aw.valid := False
-    io.axiMaster.aw.payload.assignDontCare()
-    dmaWriter.io.axiMaster.aw.ready := False
+      spillWriteArb.io.output.b.valid := io.axiMaster.b.valid
+      spillWriteArb.io.output.b.payload := io.axiMaster.b.payload
+      io.axiMaster.b.ready := spillWriteArb.io.output.b.ready
+    case None =>
+      when(writeToDdr) {
+        io.axiMaster.aw.valid := dmaWriter.io.axiMaster.aw.valid
+        io.axiMaster.aw.payload := dmaWriter.io.axiMaster.aw.payload
+        dmaWriter.io.axiMaster.aw.ready := io.axiMaster.aw.ready
 
-    io.axiMaster.w.valid := False
-    io.axiMaster.w.payload.assignDontCare()
-    dmaWriter.io.axiMaster.w.ready := False
+        io.axiMaster.w.valid := dmaWriter.io.axiMaster.w.valid
+        io.axiMaster.w.payload := dmaWriter.io.axiMaster.w.payload
+        dmaWriter.io.axiMaster.w.ready := io.axiMaster.w.ready
 
-    io.axiMaster.b.ready := False
-    dmaWriter.io.axiMaster.b.valid := False
-    dmaWriter.io.axiMaster.b.payload.assignDontCare()
+        dmaWriter.io.axiMaster.b.valid := io.axiMaster.b.valid
+        dmaWriter.io.axiMaster.b.payload := io.axiMaster.b.payload
+        io.axiMaster.b.ready := dmaWriter.io.axiMaster.b.ready
+      } otherwise {
+        io.axiMaster.aw.valid := False
+        io.axiMaster.aw.payload.assignDontCare()
+        dmaWriter.io.axiMaster.aw.ready := False
+
+        io.axiMaster.w.valid := False
+        io.axiMaster.w.payload.assignDontCare()
+        dmaWriter.io.axiMaster.w.ready := False
+
+        io.axiMaster.b.ready := False
+        dmaWriter.io.axiMaster.b.valid := False
+        dmaWriter.io.axiMaster.b.payload.assignDontCare()
+      }
   }
 
   // 3. Map the final output stream

@@ -58,6 +58,29 @@ case class Sequential(
   require(spillReplayBudgetBytes >= 0,
     s"Sequential spillReplayBudgetBytes=$spillReplayBudgetBytes must be >= 0")
 
+  // S2a/S2b compute-side spill (docs/ddr_final_impl.md): v1 supports at most
+  // ONE spilling layer (a single SpillPassController in S2b; multi-spill
+  // generalizes on this template later). Only Linear carries spillKSlice
+  // today, so this also pins spill to Linear (Conv spill is an explicit v2
+  // item). Placed before `io`: the spill write port below depends on it.
+  // The spill WRITE path cannot join the shared read arbiter
+  // (io.axiMaster is read-only): the drain DMAWriter gets its own write
+  // master port, merged with the output dmaWriter in Accelerator (S2b 2:1
+  // write arbiter). The seed reader joins allAxiMasters normally.
+  val spillLayerIdx: Option[Int] = {
+    val idx = layers.zipWithIndex.collect { case (l: Linear, i) if l.spilling => i }
+    require(idx.size <= 1,
+      s"Sequential: ${idx.size} spilling layers (${idx.mkString(",")}) — v1 supports at most one " +
+        "(single pass controller, see docs/ddr_final_impl.md S2)")
+    idx.headOption
+  }
+  // Leaf ID width for the spill write path (one route bit for the S2b 2:1
+  // write arbiter in Accelerator — mirror of the read-side routeBits below).
+  val spillWriteLeafCfg = axiConfig.copy(idWidth = axiConfig.idWidth - 1)
+  if (spillLayerIdx.nonEmpty)
+    require(axiConfig.idWidth >= 1,
+      s"Sequential: axiConfig.idWidth (${axiConfig.idWidth}) leaves no route bit for the spill write arbiter")
+
   /** Arithmetic policy derived from the high-level target (Phase 4 will
     * thread this into the layer instantiations below). */
   val arithmeticConfig: ArithmeticConfig = ArithmeticConfig(target = target)
@@ -170,6 +193,11 @@ case class Sequential(
     // spill DMA pair (read seed / write back). Undriven-safe in S2a: no logic
     // reads it yet, so direct-Sequential sims are unaffected.
     val spillBaseAddress = in UInt(axiConfig.addressWidth bits)
+    // S2b spill drain path: the seed reader joins the shared read arbiter,
+    // but this write master carries the drain DMAWriter (io.axiMaster is
+    // read-only). Some(...) only on spilling models; Accelerator merges it
+    // with the output dmaWriter through a 2:1 write arbiter.
+    val spillWrite = if (spillLayerIdx.nonEmpty) Some(master(Axi4WriteOnly(spillWriteLeafCfg))) else None
 
     // Weight-residency run-mode inputs (instantiated only when the ctor flag
     // is set; Accelerator maps them to CSR 0x10 bit0/bit1 and the 0x14 RELOAD shot)
@@ -220,17 +248,6 @@ case class Sequential(
   // spilling layer (DDR region sized by the S2 cursor; fit-checked by
   // Accelerator.reportFit). Beat-aligned per region, MemLayout conventions.
   var spillBytesAcc = 0
-  // S2a: v1 supports at most ONE spilling layer (a single SpillPassController
-  // in S2b; multi-spill generalizes on this template later). Only Linear
-  // carries spillKSlice today, so this also pins spill to Linear (Conv spill
-  // is an explicit v2 item, docs/ddr_final_impl.md).
-  val spillLayerIdx: Option[Int] = {
-    val idx = layers.zipWithIndex.collect { case (l: Linear, i) if l.spilling => i }
-    require(idx.size <= 1,
-      s"Sequential: ${idx.size} spilling layers (${idx.mkString(",")}) — v1 supports at most one " +
-        "(single pass controller, see docs/ddr_final_impl.md S2)")
-    idx.headOption
-  }
   // S2a: per-pass index register of the spilling layer's W-slice fetch
   // (stays 0 in S2a — no controller yet; S2b advances it once per pass).
   // Keyed by layer index; empty when the model does not spill.
@@ -257,13 +274,21 @@ case class Sequential(
   // routing budget = log2Up(fanIn) + log2Up(numGroups), always covering
   // log2Up(totalDmaTriggers). Leaf idWidth 0 is legal (Spinal requires >= 0).
   val arbFanIn = 8
-  val arbGroups = if (totalDmaTriggers <= 1) 1 else (totalDmaTriggers + arbFanIn - 1) / arbFanIn
-  val routeBits = if (totalDmaTriggers <= 1) 0
-    else if (totalDmaTriggers <= arbFanIn) log2Up(totalDmaTriggers)
+  // S2b: the spill DMA pair (seed reader + drain writer) joins the read
+  // arbiter but consumes no START trigger (the pass controller commands it
+  // per pass) — size the routing for triggers + spill masters, fork the
+  // triggers alone. Legacy models: spillDmaMasters = 0, sizing unchanged.
+  // Only the seed READER sits on the read arbiter (count 1); the drain
+  // writer leaves through the dedicated io.spillWrite port above.
+  val spillDmaMasters = if (spillLayerIdx.nonEmpty) 1 else 0
+  val totalMasters = totalDmaTriggers + spillDmaMasters
+  val arbGroups = if (totalMasters <= 1) 1 else (totalMasters + arbFanIn - 1) / arbFanIn
+  val routeBits = if (totalMasters <= 1) 0
+    else if (totalMasters <= arbFanIn) log2Up(totalMasters)
     else log2Up(arbFanIn) + log2Up(arbGroups)
   require(axiConfig.idWidth >= routeBits,
     s"Sequential: axiConfig.idWidth (${axiConfig.idWidth}) is insufficient to arbitrate " +
-    s"$totalDmaTriggers DMA masters (requires at least $routeBits bits, i.e. axiConfig.idWidth >= $routeBits).")
+    s"$totalMasters DMA masters (requires at least $routeBits bits, i.e. axiConfig.idWidth >= $routeBits).")
 
   val dmaAxiConfig =
     if (totalDmaTriggers == 1) axiConfig
@@ -382,6 +407,27 @@ case class Sequential(
     // contaminate the last tile of a pass.
     var biasDmaFire: Bool = null
 
+    // S2b: pass controller of the (single, v1) spilling layer. Created BEFORE
+    // the fetch plane: the W-slice refetch for passes > 0 re-fires reqW, so
+    // the fetch assignment below must already see the controller's pulse.
+    // Compute-side ports (passDone, spill streams) are wired at the compute
+    // site below; only elaboration-time geometry is needed here (nodeShapes
+    // and lType are already known).
+    val spillGeom: Option[(Int, Int)] = layer match {
+      case l: Linear if l.spilling =>
+        val mRows = nodeShapes(i).dropRight(1).product
+        val elems = mRows * l.outFeatures
+        val axiLanes = axiConfig.dataWidth / lType.getBitsWidth
+        require(axiLanes >= 1,
+          s"Spill accumulator dtype (${lType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported spill element size")
+        Some((l.spillPasses, (elems + axiLanes - 1) / axiLanes))
+      case _ => None
+    }
+    val spillCtrl = spillGeom match {
+      case Some((p, beats)) => Some(SpillPassController(p, axiConfig.addressWidth, spillBeats = beats))
+      case None => None
+    }
+
     var layerWeights: Tensor[Data] = null
     var layerBias: Tensor[Data] = null
 
@@ -464,7 +510,15 @@ case class Sequential(
       // NN-01: `valid` must never depend on `ready`. The eager fetch is a pure
       // state function (sticky request x loader capacity); it holds until the
       // DMA accepts it and self-clears on `reqW.fire`.
-      reqW.valid := startPathW ||
+      // S2b: W-slice refetch for spill passes > 0. The controller holds the
+      // pulse until reqW fires (same sticky discipline); the slice address
+      // follows spillPassIdx (S2a), advanced by the controller. No START
+      // trigger is consumed (the fork sweep is long past).
+      val spillRefetchW = spillCtrl match {
+        case Some(c) => c.io.refetchW
+        case None => False
+      }
+      reqW.valid := startPathW || spillRefetchW ||
         (prefetchWorldW && (reloadPendingW || residentRise) &&
           wDoubleBuffer.io.loadCanAccept && !startPathW)
       startTriggers(triggerIdx).ready := Mux(fetchNowW, reqW.ready, True)
@@ -477,9 +531,11 @@ case class Sequential(
         case Some((_, p)) =>
           // max 1: P == 1 (full-width single pass, legal) still needs a
           // well-formed register (same pattern as imgBandIdx above).
-          // Self-held in S2a (pass 0 only); the S2b controller advances it.
+          // Driven by the S2b controller (single source of truth) at the
+          // compute site below — no default assignment here (an unconditional
+          // hold would overlap-error against the controller follow).
           val r = Reg(UInt((log2Up(p) max 1) bits)) init(0)
-          r := r
+          spillPassIdxOf(i) = r
           spillPassIdxOf(i) = r
           (r * U(sliceBytes, axiConfig.addressWidth bits)).resize(axiConfig.addressWidth bits)
         case None => U(0, axiConfig.addressWidth bits)
@@ -739,7 +795,57 @@ case class Sequential(
         val repackedTensor = repack(reshaped, l.effLanes)
         // Weight-only quantization (wXaY): SInt weights (I4/I8) + compile-time scale(s)
         // are dequantized to the activation float dtype inside the layer.
-        val linOut = layerWeights.dataType() match {
+        val linOut: Tensor[Data] = if (l.spilling) {
+          // S2b K-pass wiring (docs/ddr_final_impl.md): direct LinearLayer
+          // instantiation (not via apply) so the pass controller owns the
+          // spill ports. One uniform call for both dtype paths — same-dtype
+          // and wXaY dequant decide inside the component (weightScales
+          // default Seq(1.0) keeps same-dtype exact).
+          // The spill region offset of this layer (single region per layer,
+          // captured before the += in the sizing block below).
+          val layerSpillOffset = spillBytesAcc
+          val linComp = spinalML.layers.LinearLayer(repackedTensor.dataType, layerWeights.dataType, lType,
+            repackedTensor.shape, layerWeights.shape, repackedTensor.lanes,
+            l.weightScales, 1024, false, temporal, spill = true)
+          linComp.io.reArm := weightDmaFire
+          linComp.io.a <> repackedTensor
+          linComp.io.w <> layerWeights
+          linComp.io.b <> layerBias
+          val ctrl = spillCtrl.get // Some <=> spilling (v1 single layer)
+          // M*N full-width partial geometries (accType = lType, as noted in
+          // the sizing block below; beats match the controller's command).
+          val mRows = nodeShapes(i).dropRight(1).product
+          val spillWriter = DMAWriter(lType, Seq(mRows, l.outFeatures), 1, spillWriteLeafCfg)
+          val spillReader = DMAReader(lType, Seq(mRows, l.outFeatures), 1, dmaAxiConfig,
+            trimToElements = true, flushableGearbox = true)
+          allAxiMasters += spillReader.io.axiMaster
+          io.spillWrite.get <> spillWriter.io.axiMaster
+          // Pass-loop wiring: the controller owns both spill cmd streams;
+          // partials flow compute -> DDR (drain) and DDR -> compute (seed).
+          linComp.io.passFirst.get := ctrl.io.passFirst
+          linComp.io.passLast.get := ctrl.io.passLast
+          linComp.io.spillIn.get.stream << spillReader.io.outStream.stream
+          spillWriter.io.inStream.stream << linComp.io.spillOut.get.stream
+          spillReader.io.cmd << ctrl.io.readerCmd
+          spillWriter.io.cmd << ctrl.io.writerCmd
+          ctrl.io.passDone := linComp.io.passDone.get
+          ctrl.io.writerDone := spillWriter.io.done
+          // weightDmaFire IS this layer's reqW.fire (hoisted var, same
+          // signal): the pass-0 START fetch and every controller refetch
+          // both pulse it — the S1 pass-fire edge rides for free.
+          ctrl.io.wFetchFire := weightDmaFire
+          ctrl.io.residentMode := residentMode
+          ctrl.io.spillBase := io.spillBaseAddress + layerSpillOffset
+          ctrl.io.start := io.start.valid && !prevStartValid
+          // Per-pass bias re-arm WITHOUT bias re-fetch: the bias stays
+          // parked from the START fetch and is consumed on the final pass
+          // only (non-final passes feed the on-chip zero mux, S1).
+          linComp.io.biasReArm := biasDmaFire || ctrl.io.biasReArm
+          // The S2a pass index follows the controller (single source of
+          // truth for the slice addressing in the fetch plane above).
+          spillPassIdxOf(i) := ctrl.io.passIdx
+          linComp.io.y
+        } else layerWeights.dataType() match {
           case _: SInt =>
             spinalML.layers.Linear(repackedTensor, layerWeights.asInstanceOf[Tensor[SInt]], layerBias, lType, l.weightScales,
               false, 1024, Option(weightDmaFire), Option(biasDmaFire), temporal)
