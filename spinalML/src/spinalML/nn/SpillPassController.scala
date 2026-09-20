@@ -156,7 +156,17 @@ case class SpillPassController(
       }
     }
     is(State.sPrelude) {
-      when(readerOk && writerOk && fetchOk) {
+      // S2d scale lesson (K64-P8 stall at pass 2): never exit on the
+      // prelude ENTRY cycle. The servant flags (readerFired/writerFired/
+      // fetchSeen) still hold the PREVIOUS non-zero prelude's True values
+      // during that cycle (preludeEntry clears them the same cycle, taking
+      // effect one cycle later), so an entry-cycle exit would skip the
+      // whole prelude — no seed/drain command, no W refetch, no restartA —
+      // and stall in sWaitPass on A beats that never come. P == 2 could
+      // never trip it (prelude 0 leaves the cnt!=0 servants False, so
+      // prelude 1 genuinely waited); P >= 3 stalls. preludeHeld is True
+      // from the second prelude cycle, once the clearing has landed.
+      when(preludeHeld && readerOk && writerOk && fetchOk) {
         state := State.sWaitPass
       }
     }

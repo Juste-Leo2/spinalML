@@ -3,6 +3,7 @@
 package spinalML.nn
 
 import spinal.core._
+import spinal.core.sim._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinalML.memory._
@@ -255,6 +256,12 @@ case class Sequential(
   // S2a: elaboration-time slice geometry of the spilling layer's fetch
   // (layer index -> (sliceElems, sliceBeats)), exposed for S2b + tests.
   val spillSliceInfo = scala.collection.mutable.Map[Int, (Int, Int)]()
+  // S2d e2e observability (debug, zero behavior change): the A-side
+  // K-window position (window low beat + intra-row beat counter) per
+  // spilling layer, sampled by spill benches to reconstruct exactly which
+  // stream beats each pass consumed.
+  val spillWinLoOf = scala.collection.mutable.Map[Int, UInt]()
+  val spillABeatOf = scala.collection.mutable.Map[Int, UInt]()
   // S2c: single shared pass controller (v1 = one spilling layer, pinned by
   // spillLayerIdx above), hoisted before the fetch plane: the W-slice
   // refetch (S2b, per-iteration fetch site below) AND the image re-fire
@@ -395,7 +402,20 @@ case class Sequential(
   val prevStartValid = RegNext(io.start.valid) init (False)
   // S2c: the START edge re-arms for a new inference; a spill restartA pulse
   // re-arms for the next K-pass (same clear-and-refill semantics).
-  val imgReArm = (io.start.valid && !prevStartValid) || spillRestartA
+  // S2d scale lesson (K64-P8): do NOT re-arm the image buffer/streamer on
+  // a spill restart. passDone fires after a few window beats while most of
+  // the sweep is still in flight; re-arming then discards in-flight state
+  // across components that do not all reset — the legacy 1->2 repack
+  // adapter below ignores reArm and can hold one stale byte across the
+  // boundary, permanently shifting every later pass's framing by one
+  // element (silent wrong-GEMM at scale; short sweeps never trip it
+  // because they fully drain before the cutoff). The re-fired sweeps carry
+  // the SAME image, so the ping-pong self-synchronizes across passes
+  // (full-tile delivery + tileReady gating, no boundary reset needed);
+  // reArm stays for the inter-inference boundary (new image) only.
+  // The band sequencer above still restarts per pass to re-issue the DMA
+  // fill into the idle bank — that path is fully elastic.
+  val imgReArm = (io.start.valid && !prevStartValid)
   imgDoubleBuffer.io.reArm := imgReArm
   imgDoubleBuffer.io.streamIn << dmaImg.io.outStream.stream
 
@@ -847,6 +867,11 @@ case class Sequential(
           val winLo = (spillPassIdxOf(i) * U(winBeatsA, 16 bits)).resize(16 bits)
           val inWin = aBeatInRow.resize(16 bits) >= winLo &&
             aBeatInRow.resize(16 bits) < winLo + U(winBeatsA, 16 bits)
+          // S2d debug probes (see member maps above).
+          winLo.simPublic()
+          aBeatInRow.simPublic()
+          spillWinLoOf(i) = winLo
+          spillABeatOf(i) = aBeatInRow
           aWinT.stream.valid := repackedTensor.stream.valid && inWin
           aWinT.stream.payload := repackedTensor.stream.payload
           repackedTensor.stream.ready := !inWin || aWinT.stream.ready

@@ -78,16 +78,42 @@ class SequentialSpillTest extends AnyFunSuite {
   def expectedPartials1(y0: Seq[Int]) =
     (0 until 4).map(j => y0(0) * W(0)(j) + y0(1) * W(1)(j))
 
+  // S2d scale case: M=1, N=4, K=64, Ks=8, P=8, I8. A is a 0/1 pattern and
+  // W the same {-1,0,1} motif so the I8 accumulator never saturates
+  // (|y| <= 32+40, |pass partials| <= 4).
+  val A64 = (0 until 64).map(k => k % 2)
+  val W64 = (0 until 64).map(k => (0 until 4).map(j => ((k + j) % 3) - 1))
+  val B64 = Seq(10, 20, 30, 40)
+  def programmedW64(ks: Int): Seq[Int] =
+    (0 until 64 by ks).flatMap(p => (0 until 4).flatMap(n => (p until p + ks).map(k => W64(k)(n))))
+  def expectedY64(a: Seq[Int]) =
+    (0 until 4).map(j => a.zipWithIndex.map { case (av, k) => av * W64(k)(j) }.sum + B64(j))
+  def expectedPartials64(a: Seq[Int]) =
+    (0 until 4).map(j => (0 until 8).map(k => a(k) * W64(k)(j)).sum)
+
+  // S2d discriminator: K=8, Ks=4, P=2. A single re-fire like K=4, but a
+  // multi-beat image sweep like K=64. Footprint: image 8B + weights 40B
+  // (32B W @0, 4B bias @32) + out 8B + spill 8B = 64B.
+  val A8 = (0 until 8).map(k => k % 2)
+  val W8 = (0 until 8).map(k => (0 until 4).map(j => ((k + j) % 3) - 1))
+  def programmedW8(ks: Int): Seq[Int] =
+    (0 until 8 by ks).flatMap(p => (0 until 4).flatMap(n => (p until p + ks).map(k => W8(k)(n))))
+  def expectedY8(a: Seq[Int]) =
+    (0 until 4).map(j => a.zipWithIndex.map { case (av, k) => av * W8(k)(j) }.sum + B(j))
+  def expectedPartials8(a: Seq[Int]) =
+    (0 until 4).map(j => (0 until 4).map(k => a(k) * W8(k)(j)).sum)
+
   def runCase(spec: Seq[LayerSpec], prog: Seq[(Long, Seq[Int])], oracleY: Seq[Int],
-      oraclePartials: Option[Seq[Int]], label: String): Unit = {
+      oraclePartials: Option[Seq[Int]], label: String,
+      inShape: Seq[Int] = Seq(1, 4), capacity: Option[Long] = Some(128)): Unit = {
     val compiled = SimConfig.withWave.compile(
       new Accelerator(
         dataType = I8(),
-        inputShape = Seq(1, 4),
+        inputShape = inShape,
         modelSpec = spec,
         axiConfig = axiConfig,
         temporal = 1,
-        memory = MemorySpec(spillBase = Some(spillBase), capacityBytes = Some(128))
+        memory = MemorySpec(spillBase = Some(spillBase), capacityBytes = capacity)
       )
     )
     compiled.doSim { dut =>
@@ -155,11 +181,13 @@ class SequentialSpillTest extends AnyFunSuite {
       // pulses around both preludes. Prints on change only.
       val ctrl = dut.model.spillCtrl.get
       var lastCtl = ""
+      var cycles = 0
+      val timeout = 50000
       def traceCtl(): Unit = {
         val s = s"pf=${ctrl.io.passFirst.toBoolean} pl=${ctrl.io.passLast.toBoolean} " +
           s"pi=${ctrl.io.passIdx.toInt} rw=${ctrl.io.refetchW.toBoolean} " +
           s"br=${ctrl.io.biasReArm.toBoolean} ra=${ctrl.io.restartA.toBoolean}"
-        if (s != lastCtl) { println(s"S2c ctl: $s"); lastCtl = s }
+        if (s != lastCtl) { println(s"S2c ctl [$label cyc=$cycles]: $s"); lastCtl = s }
       }
 
       // Collect up to 8 beats
@@ -167,13 +195,38 @@ class SequentialSpillTest extends AnyFunSuite {
       // Collect up to 8 beats: 4 = silent pass 0 (S1 contract), 8 = pass-0
       // leak into y (would explain first-4 anomalies).
       val collected = scala.collection.mutable.ArrayBuffer[Int]()
-      var cycles = 0
-      val timeout = 50000
+      // S2d drain history: sample the spill region every cycle, print on
+      // change — shows which pass drains landed and what they wrote.
+      var lastMon = memSim.memory.readBigInt(spillBase, 4)
+      // S2d bus monitor: log every AXI read/write command (fire cycle) —
+      // W-slice fetch addresses per pass, seed reads, drain writes.
+      // S2d window monitor: sample the K-window position every cycle,
+      // print on change — reconstructs exactly which stream beats each
+      // pass consumed (winLo = window low beat, aBeat = intra-row beat).
+      val spillIdx = dut.model.spillLayerIdx.get
+      val winLoSig = dut.model.spillWinLoOf(spillIdx)
+      val aBeatSig = dut.model.spillABeatOf(spillIdx)
+      var lastWin = (-1, -1)
       while (collected.length < 8 && cycles < timeout) {
         if (dut.io.outStream.stream.valid.toBoolean)
           collected += dut.io.outStream.stream.payload(0).asInstanceOf[SInt].toInt
         if (label != "P=1") traceCtl()
+        val wab = (winLoSig.toInt, aBeatSig.toInt)
+        if (wab != lastWin) {
+          println(s"S2c winmon [$label cyc=$cycles]: winLo=${wab._1} aBeat=${wab._2} pi=${ctrl.io.passIdx.toInt}")
+          lastWin = wab
+        }
+        if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
+          println(s"S2c busmon [$label cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
+        }
+        if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean) {
+          println(s"S2c busmon [$label cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
+        }
         tick(); cycles += 1
+        if (cycles % 4 == 0) {
+          val mon = memSim.memory.readBigInt(spillBase, 4)
+          if (mon != lastMon) { println(s"S2c spillmon [$label cyc=$cycles]: region=0x${mon.toString(16)}"); lastMon = mon }
+        }
       }
       println(s"S2c e2e debug [$label]: all-y=${collected.toSeq}")
       assert(collected.length == 4, s"expected exactly 4 y beats, got ${collected.length}: ${collected.toSeq}")
@@ -231,5 +284,74 @@ class SequentialSpillTest extends AnyFunSuite {
         (weightBase + w0Off) -> programmedFull(W0), (weightBase + b0Off) -> B0,
         (weightBase + w1Off) -> programmedW(2), (weightBase + b1Off) -> B),
       expectedY1(y0), Some(expectedPartials1(y0)), label = "TAP-P2")
+  }
+
+  test("S2d e2e node-0 spill K=64 P=8 at exact fit: 8-pass GEMM bit-exact, region holds pass-0 partials") {
+    // Footprint (S2d fit proof): image 64B + weights 264B (256B W @0, 4B
+    // bias @256) + out 8B + spill 8B = 344B — the capacity below is exact.
+    runCase(Seq(Linear(inFeatures = 64, outFeatures = 4, weightLanes = 2, spillKSlice = 8)),
+      Seq(imgBase -> A64, weightBase -> programmedW64(8), (weightBase + 256) -> B64),
+      expectedY64(A64), Some(expectedPartials64(A64)), label = "K64-P8",
+      inShape = Seq(1, 64), capacity = Some(344))
+  }
+
+  test("S2d e2e node-0 spill K=8 P=2: single re-fire, multi-beat sweep") {
+    runCase(Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(imgBase -> A8, weightBase -> programmedW8(4), (weightBase + 32) -> B),
+      expectedY8(A8), Some(expectedPartials8(A8)), label = "K8-P2",
+      inShape = Seq(1, 8), capacity = Some(64))
+  }
+
+  test("S2d e2e node-0 spill K=64 P=2: long sweep, single re-fire") {
+    // Same 64-elem sweep as K64-P8, one re-fire only. Footprint 344B.
+    runCase(Seq(Linear(inFeatures = 64, outFeatures = 4, weightLanes = 2, spillKSlice = 32)),
+      Seq(imgBase -> A64, weightBase -> programmedW64(32), (weightBase + 256) -> B64),
+      expectedY64(A64), Some(expectedPartials64(A64)), label = "K64-P2",
+      inShape = Seq(1, 64), capacity = Some(344))
+  }
+
+  test("S2d e2e node-0 spill K=12 P=3: short sweep, three passes") {
+    // 12-elem sweep (like K8, known-clean re-fire) x 3 passes (like K64).
+    // Footprint: image 12B + weights 56B (48B W @0, 4B bias @48) + out 8B
+    // + spill 8B = 84B.
+    val A12 = (0 until 12).map(k => k % 2)
+    val W12 = (0 until 12).map(k => (0 until 4).map(j => ((k + j) % 3) - 1))
+    def programmedW12(ks: Int): Seq[Int] =
+      (0 until 12 by ks).flatMap(p => (0 until 4).flatMap(n => (p until p + ks).map(k => W12(k)(n))))
+    def expectedY12(a: Seq[Int]) =
+      (0 until 4).map(j => a.zipWithIndex.map { case (av, k) => av * W12(k)(j) }.sum + B(j))
+    def expectedPartials12(a: Seq[Int]) =
+      (0 until 4).map(j => (0 until 4).map(k => a(k) * W12(k)(j)).sum)
+    // S2d region invariant: the final pass drains to y, never to DDR, so
+    // the region holds drain_{P-2} = the unbiased cumulative through the
+    // last NON-final pass (P=2: P0; here P=3: P0+P1).
+    def expectedCumulative12(a: Seq[Int]) =
+      (0 until 4).map(j => (0 until 8).map(k => a(k) * W12(k)(j)).sum)
+    runCase(Seq(Linear(inFeatures = 12, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(imgBase -> A12, weightBase -> programmedW12(4), (weightBase + 48) -> B),
+      expectedY12(A12), Some(expectedCumulative12(A12)), label = "K12-P3",
+      inShape = Seq(1, 12), capacity = Some(84))
+  }
+
+  test("S2d e2e node-0 spill K=16 P=4 self-identifying: every pass recognizable") {
+    // A[k]=k+1, W[k][j]=1 iff k%4==j: pass p computes Pp=(4p+1,...,4p+4),
+    // so any slice/window/shift error reads out unambiguously. I8-safe:
+    // |y| <= 110, |Pp| <= 64. Region = drain_{P-2} = P0+P1+P2.
+    // Footprint: image 16B + weights 72B (64B W @0, 4B bias @64, beat-
+    // aligned) + out 8B + spill 8B = 104B.
+    val A16 = (0 until 16).map(k => k + 1)
+    val W16 = (0 until 16).map(k => (0 until 4).map(j => if (k % 4 == j) 1 else 0))
+    def programmedW16(ks: Int): Seq[Int] =
+      (0 until 16 by ks).flatMap(p => (0 until 4).flatMap(n => (p until p + ks).map(k => W16(k)(n))))
+    def expectedY16(a: Seq[Int]) =
+      (0 until 4).map(j => a.zipWithIndex.map { case (av, k) => av * W16(k)(j) }.sum + B(j))
+    def expectedPass16(a: Seq[Int], p: Int) =
+      (0 until 4).map(j => (4 * p until 4 * p + 4).map(k => a(k) * W16(k)(j)).sum)
+    def expectedCumulative16(a: Seq[Int]) =
+      (0 until 4).map(j => (0 until 12).map(k => a(k) * W16(k)(j)).sum)
+    runCase(Seq(Linear(inFeatures = 16, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(imgBase -> A16, weightBase -> programmedW16(4), (weightBase + 64) -> B),
+      expectedY16(A16), Some(expectedCumulative16(A16)), label = "K16-P4",
+      inShape = Seq(1, 16), capacity = Some(104))
   }
 }

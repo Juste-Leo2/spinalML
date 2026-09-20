@@ -109,6 +109,25 @@ class MemorySpecTest extends AnyFunSuite {
     }
   }
 
+  test("Accelerator S2d: big-K legacy model fails fast under a small capacity") {
+    // Linear(64 -> 4) I8, no spill: image 64B + weights 264B (256B W @0,
+    // 4B bias @256) + out 8B = 336B. Under a 128B descriptor the
+    // elaboration fail-fast must bite at real sizes, not just toy ones.
+    def bigAcc(memory: MemorySpec): Accelerator[Data] = new Accelerator(
+      dataType = I8(),
+      inputShape = Seq(1, 64),
+      modelSpec = Seq(Linear(inFeatures = 64, outFeatures = 4)),
+      axiConfig = axiConfig,
+      memory = memory
+    )
+    intercept[Exception] {
+      SpinalConfig().generateVerilog(bigAcc(MemorySpec(capacityBytes = Some(128))))
+    }
+    // ...and the same model elaborates once the capacity covers the real
+    // footprint (the gate is exact, not spill-specific).
+    SpinalConfig().generateVerilog(bigAcc(MemorySpec(capacityBytes = Some(336))))
+  }
+
   test("Accelerator: CSR spill base (0x34) defaults and readback") {
     val spinalConfig = SpinalConfig()
     val compiled = SimConfig.withVerilator.withConfig(spinalConfig).compile(

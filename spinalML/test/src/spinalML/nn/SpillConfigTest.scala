@@ -139,6 +139,33 @@ class SpillConfigTest extends AnyFunSuite {
     }
   }
 
+  test("Accelerator S2d: big-K spill exact-fit at scale") {
+    // Linear(64 -> 4, Ks=8, P=8) I8: image 64B + weights 264B (256B W @0,
+    // 4B bias @256) + out 8B + spill 8B (M*N=4B beat-aligned) = 344B.
+    // The on-chip win is the slice fetch: 8*4=32 elems = 4 beats per pass
+    // (vs 32 for the full region) — DDR still programs the full W.
+    val layers = Seq(Linear(inFeatures = 64, outFeatures = 4, weightLanes = 2, spillKSlice = 8))
+    def bigSpillAcc(cap: Option[Long]): Accelerator[Data] = new Accelerator(
+      dataType = I8(),
+      inputShape = Seq(1, 64),
+      modelSpec = layers,
+      axiConfig = axiConfig,
+      temporal = 1,
+      memory = MemorySpec(spillBase = Some(0x30000L), capacityBytes = cap)
+    )
+    SpinalConfig().generateVerilog(bigSpillAcc(Some(344)))
+    SpinalConfig().generateVerilog(bigSpillAcc(None))
+    intercept[Exception] {
+      SpinalConfig().generateVerilog(bigSpillAcc(Some(343)))
+    }
+    // Slice geometry + spill footprint at scale (node-0 exclusive case).
+    val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(1, 64)))
+    assert(report.toplevel.totalSpillBytes == 8,
+      s"totalSpillBytes=${report.toplevel.totalSpillBytes} != 8")
+    assert(report.toplevel.spillSliceInfo.get(0).contains((32, 4)),
+      s"spillSliceInfo=${report.toplevel.spillSliceInfo} != (32 elems, 4 beats)")
+  }
+
   test("Sequential S2a: v1 single spilling layer + slice fetch geometry") {
     // Two spilling layers fail fast (single pass controller in v1).
     val double = Seq(
