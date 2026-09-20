@@ -14,12 +14,19 @@ import spinalML.harness.MemoryHarness
  * S2c end-to-end: a spilling Linear (K-pass GEMM) inside a real Sequential +
  * Accelerator, DDR-backed throughout, bit-exact against a hand oracle.
  *
- * Node-0 case (this file, first test): M=1, N=4, K=4, Ks=2, P=2, I8,
+ * Node-0 case (first three tests): M=1, N=4, K=4, Ks=2, P=2, I8,
  * temporal=1. Exclusive node 0, so pass p=1 re-fires the image sweep from
  * DDR (no tap). The final y AND the spill-region content (pass-0 partials,
  * never rewritten by the final pass) are both asserted — together they
  * prove the whole loop: slice fetch, seed=zeros, drain write-back, fence,
  * seed read-back, re-streamed A, single bias.
+ *
+ * Deep-node case (tap test): [dense 4->4, spill 4->4 Ks=2]. The spill sits
+ * at node 1 (A = layer-0 output, 4B I8, within the S0 replay budget), so
+ * pass p=1 replays A from the on-chip StreamTap — the image plane stays
+ * idle. Layer 0 is a quasi-passthrough (W0 = identity, tiny B0) so the tap
+ * replay is the ONLY new variable vs the proven node-0 case: same y oracle
+ * shape, same region proof, but A re-streamed on-chip.
  */
 class SequentialSpillTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
@@ -34,6 +41,11 @@ class SequentialSpillTest extends AnyFunSuite {
   // Diagnostic bias: huge and distinctive so the EFFECTIVE bias reads out
   // of y-(P0+P1) directly (S2c e2e debug).
   val B = Seq(40, 50, 60, 70)
+  // Deep-node (tap) case, layer 0: quasi-passthrough W0 = identity + tiny
+  // B0, so y0 = A + B0 stays small and the spill layer-1 oracle below is
+  // the only arithmetic under test.
+  val W0 = (0 until 4).map(k => (0 until 4).map(j => if (k == j) 1 else 0))
+  val B0 = Seq(1, 2, 3, 4)
   // DDR layout contract (S2): each K-slice is stored TRANSPOSED and
   // contiguously (the engine reads B column-major: readAddr = n*chunksK+k,
   // cf. S1 bBeats and the replica's slice(o*K..)). Slice p linear order =
@@ -53,10 +65,21 @@ class SequentialSpillTest extends AnyFunSuite {
   def programmedW(ks: Int): Seq[Int] =
     (0 until 4 by ks).flatMap(p => (0 until 4).flatMap(n => (p until p + ks).map(k => W(k)(n))))
 
-  def runCase(a: Seq[Int], spillKSlice: Int, progW: Seq[Int], checkRegion: Boolean, label: String): Unit = {
-    val oracleY = expectedY(a)
-    val oraclePartials = expectedPartials(a)
-    val spec = Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = spillKSlice))
+  // Dense (non-spilling) layer layout: full-K column-major, same engine
+  // read order as programmedW(4) — one helper per matrix for clarity.
+  def programmedFull(m: Seq[Seq[Int]]): Seq[Int] =
+    (0 until 4).flatMap(n => (0 until 4).map(k => m(k)(n)))
+  // Tap-case oracles: y0 = A*W0+B0 (dense), then the spill layer-1 passes
+  // run on y0 exactly like the node-0 case runs on A.
+  def expectedY0(a: Seq[Int]) =
+    (0 until 4).map(j => a.zipWithIndex.map { case (av, k) => av * W0(k)(j) }.sum + B0(j))
+  def expectedY1(y0: Seq[Int]) =
+    (0 until 4).map(j => y0.zipWithIndex.map { case (v, k) => v * W(k)(j) }.sum + B(j))
+  def expectedPartials1(y0: Seq[Int]) =
+    (0 until 4).map(j => y0(0) * W(0)(j) + y0(1) * W(1)(j))
+
+  def runCase(spec: Seq[LayerSpec], prog: Seq[(Long, Seq[Int])], oracleY: Seq[Int],
+      oraclePartials: Option[Seq[Int]], label: String): Unit = {
     val compiled = SimConfig.withWave.compile(
       new Accelerator(
         dataType = I8(),
@@ -80,10 +103,11 @@ class SequentialSpillTest extends AnyFunSuite {
         config = AxiMemorySimConfig(maxOutstandingReads = 8))
       memSim.start()
 
-      // Program DDR: image, W per-slice-transposed (see contract above), bias.
-      writeWords(memSim.memory, imgBase, MemoryHarness.packBytes(a))
-      writeWords(memSim.memory, weightBase, MemoryHarness.packBytes(progW))
-      writeWords(memSim.memory, weightBase + 16, MemoryHarness.packBytes(B))
+      // Program DDR: (address, values) pairs built by the caller — image,
+      // per-layer W (slice-transposed for a spill layer, full column-major
+      // for a dense layer), per-layer bias, at the Sequential region
+      // offsets (W+B per layer in order, beat-aligned: see the fetch plane).
+      for ((base, values) <- prog) writeWords(memSim.memory, base, MemoryHarness.packBytes(values))
 
       def writeCsr(addr: BigInt, data: BigInt): Unit = {
         dut.io.ctrlBus.aw.valid #= true
@@ -158,26 +182,54 @@ class SequentialSpillTest extends AnyFunSuite {
       // rewrites). Signed bytes, little-endian. Read BEFORE asserting y so
       // a failure localizes to pass 0 (region) vs pass 1 (y).
       val region = memSim.memory.readBigInt(spillBase, 4)
-      val expectedRegion = oraclePartials.zipWithIndex.map { case (v, j) =>
-        (BigInt(v & 0xFF) << (j * 8))
-      }.reduce(_ | _)
-      println(s"S2c e2e debug [$label]: y=${collected.toSeq} oracleY=$oracleY region=0x${region.toString(16)} expectedRegion=0x${expectedRegion.toString(16)}")
-      if (checkRegion) assert(region == expectedRegion,
-        f"spill region 0x$region%08X != pass-0 partials 0x$expectedRegion%08X")
+      println(s"S2c e2e debug [$label]: y=${collected.toSeq} oracleY=$oracleY region=0x${region.toString(16)}")
+      oraclePartials.foreach { op =>
+        val expectedRegion = op.zipWithIndex.map { case (v, j) =>
+          (BigInt(v & 0xFF) << (j * 8))
+        }.reduce(_ | _)
+        println(s"S2c e2e debug [$label]: expectedRegion=0x${expectedRegion.toString(16)}")
+        assert(region == expectedRegion,
+          f"spill region 0x$region%08X != pass-0 partials 0x$expectedRegion%08X")
+      }
       assert(collected.toSeq == oracleY, s"e2e y ${collected.toSeq} != oracle $oracleY")
       tick(); tick()
     }
   }
 
   test("S2c e2e node-0 spill P=2: K-pass GEMM bit-exact, region holds pass-0 partials") {
-    runCase(AFull, 2, programmedW(2), checkRegion = true, label = "P=2")
+    runCase(Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 2)),
+      Seq(imgBase -> AFull, weightBase -> programmedW(2), (weightBase + 16) -> B),
+      expectedY(AFull), Some(expectedPartials(AFull)), label = "P=2")
   }
 
   test("S2c e2e node-0 spill P=1: single-pass regression (no seed, direct drain)") {
-    runCase(AFull, 4, programmedW(4), checkRegion = false, label = "P=1")
+    runCase(Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(imgBase -> AFull, weightBase -> programmedW(4), (weightBase + 16) -> B),
+      expectedY(AFull), None, label = "P=1")
   }
 
   test("S2c e2e node-0 spill P=2 zero-tail A: seed+bias proof (P1 == 0)") {
-    runCase(Seq(1, 2, 0, 0), 2, programmedW(2), checkRegion = true, label = "P=2-zero-tail")
+    runCase(Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 2)),
+      Seq(imgBase -> Seq(1, 2, 0, 0), weightBase -> programmedW(2), (weightBase + 16) -> B),
+      expectedY(Seq(1, 2, 0, 0)), Some(expectedPartials(Seq(1, 2, 0, 0))), label = "P=2-zero-tail")
+  }
+
+  test("S2c e2e deep-node spill P=2 via StreamTap: A replayed on-chip, bit-exact, region holds pass-0 partials") {
+    // W/B region offsets for the 2-layer chain (beat = 8B; W region 16B,
+    // bias region 4B, each start beat-aligned — mirrors the fetch plane's
+    // alignToBeat walk: W0@0, B0@16, W1@24, B1@40).
+    def align8(x: Int) = (x + 8 - 1) / 8 * 8
+    val w0Off = 0
+    val b0Off = align8(w0Off + 16)
+    val w1Off = align8(b0Off + 4)
+    val b1Off = align8(w1Off + 16)
+    val y0 = expectedY0(AFull)
+    runCase(
+      Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2),
+        Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 2)),
+      Seq(imgBase -> AFull,
+        (weightBase + w0Off) -> programmedFull(W0), (weightBase + b0Off) -> B0,
+        (weightBase + w1Off) -> programmedW(2), (weightBase + b1Off) -> B),
+      expectedY1(y0), Some(expectedPartials1(y0)), label = "TAP-P2")
   }
 }
