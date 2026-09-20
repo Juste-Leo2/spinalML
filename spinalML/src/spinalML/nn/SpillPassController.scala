@@ -55,6 +55,11 @@ case class SpillPassController(
     val passIdx = out UInt((log2Up(passes) max 1) bits) // current pass (fetch addressing)
     val refetchW = out Bool() // re-fire the W-slice fetch (held till wFetchFire)
     val biasReArm = out Bool() // one-cycle pulse per pass prelude
+    // S2c: one-cycle A re-stream pulse per pass p > 0 (prelude). Sequential
+    // routes it: exclusive node-0 spill restarts the image band sweep
+    // (DDR-backed, free); shared/deep nodes replay the StreamTap. Suppressed
+    // under residency with refetchW (same STREAM_PER_PASS fail-safe).
+    val restartA = out Bool()
     val readerCmd = master(Stream(FetchRequest(addrWidth)))
     val writerCmd = master(Stream(WriteRequest(addrWidth)))
     val busy = out Bool()
@@ -109,6 +114,8 @@ case class SpillPassController(
   when(state === State.sPrelude && !biasPulsed) {
     biasPulsed := True
   }
+  // Same once-per-prelude flag: restartA rides the bias pulse cycle.
+  io.restartA := (state === State.sPrelude) && (cnt =/= 0) && !biasPulsed && !io.residentMode
 
   val readerOk = (cnt === 0) || readerFired
   val writerOk = isLast || writerFired
