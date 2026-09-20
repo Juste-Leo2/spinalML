@@ -11,7 +11,9 @@
 > **Rendu des diagrammes** : Mermaid se rend nativement sur GitHub / VS Code (extension Mermaid).
 > Les blocs WaveDrom nécessitent l'extension VS Code « WaveDrom » ou https://wavedrom.com/editor.html .
 >
-> **Docs compagnons** : `docs/bugs/2026-08-rearm-session.md` (post-mortem détaillé),
+> **Docs compagnons** : `docs/data_flow.md` (vue synthétique à jour : architecture
+> actuelle, concepts `lanes`/`temporal`/slices, structure logique DDR et statut
+> silicium/sim/planifié), `docs/bugs/2026-08-rearm-session.md` (post-mortem détaillé),
 > `docs/roadmap.md` (plan de route), `docs/symbolicTestPlaybook.md` (méthodo formelle).
 
 ---
