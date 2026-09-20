@@ -124,8 +124,7 @@ class SpillConfigTest extends AnyFunSuite {
     memory = memory
   )
 
-  test("Accelerator: spill needs a descriptor base, fit covers the footprint") {
-    // No spillBase declared => fail fast, even without capacity.
+  test("Accelerator: spill needs a descriptor base, fit covers the footprint") {    // No spillBase declared => fail fast, even without capacity.
     intercept[Exception] {
       SpinalConfig().generateVerilog(spillAccelerator(MemorySpec.default))
     }
@@ -138,5 +137,36 @@ class SpillConfigTest extends AnyFunSuite {
       SpinalConfig().generateVerilog(spillAccelerator(
         MemorySpec(spillBase = Some(0x30000L), capacityBytes = Some(63))))
     }
+  }
+
+  test("Sequential S2a: v1 single spilling layer + slice fetch geometry") {
+    // Two spilling layers fail fast (single pass controller in v1).
+    val double = Seq(
+      Linear(inFeatures = 8, outFeatures = 8, weightLanes = 2, spillKSlice = 4),
+      Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4))
+    intercept[Exception] {
+      SpinalConfig().generateVerilog(spillSequential(double))
+    }
+    // Slice geometry, K=8 N=4 Ks=4 I8 on a 64-bit AXI: slice = 16 elems,
+    // 8 elems/beat => 2 beats per pass fetch (vs 4 for the full region).
+    val layers = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4))
+    val report = SpinalConfig().generateVerilog(spillSequential(layers))
+    assert(report.toplevel.spillLayerIdx.contains(0),
+      s"spillLayerIdx=${report.toplevel.spillLayerIdx} should pinpoint layer 0")
+    assert(report.toplevel.spillSliceInfo.get(0).contains((16, 2)),
+      s"spillSliceInfo=${report.toplevel.spillSliceInfo} != (16 elems, 2 beats)")
+    assert(report.toplevel.spillPassIdxOf.contains(0),
+      "spilling layer must expose its per-pass index register for S2b")
+    // Full-width single pass (P = 1) elaborates: slice == region, 32 elems,
+    // 4 beats, and the 1-bit index register stays well-formed.
+    val single = Seq(Linear(inFeatures = 8, outFeatures = 4, spillKSlice = 8))
+    val reportSingle = SpinalConfig().generateVerilog(spillSequential(single))
+    assert(reportSingle.toplevel.spillSliceInfo.get(0).contains((32, 4)),
+      s"spillSliceInfo=${reportSingle.toplevel.spillSliceInfo} != (32 elems, 4 beats)")
+    // Legacy model: no spill bookkeeping at all.
+    val reportPlain = SpinalConfig().generateVerilog(
+      spillSequential(Seq(Linear(inFeatures = 8, outFeatures = 4))))
+    assert(reportPlain.toplevel.spillLayerIdx.isEmpty)
+    assert(reportPlain.toplevel.spillSliceInfo.isEmpty)
   }
 }

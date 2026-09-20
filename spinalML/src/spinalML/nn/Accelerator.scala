@@ -177,6 +177,12 @@ class Accelerator[T <: Data](
   
   val outBytesAcc = totalOutBeats * (axiConfig.dataWidth / 8)
   val outBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
+  // S2a spill cursor (docs/ddr_final_impl.md): the S2b pass controller walks
+  // the spill region with this offset on top of the CSR 0x34 base, exactly
+  // like imgBaseOffset/outBaseOffset walk the image/output bases. Reset on
+  // every host write to 0x34 (same-cycle win over frameDone advance, mirror
+  // of the 0x08/0x20 sites below).
+  val spillBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
 
   val startEvent = Event
   val dmaCmd = Stream(WriteRequest(axiConfig.addressWidth))
@@ -291,6 +297,11 @@ class Accelerator[T <: Data](
     outBaseOffset := 0
   }
 
+  // A host write to 0x34 starts a new spill stream: reset the spill cursor.
+  ctrlFactory.onWrite(CsrMap.SpillBase) {
+    spillBaseOffset := 0
+  }
+
   // Register 0x04: Status
   // Bit 0: Done (latched frameDone in DDR mode, outStream.valid in stream mode)
   // Bit 1: Busy (model busy || dmaWriter busy)
@@ -301,6 +312,8 @@ class Accelerator[T <: Data](
   ctrlFactory.read(tileCntReg, CsrMap.TileCnt, 0)
 
   model.io.imgBaseAddress := imgAddrReg + imgBaseOffset
+  // S2a: the spill region access point (CSR 0x34 base + runtime cursor).
+  model.io.spillBaseAddress := spillAddrReg + spillBaseOffset
 
   // ------------------------------------------------------------------
   // Weight-residency run-mode control plane (Phase 2a + 2b prefetch)

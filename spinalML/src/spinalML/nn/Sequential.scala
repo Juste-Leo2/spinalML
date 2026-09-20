@@ -164,6 +164,12 @@ case class Sequential(
     val start = slave(Event)
     val imgBaseAddress = in UInt(axiConfig.addressWidth bits)
     val weightsBaseAddress = in UInt(axiConfig.addressWidth bits)
+    // S2a compute-side spill (docs/ddr_final_impl.md): DDR base of the
+    // accumulator spill region (M*N full-width partials per spilling layer).
+    // Wired by Accelerator to CSR 0x34 + runtime cursor; consumed by the S2b
+    // spill DMA pair (read seed / write back). Undriven-safe in S2a: no logic
+    // reads it yet, so direct-Sequential sims are unaffected.
+    val spillBaseAddress = in UInt(axiConfig.addressWidth bits)
 
     // Weight-residency run-mode inputs (instantiated only when the ctor flag
     // is set; Accelerator maps them to CSR 0x10 bit0/bit1 and the 0x14 RELOAD shot)
@@ -214,6 +220,24 @@ case class Sequential(
   // spilling layer (DDR region sized by the S2 cursor; fit-checked by
   // Accelerator.reportFit). Beat-aligned per region, MemLayout conventions.
   var spillBytesAcc = 0
+  // S2a: v1 supports at most ONE spilling layer (a single SpillPassController
+  // in S2b; multi-spill generalizes on this template later). Only Linear
+  // carries spillKSlice today, so this also pins spill to Linear (Conv spill
+  // is an explicit v2 item, docs/ddr_final_impl.md).
+  val spillLayerIdx: Option[Int] = {
+    val idx = layers.zipWithIndex.collect { case (l: Linear, i) if l.spilling => i }
+    require(idx.size <= 1,
+      s"Sequential: ${idx.size} spilling layers (${idx.mkString(",")}) — v1 supports at most one " +
+        "(single pass controller, see docs/ddr_final_impl.md S2)")
+    idx.headOption
+  }
+  // S2a: per-pass index register of the spilling layer's W-slice fetch
+  // (stays 0 in S2a — no controller yet; S2b advances it once per pass).
+  // Keyed by layer index; empty when the model does not spill.
+  val spillPassIdxOf = scala.collection.mutable.Map[Int, UInt]()
+  // S2a: elaboration-time slice geometry of the spilling layer's fetch
+  // (layer index -> (sliceElems, sliceBeats)), exposed for S2b + tests.
+  val spillSliceInfo = scala.collection.mutable.Map[Int, (Int, Int)]()
 
   // Every weight/bias region must start on an AXI-beat boundary: DDR
   // controllers and memory models serve bursts from the beat-aligned address,
@@ -399,7 +423,32 @@ case class Sequential(
       val stagedW = RegInit(False) init (False)
 
       // Buffers/streamers FIRST: the eager arbitration observes loader capacity.
-      val wBufferSize = elements // exact-size contract (tile of `depth` elements)
+      // S2a spill slice: W[K][N] is row-major, so slice p (Ks rows x N) is
+      // contiguous in DDR. A spilling layer fetches ONE slice per pass into
+      // slice-sized buffers (the full-K mur is exactly what spill removes);
+      // S2b re-fires this fetch per pass. Legacy layers keep full-region.
+      val spillSlice: Option[(Int, Int)] = layer match {
+        case l: Linear if l.spilling => Some((l.spillKSlice, l.spillPasses))
+        case _ => None
+      }
+      val fetchElems = spillSlice match {
+        case Some((ks, _)) => ks * wShape(1)
+        case None => elements
+      }
+      // v1: every pass start must stay beat-aligned (the reader assumes
+      // aligned starts — see the region-start contract above). Slices tile
+      // the region with the EXACT slice stride (no per-slice alignment).
+      val sliceBytes = spillSlice match {
+        case Some((ks, _)) =>
+          val raw = MemLayout.regionBytes(ks * wShape(1), wType.getBitsWidth)
+          require(raw % beatBytes == 0,
+            s"Sequential: spilling layer $i slice is $raw B, not a multiple of the AXI beat " +
+              s"($beatBytes B) — every pass start must stay beat-aligned (v1 constraint: pick " +
+              "spillKSlice with (spillKSlice*N*dtypeBits/8) a multiple of the beat)")
+          raw
+        case None => 0
+      }
+      val wBufferSize = fetchElems // exact-size contract (tile of `depth` elements)
       val wDoubleBuffer = StreamDoubleBuffer(wType, wBufferSize, requiredLanes,
         enableFreezePort = true)
       val wStreamer = DoubleBufferStreamer(wType, wBufferSize, requiredLanes)
@@ -419,14 +468,30 @@ case class Sequential(
         (prefetchWorldW && (reloadPendingW || residentRise) &&
           wDoubleBuffer.io.loadCanAccept && !startPathW)
       startTriggers(triggerIdx).ready := Mux(fetchNowW, reqW.ready, True)
-      currentMemoryOffset = alignToBeat(currentMemoryOffset)
-      reqW.address := io.weightsBaseAddress + currentMemoryOffset
+      val wRegionOffset = alignToBeat(currentMemoryOffset)
+      currentMemoryOffset = wRegionOffset
+      // S2a: per-pass slice address. spillPassIdx stays 0 until the S2b
+      // controller advances it; the formula already walks the slices so the
+      // S2b diff only drives the register.
+      val spillPassOff: UInt = spillSlice match {
+        case Some((_, p)) =>
+          // max 1: P == 1 (full-width single pass, legal) still needs a
+          // well-formed register (same pattern as imgBandIdx above).
+          // Self-held in S2a (pass 0 only); the S2b controller advances it.
+          val r = Reg(UInt((log2Up(p) max 1) bits)) init(0)
+          r := r
+          spillPassIdxOf(i) = r
+          (r * U(sliceBytes, axiConfig.addressWidth bits)).resize(axiConfig.addressWidth bits)
+        case None => U(0, axiConfig.addressWidth bits)
+      }
+      reqW.address := io.weightsBaseAddress + wRegionOffset + spillPassOff
       val elementsPerBeatW = axiConfig.dataWidth / wType.getBitsWidth
       require(elementsPerBeatW >= 1,
         s"Weight dtype (${wType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported weight element size")
-      val beats = (elements + elementsPerBeatW - 1) / elementsPerBeatW
+      val beats = (fetchElems + elementsPerBeatW - 1) / elementsPerBeatW
+      spillSlice.foreach { case _ => spillSliceInfo(i) = (fetchElems, beats) }
       require(beats <= 65536,
-        s"Weight region of layer $i needs $beats beats, above the 64K-beat single-command limit (multi-command fetch belongs to the multi-tile roadmap)")
+        s"Weight ${spillSlice match { case Some(_) => "slice"; case None => "region" }} of layer $i needs $beats beats, above the 64K-beat single-command limit (multi-command fetch belongs to the multi-tile roadmap)")
       reqW.length := (if (beats > 0) beats - 1 else 0)
       dmaW.io.cmd << reqW
 
