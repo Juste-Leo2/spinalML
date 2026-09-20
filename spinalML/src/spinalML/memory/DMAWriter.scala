@@ -232,9 +232,13 @@ case class DMAWriter[T <: Data](
   // AW and B may fire in the same cycle (a new burst issued while the previous
   // response arrives); the two effects must cancel instead of clobbering each
   // other, otherwise pendingB underflows on the following response.
+  // Saturating decrement: an unsolicited B (sim bring-up transients — never a
+  // protocol-correct slave) must not underflow the counter into a permanent
+  // cmd.ready wedge. Proof-neutral: DMAWriterFormal assumes B only with
+  // pending bursts in flight.
   when(awFire && !bFire) {
     pendingB := pendingB + 1
-  } elsewhen (bFire && !awFire) {
+  } elsewhen (bFire && !awFire && pendingB =/= 0) {
     pendingB := pendingB - 1
   }
 

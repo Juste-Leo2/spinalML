@@ -114,10 +114,14 @@ case class DMAReader[T <: Data](
   axiRawTensor.stream.valid := io.axiMaster.r.valid && (burstRemain =/= 0)
   io.axiMaster.r.ready      := axiRawTensor.stream.ready
 
-  when(io.axiMaster.r.valid && io.axiMaster.r.ready) {
+  // Saturating decrement (mirror of DMAWriter.pendingB): an unsolicited R
+  // beat (sim bring-up transients — never a protocol-correct slave, which
+  // only answers outstanding ARs) must not wrap the counter into a permanent
+  // cmd.ready wedge. Proof-neutral: DMAReaderFormal assumes R only with
+  // bursts outstanding.
+  when(io.axiMaster.r.valid && io.axiMaster.r.ready && burstRemain =/= 0) {
     burstRemain := burstRemain - 1
-  }
-  
+  }  
   // Convert physical AXI bits into ML DataType array
   for (i <- 0 until axiLanes) {
     val slice = io.axiMaster.r.data(i * dataType.getBitsWidth, dataType.getBitsWidth bits)

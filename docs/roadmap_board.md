@@ -72,4 +72,10 @@ constrained and calibrated on silicon (see `docs/ddr_impl.md` Phase 5b).
 | Sipeed Tang Primer 20K | 4096 words (BSRAM 46) | not present (`ddr.present = false`, `.cst` = clk/reset/UART only) |
 | All other targets | — (no `memory` block yet, loader falls back to legacy defaults) | — |
 
+The same block is the future source for the resource planner: once
+`limits.bram` is expressed in usable bytes and `memory.ddr` carries effective
+bandwidth/latency, `spinalml build --board X` will derive the per-layer tiling
+from the board budget and fail fast on infeasible models — see
+[**tiling_resource_scaling.md**](tiling_resource_scaling.md) §9-10.
+
 If you have verified SpinalML on a new board, please open a pull request with your board profile and reproduction steps!

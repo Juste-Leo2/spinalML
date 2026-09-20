@@ -1,7 +1,7 @@
 # Cartographie de la communication de données — spinalML
 
 > **Objectif** : comprendre *comment les données circulent* entre les composants — protocoles,
-> frontières de commandes, état persistant — pour que chaque piège rencontré (phases 0/1) devienne
+> frontières de commandes, état persistant — pour que chaque piège rencontré (phases 0 à 4) devienne
 > une case remplie plutôt qu'un souvenir flou. Ce document est l'anti-régression conceptuel du projet.
 >
 > **Comment lire** : chaque affirmation est ancrée à une ligne de code (`fichier:ligne`) ou à une
@@ -11,7 +11,10 @@
 > **Rendu des diagrammes** : Mermaid se rend nativement sur GitHub / VS Code (extension Mermaid).
 > Les blocs WaveDrom nécessitent l'extension VS Code « WaveDrom » ou https://wavedrom.com/editor.html .
 >
-> **Docs compagnons** : `docs/bugs/2026-08-rearm-session.md` (post-mortem détaillé),
+> **Docs compagnons** : `docs/data_flow.md` (vue synthétique à jour : architecture
+> actuelle, concepts `lanes`/`temporal`/slices, structure logique DDR et statut
+> silicium/sim/planifié), `docs/ddr_impl.md` (tuyauterie DDR), `docs/ddr_final_impl.md`
+> (spill compute-side S0-S3), `docs/bugs/2026-08-rearm-session.md` (post-mortem détaillé),
 > `docs/roadmap.md` (plan de route), `docs/symbolicTestPlaybook.md` (méthodo formelle).
 
 ---
@@ -22,9 +25,9 @@
 2. [Le protocole Stream en 5 minutes](#2-le-protocole-stream-en-5-minutes)
 3. [Contrat de chaque composant](#3-contrat-de-chaque-composant)
 4. [Les pièges vécus, en diagrammes](#4-les-pièges-vécus-en-diagrammes)
-5. [Correctifs F1–F6 et zones d'ombre](#5-correctifs-f1f6-et-zones-dombre)
-6. [Points d'accroche Phase 2](#6-points-daccroche-phase-2)
-A. [Index des fichiers](#annexe-a--index-des-fichiers)
+5. [Correctifs F1–F9 et zones d'ombre](#5-correctifs-f1f9-et-zones-dombre)
+6. [Points d'accroche Phases 2 à 4](#6-points-daccroche-phases-2-à-4)
+A. [Annexe A — Index des fichiers](#annexe-a--index-des-fichiers)
 
 ---
 
@@ -34,94 +37,114 @@ A. [Index des fichiers](#annexe-a--index-des-fichiers)
 
 ```mermaid
 flowchart LR
-    subgraph HOST["Hôte (co-sim Python/cocotb, futur CPU)"]
-        SW["Écrit registres<br/>pulse START<br/>poll DONE"]
+    subgraph HOST["Hôte (co-sim Python/cocotb, UART, futur CPU)"]
+        SW["Écrit registres CsrMap<br/>pulse START<br/>poll DONE / STATUS"]
     end
 
     subgraph SOC["Accelerator — nn/Accelerator.scala"]
-        subgraph CTRL["Plan de contrôle AXI-Lite (Accelerator.scala:57-86)"]
-            REG["0x00 START · 0x04 STATUS<br/>0x08 imgBase · 0x0C weightsBase"]
+        subgraph CTRL["Plan de contrôle AXI-Lite (CsrMap / Accelerator.scala:95-123,203-388)"]
+            REG["0x00 START · 0x04 STATUS<br/>0x08 imgBase · 0x0C weightsBase<br/>0x10 MODE · 0x14 RELOAD · 0x18 TILE_CNT · 0x1C RUN<br/>0x20 outAddr · 0x24 outCtrl · 0x28 dmaStatus · 0x34 spillBase"]
         end
 
         subgraph SEQ["Sequential — nn/Sequential.scala"]
-            FORK["StreamFork(io.start, N triggers)<br/>Sequential.scala:115"]
-            subgraph IMGPATH["Chemin image"]
+            FORK["StreamFork(io.start, totalDmaTriggers)<br/>Sequential.scala:301"]
+            subgraph IMGPATH["Chemin image (banded 2D fetch)"]
+                IBAND["Séquenceur de bandes<br/>imgBandActive, nBands"]
                 DMA2D["DMAReader2D<br/>(FSM Idle→Fetch→Drain)"]
                 DBUF_I["StreamDoubleBuffer img<br/>reArm = front montant start.valid"]
-                ST_I["DoubleBufferStreamer img"]
+                ST_I["DoubleBufferStreamer img<br/>reArm = front montant start.valid"]
             end
-            subgraph WBPATH["Par couche à poids"]
+            subgraph WBPATH["Par couche à poids / biais"]
                 DMAB_W["DMAReader poids<br/>trim + gearbox flushable"]
                 DMAB_B["DMAReader biais<br/>trim + gearbox flushable"]
-                DBUF_W["StreamDoubleBuffer w/b<br/>reArm = reqW/reqB.fire"]
-                ST_W["DoubleBufferStreamer w/b"]
+                DBUF_W["StreamDoubleBuffer w/b<br/>reArm = reqW/reqB.fire<br/>(residentHold / prefetch)"]
+                ST_W["DoubleBufferStreamer w/b<br/>reArm = reqW/reqB.fire"]
             end
             OPS["Chaîne d'ops par couche<br/>im2col → matmul → bias_add → …"]
-            TAP["TapBuffer ×k<br/>(forks DAG)"]
+            TAP["TapBuffer ×k<br/>(forks DAG, cap tensor + 1 slack)"]
         end
 
-        ARB["Axi4ReadOnlyArbiter<br/>≤16 ports, 1 étage"]
-        DDR[("DDR")]
+        ARB_R["Axi4ReadOnlyArbiter<br/>≤8 ports/étage (arbre 2 étages si &gt;8)"]
+        DWR["DMAWriter<br/>(write-back DDR optionnel)"]
+        ARB_W["Axi4WriteOnlyArbiter<br/>(spill drain + DMAWriter)"]
+        DDR[("DDR3 / DDR4 / BRAM")]
     end
 
     SW -->|"AXI-Lite write/read"| REG
     REG -->|"Event start"| FORK
-    FORK -->|"trigger img"| DMA2D
+    FORK -->|"startTriggers(0) [ready:=True]"| IBAND
+    IBAND -->|"cmd par bande"| DMA2D
     FORK -->|"trigger poids ×couches"| DMAB_W
     FORK -->|"trigger biais ×couches"| DMAB_B
     DMA2D --> DBUF_I --> ST_I --> OPS
     DMAB_W --> DBUF_W --> ST_W --> OPS
     DMAB_B --> DBUF_W
     OPS <-->|"Tensor streams"| TAP
-    OPS --> OUT["io.outStream<br/>STATUS(0x04) = outStream.valid"]
-    DMA2D --> ARB
-    DMAB_W --> ARB
-    DMAB_B --> ARB
-    ARB -->|"AXI4 ReadOnly"| DDR
+    OPS -->|"Stream direct (outCtrl=0)"| OUT["io.outStream (UART / testbench)"]
+    OPS -->|"Mode DDR (outCtrl bit0=1)"| DWR
+    DMA2D --> ARB_R
+    DMAB_W --> ARB_R
+    DMAB_B --> ARB_R
+    ARB_R -->|"AXI4 Read (AR/R)"| DDR
+    DWR --> ARB_W
+    ARB_W -->|"AXI4 Write (AW/W/B)"| DDR
 ```
 
 **Deux plans bien séparés :**
 
 | Plan | Bus | Rôle | Source |
 |---|---|---|---|
-| Contrôle | AXI4-Lite esclave (8 bits d'adresse, 32 bits data) | Registres + déclenchement | Accelerator.scala:24,58 |
-| Données | AXI4 **ReadOnly** maître (64 bits, idWidth 4) | Fetch img/poids/biais depuis la DDR | Accelerator.scala:34,45-52 |
+| Contrôle | AXI4-Lite esclave (8 bits d'adresse, 32 bits data) | Registres figés (`CsrMap`) + déclenchement | Accelerator.scala:49,95-123,203-388 |
+| Données | AXI4 **Read/Write** maître (64 bits, idWidth configurable) | Fetch img/poids/biais, write-back sortie (`DMAWriter`), partielles spill | Accelerator.scala:67-73,79-80,125-184 |
 
-Les canaux d'écriture AXI sont mis à la masse : le V1 ne fait qu'inférer, il n'écrit jamais en DDR
-(Accelerator.scala:48-52). La sortie ressort par un stream Tensor dédié, pas par la mémoire.
+**Deux voies de sortie complémentaires :**
+- **Mode Stream direct** (`OUT_CTRL 0x24` bit 0 = 0) : la sortie finale ressort directement sur `io.outStream` sans écriture en mémoire (utilisé pour les flux UART et tests MNIST simples).
+- **Mode DDR write-back** (`OUT_CTRL 0x24` bit 0 = 1) : `DMAWriter` écrit le tenseur résultant en DDR à l'adresse programmée dans `OUT_ADDR` (0x20, incrémentée du curseur `outBaseOffset` sous mode RUN continu).
+- **Modèles avec Spilling** (Phase 4) : le writer de drain de spill et le `DMAWriter` de sortie partagent le canal d'écriture via un arbitre 2:1 `Axi4WriteOnlyArbiter` (`Accelerator.scala:135-157`).
 
 ### 1.2 Plan de contrôle — les registres
 
+L'adresse de chaque registre est gelée de façon unique dans `CsrMap.scala` :
+
 | Adresse | Nom | Écriture | Lecture | Comportement |
 |---|---|---|---|---|
-| `0x00` | START | pulse → `startPending := True` | — | L'hôte peut pulser quand il veut : la requête est **retenue** jusqu'à ce que le datapath l'accepte (`startEvent.fire`), puis `startPending` retombe |
-| `0x04` | STATUS | — | bit 0 = DONE | Lit directement `io.outStream.stream.valid` |
-| `0x08` | IMG_BASE | RW | RW | Adresse DDR de l'image d'entrée |
-| `0x0C` | WEIGHTS_BASE | RW | RW | Adresse DDR du blob de poids (offsets internes calculés à l'élaboration) |
+| `0x00` | START | pulse → `startPending := True` | — | L'hôte pulse pour déclencher l'inférence. La requête est **retenue** jusqu'à ce que le datapath l'accepte (`startEvent.fire`), puis `startPending` retombe |
+| `0x04` | STATUS | — | bit 0 = DONE<br/>bit 1 = BUSY<br/>bit 2 = RUN | Bit 0 : `doneSticky` en mode DDR (mémorisé jusqu'au prochain START) ou `io.outStream.stream.valid` en mode direct.<br/>Bit 1 : `model.io.busy \|\| dmaWriter.io.busy`.<br/>Bit 2 : état actif du mode RUN (`runActive`) |
+| `0x08` | IMG_BASE | RW | RW | Adresse DDR de l'image d'entrée. Une écriture réinitialise le curseur `imgBaseOffset` |
+| `0x0C` | WEIGHT_BASE | RW | RW | Adresse DDR du blob de poids (offsets internes calculés à l'élaboration) |
+| `0x10` | MODE | RW | RW | bit 0 = `WEIGHT_RESIDENT` (maintien on-chip), bit 1 = `PREFETCH_EN` (rafraîchissement masqué en tâche de fond) |
+| `0x14` | RELOAD | pulse (W) | — | Toute écriture déclenche un rechargement one-shot des poids/biais à la prochaine frontière |
+| `0x18` | TILE_CNT | — | RO | Compteur de frames complètes terminées depuis le reset (incrémenté à chaque `frameDone`) |
+| `0x1C` | RUN | RW | RW | bit 0 = auto-advance continu : réémet START et avance les curseurs d'adresse (`imgBaseOffset`, `outBaseOffset`) à chaque `frameDone` |
+| `0x20` | OUT_ADDR | RW | RW | Adresse DDR de sortie pour `DMAWriter`. Une écriture réinitialise `outBaseOffset` |
+| `0x24` | OUT_CTRL | RW | RW | bit 0 = `writeToDdr` (active la redirection vers `DMAWriter` au lieu de `io.outStream`) |
+| `0x28` | DMA_STATUS | — | RO | bit 0 = busy, bit 1 = done du `DMAWriter` |
+| `0x30` | DEQUANT_SCALE | RW | RW | Facteur d'échelle runtime pour les couches `Cast` configurées avec `runtimeScale = true` |
+| `0x34` | SPILL_BASE | RW | RW | Adresse DDR de la région de spill des accumulateurs (Phase 4). Une écriture réinitialise `spillBaseOffset` |
 
-Sources : Accelerator.scala:60-86. Le point crucial : **START est un handshake, pas un pulse perdu**
-— si le datapath est occupé, `startPending` reste haut et `io.start.valid` aussi.
+Sources : `CsrMap.scala:16-56`, `Accelerator.scala:95-123,203-388`. Le point crucial : **START est un handshake retenu**, pas une impulsion volatile.
 
 ### 1.3 Plan de données — le fork des déclencheurs
 
-`Sequential` calcule `totalDmaTriggers = 1 (img) + Σ couches (poids? + biais?)`
-(Sequential.scala:114) et distribue **une copie de l'événement START à chaque DMA** via un
-`StreamFork` (Sequential.scala:115). Chaque branche :
+`Sequential` calcule `totalDmaTriggers = 1 (img) + Σ couches (poids? + biais?)` (`Sequential.scala:300`) et distribue une copie de l'événement START via un `StreamFork` (`Sequential.scala:301`).
 
 ```mermaid
 flowchart LR
     S["io.start"] --> F["StreamFork<br/>(synchronous=false,<br/>défaut lib)"]
-    F --> T0["dmaImg.cmd.valid"]
+    F --> T0["startTriggers(0)<br/>(ready := True immédiat)"]
     F --> T1["reqW.valid (par couche à poids)"]
     F --> T2["reqB.valid (par couche à biais)"]
-    T1 -.->|"fire = frontière<br/>de commande poids"| RA_W["wDoubleBuffer.io.reArm"]
-    T2 -.->|"fire"| RA_B["bDoubleBuffer.io.reArm"]
-    S -.->|"front montant valid"| RA_I["imgDoubleBuffer.io.reArm"]
+    T0 --> BAND["Séquenceur de bandes<br/>(imgBandActive := True)"]
+    BAND --> D2D["dmaImg.io.cmd.valid<br/>(1 commande par bande)"]
+    T1 -.->|"fire = frontière<br/>de commande poids"| RA_W["wDoubleBuffer.io.reArm<br/>wStreamer.io.reArm"]
+    T2 -.->|"fire"| RA_B["bDoubleBuffer.io.reArm<br/>bStreamer.io.reArm"]
+    S -.->|"front montant valid"| RA_I["imgDoubleBuffer.io.reArm<br/>imgStreamer.io.reArm"]
 ```
 
-⚠️ Subtilité capitale (§4.2) : le re-arm **image** et le re-arm **poids** n'utilisent pas la même
-frontière — front montant de `valid` pour l'image, `fire` de sa propre commande pour les poids.
-Ce n'est pas un hasard : c'est la seule combinaison qui fonctionne (voir §4.2).
+**Subtilités de synchronisation :**
+1. **Séquenceur de bandes image (Phase 3)** : `startTriggers(0).ready` est forcé à `True` (`Sequential.scala:373`). Le trigger START de l'image est absorbé instantanément par un petit séquenceur d'état (`imgBandActive`), qui délivre ensuite les commandes bande par bande à `DMAReader2D` à mesure que chaque bande est consommée (`dmaImg.io.cmd.fire`).
+2. **Mode résident (Phase 2a)** : quand `WEIGHT_RESIDENT` est actif et que la région est déjà chargée (`fetchNowW == False`), `startTriggers(idx).ready` est également forcé à `True` (`Sequential.scala:561`). Le fork ne bloque donc pas sur les DMA déjà résidents.
+3. **Frontières de re-arm** : le re-arm **image** et le re-arm **poids/biais** n'utilisent pas la même frontière — front montant de `start.valid` pour l'image, `fire` de la commande respective (`reqW.fire`/`reqB.fire`) pour les poids et biais (§4.2).
 
 ### 1.4 Le chemin d'une donnée, de la DDR au calcul (exemple poids d'une couche)
 
@@ -130,13 +153,10 @@ flowchart LR
     DDR[("DDR<br/>blob poids")] -->|AXI bursts INCR ≤256 beats,<br/>clip 4 KiB| RAW["R channel<br/>axiLanes éléments/beat"]
     RAW --> GB["Gearbox axiLanes → outLanes<br/>(RepackOp flushable côté poids)"]
     GB --> TRIM["Trim exact<br/>shape.product éléments"]
-    TRIM --> DBUF["StreamDoubleBuffer<br/>ping/pong BRAM"]
-    DBUF -->|readSync + FIFO 16| ST["DoubleBufferStreamer"]
-    ST -->|Tensor stream| MM["MatmulOp.bufferB<br/>→ multiplicateurs → arbre d'addition"]
+    TRIM --> DBUF["StreamDoubleBuffer<br/>ping/pong BRAM<br/>(+ residentHold / prefetch)"]
+    DBUF -->|readSync + FIFO 16| ST["DoubleBufferStreamer<br/>(reArm = reqW.fire)"]
+    ST -->|Tensor stream| MM["MatmulOp.buffersB<br/>→ multiplicateurs → arbre d'addition"]
 ```
-
-Chaque étage a son propre contrat (§3) ; les trois causes racines de la session ré-armement sont
-toutes nées d'un contrat mal lu à l'un de ces étages.
 
 ---
 
@@ -154,87 +174,67 @@ Tout le datapath interne parle le même dialecte : le **protocole Stream** de Sp
 
 ### 2.2 Tensor = Stream habillé
 
-Un `Tensor[T]` n'est rien d'autre qu'un wrapper autour de `Stream(Vec(T, lanes))`
-(Tensor.scala:10-24). `lanes` = nombre d'éléments transportés par beat. Le beat final d'un tensor
-peut être partiel (divisibilité non imposée, Tensor.scala:15-19) — c'est voulu, mais c'est là que
-vivent les pièges de groupes partiels (RC2).
+Un `Tensor[T]` est un wrapper typé autour de `Stream(Vec(T, lanes))` (`Tensor.scala:10-24`). `lanes` = nombre d'éléments transportés par beat. Le beat final d'un tensor peut être partiel (divisibilité non imposée, `Tensor.scala:15-19`) — c'est voulu, mais c'est là que vivent les pièges de groupes partiels (RC2).
 
 ### 2.3 Acceptation précoce vs tardive d'une commande
 
-C'est LE concept qui explique 80 % des bugs de la session ré-armement :
+C'est le concept clé qui explique la majorité des deadlocks de ré-armement :
 
 - **Acceptation précoce** : `cmd.ready` monte dès que l'état interne est libre, AVANT toute donnée.
-  → `cmd.fire` est une bonne frontière de commande. Exemple : `DMAReader` 1D
-  (DMAReader.scala:71-73).
+  → `cmd.fire` est une excellente frontière de commande. Exemple : `DMAReader` 1D (`DMAReader.scala:73-75`).
 - **Acceptation tardive** : `cmd.ready` ne monte qu'une fois la commande PRÉCÉDENTE entièrement
   drainée… ou pire, une fois les données de LA COMMANDE COURANTE déjà consommées.
-  → `cmd.fire` arrive trop tard pour servir de frontière. Exemple fatal : `DMAReader2D` ne
+  → `cmd.fire` arrive trop tard pour servir de frontière. Exemple : `DMAReader2D` ne
   répond `io.cmd.ready := True` que sur le **dernier beat drainé de la dernière ligne**
-  (DMAReader2D.scala:180).
+  (`DMAReader2D.scala:188`).
 
 ### 2.4 État séquentiel persistant
 
-Toute bascule (`Reg`) survit entre commandes tant que personne ne la remet à zéro. Compteurs,
-flags de banks pleines, phase de gearbox, FIFOs partiellement remplies : tout cela traverse la
-frontière d'inférence silencieusement. La règle du projet désormais : **chaque composant avec état
-doit exposer un moyen explicite de revenir à son état initial entre commandes** (`io.reArm`,
-`isEmpty`), et chaque appelant doit câbler cette frontière au bon signal (§4.2).
+Toute bascule (`Reg`) survit entre commandes tant que personne ne la remet à zéro. Compteurs, flags de banques pleines, phase de gearbox, FIFOs partiellement remplies : tout cela traverse la frontière d'inférence silencieusement.
+La règle du projet : **chaque composant avec état doit exposer un moyen explicite de revenir à son état initial entre commandes** (`io.reArm`, `isEmpty`), et chaque appelant doit câbler cette frontière au bon signal (§4.2).
 
 ---
 
 ## 3. Contrat de chaque composant
 
-Tableau synthétique, puis fiches détaillées pour les composants piégeux. Chemins relatifs à
-`spinalML/src/spinalML/`.
+Tableau synthétique, puis fiches détaillées pour les composants piégeux. Chemins relatifs à `spinalML/src/spinalML/`.
 
 | Composant | Ports clés | Acceptation cmd | État persistant entre commandes | Ré-armé par | Source |
 |---|---|---|---|---|---|
-| `Accelerator` | AXI-Lite, Event start, AXI4 RO, outStream | START retenu (`startPending`) | `startPending`, regs adresses | fire de l'Event consommé | nn/Accelerator.scala:60-86 |
-| `Sequential` | Event, bases addr, AXI4 RO | fork vers N DMA | offsets élaborés (statiques) | — | nn/Sequential.scala:92-143 |
-| `StreamFork` (lib) | 1 in → N out | input.ready quand TOUS ont pris leur copie | `linkEnable` (mode async) | — | lib Stream.scala:1291-1350 |
-| `DMAReader` 1D | cmd FetchRequest, AXI4 RO, outStream | **Précoce** (état libre [+ gearbox vide]) | `remaining`, `burstRemain`, `addrReg`, compteur trim, phase gearbox | `cmd.fire` (auto-compteurs) + `flushableGearbox`/`trimToElements` | memory/DMAReader.scala:61-154 |
-| `DMAReader2D` | cmd FetchRequest2D, AXI4 RO | **TARDIVE** : dernier beat drainé dernière ligne | FSM, `currentAddress/Row`, géométrie ligne, `elemCnt` | FSM revient à Idle (compteurs lignes reset par cycle) | memory/DMAReader2D.scala:145-188 |
-| `StreamDoubleBuffer` | streamIn, readAddr/Data, nextTile/tileReady, reArm | streamIn.ready si bank pas pleine | `loadBank`, `computeBank`, `pingFull`, `pongFull`, `loadCounter` | **`io.reArm` obligatoire** | memory/StreamDoubleBuffer.scala:43-107 |
-| `DoubleBufferStreamer` | readAddr/Data, nextTile/tileReady, streamOut | attend `tileReady` | `readCounter`, `isReading`, FIFO 16 | redémarre sur `tileReady` après swap | memory/DoubleBufferStreamer.scala:27-66 |
-| `MatmulOp` | a, b, c, reArm | attend `tileReady` de bufferB | bufferB(s), accumulateurs M×N (init zéro), compteurs k/n/row/out | `io.reArm` → bufferB(s) uniquement | ops/matmul.scala:36-40,216-217 |
-| `BiasAddOp` | a, b(lanes=1), c | FSM LoadBias d'abord | `biasMem` (rechargée à CHAQUE tensor), compteurs | boucle Done→LoadBias auto | ops/bias_add.scala:44-94 |
-| `Im2ColOp` | a(lanes=1), c | FSM Fill | compteurs (reset à Done) MAIS `shiftReg`/`lineBuffers`/`tempVecs` **jamais vidés** ⚠️ | aucun pour les registres de fenêtre | ops/im2col.scala:206-215 |
-| `RepackOp` legacy | a, c (+reArm ignoré) | transparent | phase du `StreamWidthAdapter` sous-jacent ⚠️ | AUCUN (cloison actuel : chemin image seulement) | ops/repack.scala:19-29 |
-| `RepackOp` flushable | a, c, reArm, isEmpty | — | `hold/collect`, `idx`, `full` | `io.reArm` + drain avant nouvelle cmd | ops/repack.scala:31-80 |
-| `TapBuffer` | in, directOut, tapOut | tee atomique (ready = direct && fifo) | FIFO capacité exacte du tensor | se vide naturellement (one-shot) | memory/TapBuffer.scala:28-38 |
-| `Axi4ReadOnlyArbiter` (lib) | N in → 1 out | arbitrage standard | grant en cours | — | Sequential.scala:461-476 |
+| `Accelerator` | AXI-Lite slave, AXI4 master (RW), io.outStream, busy, done | START retenu (`startPending`) | `startPending`, `doneSticky`, regs adresses, curseurs (`imgBaseOffset`, `outBaseOffset`, `spillBaseOffset`), `tileCntReg` | fire de l'Event consommé (`startPending := False`), host writes pour réinitialiser les curseurs | `nn/Accelerator.scala:78-123, 203-388`, `nn/CsrMap.scala` |
+| `Sequential` | Event, bases addr, AXI4 master (RO + spillWrite), startTriggers | fork vers N triggers DMA (bander accepte immédiatement, poids immédiats si résidents) | offsets élaborés, `imgBandIdx`, `imgBandActive`, latches reload | front montant `start.valid` (img), `reqW.fire`/`reqB.fire` (poids/biais) | `nn/Sequential.scala:298-384, 535-640, 660-728, 1090-1129` |
+| `StreamFork` (lib) | 1 in → N out | input.ready quand TOUS ont pris leur copie | `linkEnable` (mode async) | — | lib `Stream.scala:1321-1350` |
+| `DMAReader` 1D | cmd FetchRequest, AXI4 RO, outStream | **Précoce** (`baseReady && gearboxEmpty`) | `remaining`, `burstRemain`, `addrReg`, compteur trim, phase gearbox | `cmd.fire` (auto-compteurs) + `flushableGearbox`/`trimToElements` | `memory/DMAReader.scala:50-160` |
+| `DMAReader2D` | cmd FetchRequest2D, AXI4 RO, outStream | **TARDIVE** : dernier beat drainé dernière ligne (ligne 188) | FSM, `currentAddress/Row`, `cmdHeight/Stride`, `elemCnt` | FSM revient à Idle (compteurs reset) | `memory/DMAReader2D.scala:50-196` |
+| `StreamDoubleBuffer` | streamIn, readAddr/Data, nextTile/tileReady, reArm, opt: `residentHold`, `stageRequest`, `loadCanAccept`, `tileFilled`, `refreshSettled` | streamIn.ready si banque pas pleine (`!currentLoadBankFull`) | `loadBank`, `computeBank`, `pingFull`, `pongFull`, `loadCounter`, `switchArmed` | **`io.reArm` obligatoire** (remet tout à l'état power-on) ; neutralisé sur nextTile par `residentHold` | `memory/StreamDoubleBuffer.scala:41-69, 157-164` |
+| `DoubleBufferStreamer` | readAddr/Data, nextTile/tileReady, streamOut, **`reArm`** | attend `tileReady` | `readCounter`, `popCounter`, `isReading`, `tileActive`, FIFO 16 | **`io.reArm`** (clear compteurs, `isReading := False`, `tileActive := False`, `fifo.flush := True`) | `memory/DoubleBufferStreamer.scala:17-32, 90-97` |
+| `MatmulOp` | a, b, c, reArm, opt: `spillIn`, `spillOut`, `passFirst`, `passLast`, `passDone` | attend `tileReady` de `buffersB` | buffersB(s), accumulateurs M×N (init zéro), compteurs k/row/out | `io.reArm` → `buffersB(s)` | `ops/matmul.scala:69-86, 137-138` |
+| `BiasAddOp` | a, b(lanes=1), c, **`reArm`** | FSM `LoadBias` d'abord | `biasMem`, `loadCounter`, `aCounter` | **`io.reArm`** (`loadCounter.clear()` en LoadBias ; `aCounter.clear()` + `goto(stateLoadBias)` en Process) | `ops/bias_add.scala:24-29, 46-99` |
+| `Im2ColOp` | a(lanes=inLanes), c | FSM `Fill` | compteurs (reset à Done) MAIS `shiftReg`/`lineBuffers`/`tempVecs` **jamais vidés** ⚠️ | aucun pour les registres de fenêtre (inoffensif tant que de nouvelles lignes sont lues) | `ops/im2col.scala:28-31, 73, 181-191` |
+| `RepackOp` legacy | a, c (+reArm ignoré) | transparent | phase du `StreamWidthAdapter` sous-jacent ⚠️ | AUCUN (cloison actuel : chemin image seulement) | `ops/repack.scala:21-32` |
+| `RepackOp` flushable | a, c, reArm, isEmpty | `!full` | `hold/collect`, `idx`, `full` | `io.reArm` (`full := False; idx := 0`) + drain avant nouvelle cmd (`isEmpty`) | `ops/repack.scala:33-83` |
+| `TapBuffer` | in, directOut, tapOut, opt: dbg | té atomique (`streamIn.ready := directOut.ready && fifo.push.ready`) | FIFO capacité `depth / lanes + 1` (slack pour té atomique) | se vide naturellement (one-shot) | `memory/TapBuffer.scala:19-71` |
+| `Axi4ReadOnlyArbiter` (lib) | N in → 1 out | arbitrage standard Round-Robin | grant en cours | — | `nn/Sequential.scala:1090-1129` (fan-in 8, arbre 2 étages si > 8, bypass si 1 master) |
 
 ### 3.1 `StreamFork` — la sémantique exacte (lib)
 
 Source : `/home/leo/SpinalHDL-1.14.2/.../lib/Stream.scala:1321-1350`.
 
-> *"The input stream will block until all output streams have processed each item regardlessly."*
-> (lignes 1325-1327)
-
 Deux modes :
+- **`synchronous = false`** (**notre cas**, défaut de l'objet apply, `Stream.scala:1292`) : chaque sortie peut accepter à un cycle différent (bit `linkEnable` par sortie, ligne 1344). MAIS l'input reste bloqué jusqu'à ce que toutes les sorties aient pris leur copie.
+- **`synchronous = true`** : toutes les sorties firent le même cycle, au prix d'un hazard documenté par la lib : `valid` dépendant combinatoirement de `ready`.
 
-- **`synchronous = false`** (**notre cas**, défaut de l'objet apply, Stream.scala:1292) :
-  chaque sortie peut accepter à un cycle différent (bit `linkEnable` par sortie, ligne 1344).
-  MAIS l'input reste bloqué jusqu'à ce que toutes les sorties aient pris leur copie.
-- **`synchronous = true`** : toutes les sorties firent le même cycle, au prix d'un hazard
-  documenté par la lib elle-même : `outputs.foreach(_.valid := input.valid && input.ready)`
-  (ligne 1349-1350) — le **valid dépend du ready**, violation explicite d'AXI (commentaire
-  lignes 1328-1330).
-
-**Conséquence projet** : dans les DEUX modes, `io.start.fire` n'est vrai que lorsque le DMA le
-plus lent a accepté. C'est pourquoi `start.fire` est une frontière **trop tardive**
-(rapport RC §2). Notre fork utilise le mode asynchrone : pas de hazard valid/ready, mais la règle
-« tout le monde a pris » s'applique quand même.
+**Conséquence projet** : `Sequential` évite le blocage du fork :
+- Pour l'image, `startTriggers(0).ready := True` immédiat (`Sequential.scala:373`) : le séquenceur de bandes absorbe la commande instantanément.
+- Pour les poids résidents (`fetchNowW == False`), `startTriggers(idx).ready := True` immédiat (`Sequential.scala:561`).
 
 ### 3.2 `StreamWidthAdapter` (lib) — le parking de groupe partiel
 
-Source : lib Stream.scala:2120-2153.
+Source : lib `Stream.scala:2120-2153`.
 
-Sens large → étroit (down-conversion) : un `Counter(factor)` découpe chaque beat en tranches ;
-aucun problème résiduel si les données arrivent par paquets complets.
+Sens large → étroit (down-conversion) : un `Counter(factor)` découpe chaque beat en tranches ; aucun problème résiduel si les données arrivent par paquets complets.
 
-Sens étroit → large (up-conversion, lignes 2138-2152) : un **registre `buffer`** accumule les
-éléments (ligne 2143-2146) et un **`Counter`** décide quand émettre (ligne 2147) :
+Sens étroit → large (up-conversion, lignes 2138-2152) : un **registre `buffer`** accumule les éléments et un **`Counter`** décide quand émettre :
 
 ```scala
 val counter = Counter(factor, inc = input.fire)
@@ -244,67 +244,54 @@ output.valid := input.valid && counter.willOverflowIfInc
 input.ready  := !(!output.ready && counter.willOverflowIfInc)
 ```
 
-⚠️ **Ni `counter` ni `buffer` ne connaissent la notion de "commande"** : si une commande se
-termine alors que `counter ≠ 0`, les éléments orphelins restent parkés et **déphasent la
-commande suivante**. C'est la mécanique exacte de RC2 (rapport RC §1, RC2).
+⚠️ **Ni `counter` ni `buffer` ne connaissent la notion de "commande"** : si une commande se termine alors que `counter ≠ 0`, les éléments orphelins restent parkés et **déphasent la commande suivante** (RC2).
 
 ### 3.3 `DMAReader` 1D — acceptation précoce + chaîne de nettoyage
 
-- Frontière : `io.cmd.ready := baseReady && gearboxEmpty` (DMAReader.scala:71-73) — précoce,
-  car `baseReady` ne regarde que les compteurs de la commande précédente, terminée.
-- Bursts : découpage INCR ≤ `maxBurstBeats` (256), clip 4 KiB, stricte sérialisation AR/R
-  (DMAReader.scala:57-97).
-- Trim exact (`trimToElements`) : supprime tout élément au-delà de `shape.product` ; compteur
-  `sent` remis à zéro à chaque `cmd.fire` (DMAReader.scala:143-154). Combat RC1 côté poids/biais.
-- Gearbox flushable (`flushableGearbox`) : RepackOp structuré dont `isEmpty` participe à
-  `cmd.ready` — on n'accepte une nouvelle commande que lorsque la queue de la précédente est
-  drainée (DMAReader.scala:68-73,130-134). Combat RC2 côté poids/biais.
+- Frontière : `io.cmd.ready := (if (flushableGearbox) baseReady && gearboxEmpty else baseReady)` (`DMAReader.scala:73-75`) — précoce, car `baseReady` ne regarde que les compteurs de la commande précédente, terminée.
+- Bursts : découpage INCR ≤ `maxBurstBeats` (256), clip 4 KiB, sérialisation stricte AR/R (`DMAReader.scala:59-99`).
+- Trim exact (`trimToElements`) : supprime tout élément au-delà de `shape.product` ; compteur `sent` remis à zéro à chaque `cmd.fire` (`DMAReader.scala:149-160`). Combat RC1 côté poids/biais.
+- Gearbox flushable (`flushableGearbox`) : RepackOp structuré dont `isEmpty` participe à `cmd.ready` — on n'accepte une nouvelle commande que lorsque la queue de la précédente est drainée (`DMAReader.scala:73-75, 135-141`). Combat RC2 côté poids/biais.
 
 ### 3.4 `DMAReader2D` — l'acceptation tardive fatale
 
-FSM `Idle → Fetch → Drain*` (DMAReader2D.scala:145-188). `io.cmd.ready := True` n'apparaît QUE
-dans `stateDrain`, sur le fire du dernier beat de la dernière ligne (ligne 180) :
+FSM `Idle → Fetch → Drain` (`DMAReader2D.scala:153-196`). `io.cmd.ready := True` n'apparaît QUE dans `stateDrain`, sur le fire du dernier beat de la dernière ligne (ligne 188) :
 
 ```
-cmd.valid ─────────────────────────────────────█ ← prêt ici seulement
+cmd.valid ─────────────────────────────────────█ ← prêt ici seulement (ligne 188)
                                                ↑
    l'image entière a DÉJÀ traversé le composant │
 ```
 
-Conséquence : `dmaImg.io.cmd.fire` survient **après** que la première bank du double buffer est
-pleine — réarmer sur ce signal efface un `tileReady` fraîchement monté et fige le pipeline
-(deadlock n°1 du rapport RC §2). Utilisez ce fire comme indicateur « image N consommée », jamais
-comme frontière « image N+1 commence ».
+Conséquence : `dmaImg.io.cmd.fire` survient **après** que la banque du double buffer est pleine — réarmer sur ce signal effacerait un `tileReady` fraîchement monté et figerait le datapath (deadlock n°1 du rapport RC §2). C'est pourquoi l'image est réarmée sur le front montant de `start.valid`, et séquencée en bandes.
 
-### 3.5 `StreamDoubleBuffer` — ping/pong et re-arm
+### 3.5 `StreamDoubleBuffer` — ping/pong, re-arm et extensions Phase 2
 
-- Deux banks BRAM, `streamIn.ready := !currentLoadBankFull` (backpression, pas de perte,
-  StreamDoubleBuffer.scala:63).
-- `tileReady` reflète la bank de calcul pleine ; `nextTile` bascule `computeBank` et libère la
-  bank (78-97).
-- `io.reArm` (101-107) remet TOUT à l'état power-on : banks, flags, compteur. Dernier assigne-
-  ment gagne : le re-arm écrase toute autre mise à jour du même cycle.
-- **Taille contractuelle** : la bank doit faire EXACTEMENT `depth/lanes` beats du tensor —
-  sinon `tileReady` ne monte jamais (commentaire Sequential.scala:146-149).
+- Deux banques BRAM, `streamIn.ready := !currentLoadBankFull` (backpressure, pas de perte, `StreamDoubleBuffer.scala:101`).
+- `tileReady` reflète la banque de calcul pleine ; `nextTile` bascule `computeBank` et libère la banque (`StreamDoubleBuffer.scala:88, 119-122`).
+- `io.reArm` (lignes 157-164) remet TOUT à l'état power-on : banques, drapeaux, pointeurs. Dernier assignement gagne : le re-arm écrase toute autre mise à jour du même cycle.
+- **Extensions de résidence (Phase 2a)** : port optionnel `residentHold` — gèle le flag de la banque courante et neutralise `nextTile`, permettant au streamer de relire indéfiniment la même banque sans trafic DDR.
+- **Extensions de prefetch (Phase 2b)** : ports `stageRequest`, `loadCanAccept`, `tileFilled`, `refreshSettled` — autorisent un swap unique gouverné (`switchArmed`) à la prochaine frontière de passe (`StreamDoubleBuffer.scala:107-124`).
 
-### 3.6 `MatmulOp` — consommation tirée, re-arm propagé
+### 3.6 `DoubleBufferStreamer` — lecture séquentielle et flush de FIFO
 
-Le B-tile est bufferisé dans un `StreamDoubleBuffer` interne dont le `io.reArm` est un port du
-composant (matmul.scala:36-40), alimenté par les couches avec le fire du DMA poids
-(Sequential.scala:199,244,309,329,402,404). Sans lui, un `tileReady` périmé laisse la matmul
-N+1 démarrer sur les données de N (RC1/RC3 côté compute).
+- Attend `tileReady` pour démarrer (`DoubleBufferStreamer.scala:42-45`).
+- Émet séquentiellement les adresses de lecture via un `Stream(UInt)` avec disponibilité de FIFO > 1 (`DoubleBufferStreamer.scala:80`).
+- Gère la latence BRAM d'un cycle à l'aide d'une `StreamFifo(Vec, 16)`.
+- **Port `io.reArm`** (`DoubleBufferStreamer.scala:31, 90-97`) : réinitialise l'automate de lecture (`isReading := False`, `tileActive := False`), efface les compteurs `readCounter` et `popCounter`, et vide la FIFO (`fifo.io.flush := True`). Il est impératif de le câbler avec le `reArm` du buffer sous peine de laisser la FIFO streamer des éléments résiduels.
 
-Note architecture : tout est **tiré** (pull) par le calcul — le `tileReady` autorise, les
-`ready` aval dictent le rythme. Le prefetch Phase 2 introduira du **poussé** (push) ; c'est LE
-couplage à concevoir (§6).
+### 3.7 `MatmulOp` — consommation tirée, re-arm propagé
 
-### 3.7 `Im2ColOp` — état de fenêtre jamais vidé ⚠️
+Le B-tile est bufferisé dans des `StreamDoubleBuffer` internes (`buffersB`, `matmul.scala:137-138`) dont le `io.reArm` est relié au port du composant (`matmul.scala:76`). Ce port est alimenté par les couches via le fire du DMA poids (`Sequential.scala:626-627, 734, 754, 908`). Sans lui, un `tileReady` périmé laisse la matmul N+1 démarrer sur les données de N.
 
-Les compteurs sont remis à zéro dans `stateDone` (im2col.scala:206-215) mais `shiftReg`,
-`lineBuffers` et `tempVecs` conservent les pixels de l'image précédente. Aujourd'hui sans
-conséquence : aucune fenêtre n'est émise avant que K lignes fraîches soient passées
-(`isWindowValid`, im2col.scala:83). Mais c'est un état inter-inférences réel, à garder en tête
-pour la résidence (Phase 2) et le multi-tile.
+### 3.8 `BiasAddOp` — rechargement et port reArm
+
+- Charge le vecteur de biais dans `biasMem` une fois par tenseur (`bias_add.scala:47-61`).
+- **Port `io.reArm`** (`bias_add.scala:28, 57-59, 94-97`) : en état `LoadBias`, il efface `loadCounter` ; en état de calcul `Process`, il réinitialise `aCounter` et force un retour immédiat en `stateLoadBias` (`goto(stateLoadBias)`).
+
+### 3.9 `Im2ColOp` — état de fenêtre persistant ⚠️
+
+Les compteurs `x`, `y`, `channelCount`, `windowCount` et `outChunkCount` sont remis à zéro dans `stateDone` (`im2col.scala:181-190`), mais `shiftReg`, `lineBuffers` et `tempVecs` conservent les pixels de l'image précédente. Aujourd'hui sans conséquence : aucune fenêtre n'est émise avant que K lignes fraîches soient passées (`isWindowValid`, `im2col.scala:73`).
 
 ---
 
@@ -317,31 +304,37 @@ sequenceDiagram
     participant H as Hôte
     participant ACC as Accelerator
     participant F as Fork
+    participant BND as Séquenceur bandes
     participant D as DMAReader2D
     participant W as DMAs poids/biais
     participant P as Pipeline (buffers→ops)
-    H->>ACC: write 0x08/0x0C (bases)
+    participant WR as DMAWriter (optionnel)
+    H->>ACC: write 0x08/0x0C (bases) [+ 0x20/0x24 si mode DDR]
     H->>ACC: write 0x00 (START)
     Note over ACC: startPending:=True<br/>jusqu'à acceptation
     ACC->>F: io.start.valid
     Note over F: reArm image = front montant valid (cycle suivant)
-    F->>D: trigger img
+    F->>BND: trigger img (ready:=True immédiat)
     F->>W: triggers poids/biais (×couches)
-    D->>P: beats image (rows trimmées)
+    BND->>D: commandes 2D par bande
+    D->>P: beats image par bandes
     W->>P: beats poids/biais (trim + gearbox drain)
     P->>P: buffers se remplissent → tileReady → matmul tire → ops
-    P-->>H: outStream.valid (= STATUS 0x04 bit0)
-    H->>ACC: read 0x04 jusqu'à DONE=1
-    H->>ACC: read résultat sur outStream
+    alt Mode Stream Direct (outCtrl=0)
+        P-->>H: outStream.valid (= STATUS 0x04 bit0)
+        H->>ACC: read 0x04 jusqu'à DONE=1
+        H->>ACC: read résultat sur outStream
+    else Mode DDR Write-back (outCtrl=1)
+        P->>WR: flux de sortie vers DMAWriter
+        WR->>ACC: frameDone pulse → doneSticky := True
+        H->>ACC: read 0x04 jusqu'à DONE (bit0) = 1
+        H->>ACC: read données en DDR à OUT_ADDR (0x20)
+    end
 ```
-
-Lecture des résultats : le bench lit `outStream` après polling de STATUS (MnistTest.scala,
-protocol `runInference`). Le V1 n'a pas de write-back DDR.
 
 ### 4.2 La frontière de commande : trois candidates, deux deadlocks
 
-Pourquoi le re-arm image est câblé sur le **front montant de `io.start.valid`**
-(Sequential.scala:160-161) :
+Pourquoi le re-arm image est câblé sur le **front montant de `io.start.valid`** (`Sequential.scala:402-419`) :
 
 ```mermaid
 sequenceDiagram
@@ -373,14 +366,11 @@ sequenceDiagram
     end
 ```
 
-La règle générale qui en sort : **la frontière d'une commande doit précéder le premier octet de
-données de cette commande**. Pour les poids/biais, `reqW.fire`/`reqB.fire` respectent cette
-règle car les readers 1D acceptent de façon précoce (§3.3) — d'où l'asymétrie img/poids.
+Règle générale : **la frontière d'une commande doit précéder le premier mot de données de cette commande**. Pour les poids/biais, `reqW.fire`/`reqB.fire` respectent cette règle car les readers 1D acceptent de façon précoce (§3.3) — d'où l'asymétrie voulue img/poids.
 
 ### 4.3 RC1 — les beats de padding polluent les buffers à taille exacte
 
-La DDR livre des beats entiers. Une région de 50 éléments I4 sur bus 64 bits (16 éléments/beat)
-occupe `ceil(50/16)=4` beats = **64 éléments physiques**, dont 14 de padding région. Sans trim :
+La DDR livre des beats entiers. Une région de 50 éléments I4 sur bus 64 bits (16 éléments/beat) occupe `ceil(50/16)=4` beats = **64 éléments physiques**, dont 14 de padding. Sans trim :
 
 ```wavedrom
 {head:{text:"RC1 — 50 éléments I4 sur bus 64b (16 él/beat) : 4 beats = 64 physiques", tick:0},
@@ -393,18 +383,11 @@ occupe `ceil(50/16)=4` beats = **64 éléments physiques**, dont 14 de padding r
  ]}
 ```
 
-> Le junk de bank1 précède les données de l'inférence suivante → corruption inter-start.
-
-Le padding finit dans la bank BRAM ; pire, si la bank suivante reçoit le début de l'inférence
-suivante pendant que les flags survivent, l'inférence N+1 démarre sur des données décalées
-(rapport RC §1 RC1). Correctif : `trimToElements` (DMAReader.scala:143-154) + tailles exactes
-des buffers (Sequential.scala:149,243,289).
+Correctif : `trimToElements` (`DMAReader.scala:149-160`) + dimensionnement exact des tampons (`Sequential.scala:391, 534, 669`).
 
 ### 4.4 RC2 — la phase de gearbox retenue entre commandes
 
-Exemple : flux 16 lanes → 4 lanes (`factor=4`). Une commande livre 18 éléments = 4 groupes
-complets + **2 orphelins** parkés dans le `buffer`/`Counter` de l'adapter (§3.2). La commande
-suivante démarre déphasée de 2 :
+Exemple : flux 16 lanes → 4 lanes (`factor=4`). Une commande livre 18 éléments = 4 groupes complets + **2 orphelins** parkés dans le `buffer`/`Counter` de l'adapter (§3.2). La commande suivante démarre déphasée de 2 :
 
 ```wavedrom
 {head:{text:"RC2 — parking d'un groupe partiel dans l'adapter (16 lanes → 4 lanes, factor=4)", tick:0},
@@ -417,81 +400,66 @@ suivante démarre déphasée de 2 :
  ]}
 ```
 
-Correctif : gearbox structurée flushable (`RepackOp withFlush=true`, ops/repack.scala:31-80)
-dont `io.reArm` vide l'état et `io.isEmpty` participe à l'acceptation de la commande suivante
-(DMAReader.scala:68-73). Activée UNIQUEMENT sur les readers poids/biais (Sequential.scala:220-221,267-268).
-
-Note : quand le ratio n'est pas multiple (ex. 16 → 25 lanes pour un kernel Conv2D 5×5),
-`repack.apply` chaîne DEUX RepackOps en passant par lanes=1 (repack.scala:104-108) — deux
-parkings potentiels au lieu d'un, d'où l'importance du drain/flush systématique.
+Correctif : gearbox structurée flushable (`RepackOp withFlush=true`, `ops/repack.scala:33-83`) dont `io.reArm` vide l'état et `io.isEmpty` participe à l'acceptation de la commande suivante (`DMAReader.scala:73-75`).
 
 ### 4.5 Le cloison actuel — pourquoi deux gearboxes cohabitent
 
 | Chemin | Gearbox utilisée | Pourquoi |
 |---|---|---|
-| Image (DMAReader2D) | Adapter **legacy** (repack.scala:22-26) | Lignes complétées par beats entiers, groupes alignés : le contrat « group-aligned » tient, pacing battle-tested |
-| Poids/Biais (DMAReader 1D) | Structurée **flushable** | Régions finissant en milieu de groupe : le parking résiduel est systématique |
+| Image (`DMAReader2D`) | Adapter **legacy** (`repack.scala:21-32`) | Lignes complétées par beats entiers, groupes alignés : contrat « group-aligned » respecté, pacing battle-tested |
+| Poids/Biais (`DMAReader` 1D) | Structurée **flushable** (`repack.scala:33-83`) | Régions finissant en milieu de groupe : le parking résiduel est systématique |
 
-⚠️ MYSTÈRE OUVERT (rapport RC §5) : la gearbox structurée, seule, perturbe le DAG ResidualMLP
-alors que les micro-probes standalone sont bit-parfaits — interaction sensible au pacing/stalls,
-non localisée à ce jour. Toute généralisation du chemin flushable (ex. image multi-tile) devra
-attendre la dissection de ce comportement (jalon début/milieu Phase 2).
-**Analyse complète, hypothèses classées et plan de dissection : `docs/open-mysteries.md` (M1).**
+### 4.6 Piège TapBuffer — té atomique et slack FIFO (M1.7 bis)
+
+Dans un DAG, un nœud bifurque vers une branche directe et une branche différée via `TapBuffer` (`TapBuffer.scala:19-71`).
+Si la FIFO était dimensionnée à la capacité strictement exacte du tenseur (`depth / lanes`), et que le consommateur direct bloque sur le dernier beat, la source maintient `valid = 1`. Le té atomique ré-acquiert ce beat maintenu et l'insère une deuxième fois dans le chemin direct, provoquant une corruption de flux (découverte M1.7 bis sur WideResidual).
+**Correctif** : allocation de `entries = Math.max(1, depth / lanes) + 1` (+1 entrée de slack, `TapBuffer.scala:21, 49-55`) pour absorber ce beat d'attente sans doubler la livraison.
 
 ---
 
-## 5. Correctifs F1–F6 et zones d'ombre
+## 5. Correctifs F1–F9 et zones d'ombre
 
-Récapitulatif (détail complet dans le rapport RC §3) :
+Récapitulatif des correctifs anti-régression :
 
 | ID | Fichier | Correctif | Piège traité |
 |---|---|---|---|
-| F1 | memory/StreamDoubleBuffer.scala:33,101-107 | Port `io.reArm` (reset banks/flags/compteur) | RC1+RC3 |
-| F2 | nn/Sequential.scala:160-161 | Re-arm image = front montant `start.valid` | RC3 (frontière) |
-| F3 | nn/Sequential.scala:246,291 + ops/matmul.scala:39,87,217 + layers/* | Re-arm poids/biais = `reqW/reqB.fire`, propagation MatmulOp | RC3 (frontières par-DMA) |
-| F4 | memory/DMAReader.scala:143-154 | `trimToElements` (fin de stream alignée groupe) | RC1 |
-| F5 | ops/repack.scala:31-80 | RepackOp dual-mode + gearbox structurée flushable (`reArm`,`isEmpty`) | RC2 |
-| F6 | memory/DMAReader.scala:36-42,68-73 | `flushableGearbox` activée poids/biais seulement (cloison §4.5) | RC2 |
+| F1 | `memory/StreamDoubleBuffer.scala:54, 157-164` | Port `io.reArm` (reset banques/flags/compteurs) | RC1+RC3 |
+| F2 | `nn/Sequential.scala:402-419` | Re-arm image = front montant `start.valid` | RC3 (frontière image) |
+| F3 | `nn/Sequential.scala:626-627, 716-717` + `ops/matmul.scala:76, 138` | Re-arm poids/biais = `reqW/reqB.fire`, propagation `MatmulOp.buffersB` | RC3 (frontières par-DMA) |
+| F4 | `memory/DMAReader.scala:149-160` | `trimToElements` (fin de stream alignée groupe) | RC1 |
+| F5 | `ops/repack.scala:33-83` | RepackOp dual-mode + gearbox structurée flushable (`reArm`, `isEmpty`) | RC2 |
+| F6 | `memory/DMAReader.scala:44, 73-75` | `flushableGearbox` activée poids/biais seulement (cloison §4.5) | RC2 |
+| F7 | `memory/DoubleBufferStreamer.scala:31, 90-97` | Port `io.reArm` (clear compteurs, FSM reset, flush FIFO 16) | Désynchronisation buffer/streamer |
+| F8 | `ops/bias_add.scala:28, 57-59, 94-97` | Port `io.reArm` (clear `loadCounter`/`aCounter`, retour forcé à `LoadBias`) | Biais périmé inter-inférence |
+| F9 | `memory/TapBuffer.scala:21, 49-55` | Entrée de slack `depth/lanes + 1` sur la FIFO de té atomique | M1.7 bis (beat dupliqué en skip-chain) |
 
 Zones d'ombre assumées :
-
-1. ⚠️ **Gearbox flushable × DAG** (non expliqué, §4.5) — dissection obligatoire avant généralisation. Détails : `docs/open-mysteries.md` (M1).
-2. ⚠️ **État de fenêtre im2col** inter-inférences (§3.7) — inoffensif prouvé en one-shot, à re-vérifier en multi-tile. Détails : `docs/open-mysteries.md` (M2).
-3. Formels BMC non encore relancés avec les nouveaux ports (`reArm`/`isEmpty`) — harnais compilés, runs reportés (roadmap §8).
+1. ⚠️ **Gearbox flushable × DAG** (`docs/open-mysteries.md`, M1) — interaction sensible au pacing/stalls sur chemins complexes, cloisonnée au lecteur de poids/biais.
+2. ⚠️ **État de fenêtre im2col inter-inférences** (§3.9, M2) — inoffensif en one-shot tant que K lignes sont injectées avant lecture.
 
 ---
 
-## 6. Points d'accroche Phase 2
+## 6. Points d'accroche Phases 2 à 4
 
-Ce que la carte révèle pour la suite (résidence des poids, préfetch) :
+### 6.1 Phase 2a — Résidence des poids (`WEIGHT_RESIDENT`)
+- **Primitive `residentHold`** sur `StreamDoubleBuffer` (`StreamDoubleBuffer.scala:58, 115`) : neutralise `nextTile` de façon à conserver la banque pleine pour les inférences suivantes.
+- **CSR `0x10` bit0** = `WEIGHT_RESIDENT` ; **CSR `0x14` write** = `RELOAD` one-shot (`Accelerator.scala:375-388`).
+- Validation : `WeightResidentChainTest` (trafic AR poids strictement nul en régime établi).
 
-1. **Les frontières existent déjà par-DMA** : `reqW.fire`/`reqB.fire` armés indépendamment.
-   ⚠️ CORRECTION AU SPRINT (Phase 2a réalisée, août 2026) : l'hypothèse « résidence presque
-   gratuite » était **fausse en un point** — sans refill, le `nextTile` de fin de consommation
-   vide le flag du bank courant et bascule sur le bank jumeau (vide) : `tileReady` meurt et la
-   rediffusion ne redémarre jamais. La solution livrée = primitive `residentHold` sur
-   `StreamDoubleBuffer` (gèle flag + pointeur ; `reArm` garde la priorité last-wins pour qu'un
-   reload se comporte comme une passe normale). Le streamer, lui, est naturellement rejouable.
-2. ✅ **Livré en Phase 2a** :
-   - branches poids/biais du fork conditionnelles dans Sequential (fetch si 1ᵉʳ usage / RELOAD /
-     **front montant du mode** — ce front s'auto-fetch une fois car le pointeur hérite d'un bank
-     vide d'une passe legacy ; impulsion one-cycle → verrou sticky consommé par le `cmd.fire`) ;
-   - CSR `0x10` bit0 = WEIGHT_RESIDENT (défaut STREAM_PER_PASS), `0x14` write = RELOAD one-shot ;
-   - validation : `WeightResidentChainTest` (BF16+W4A8 bit-exactes, AR poids **strictement 0**
-     en régime établi, anti-vacuité RELOAD) + formel `StreamDoubleBufferHoldFormal`.
-3. **Le couplage poussé/tiré** : ✅ PARTIELLEMENT RÉSOLU EN PHASE 2b — le mode `PREFETCH_EN`
-   (CSR 0x10 bit1, exige bit0) fait sortir les fetch de refresh du sweep START : tir
-   opportuniste sur l'intersection reader-ready × loader-empty (le bank IDLE se remplit pendant
-   que la tuile tenue est encore consommée), puis **swap gouverné côté buffer** (`switchArmed` :
-   exactement UN flip autorisé à la prochaine frontière de passe, jamais mi-flux) signalé par
-   `refreshSettled`. La porte vérité = fenêtres AR poids entre START et 1ᵉʳ beat de sortie :
-   sérialisé = motif complet ; préchargé = strictement zéro (`WeightPrefetchChainTest`, les deux
-   modèles). Reste ouvert pour Folding L2 : le contrôle continu run/stop multi-tuiles (§4).
-4. **Compatibilité résidence vérifiée empiriquement** : `biasAdd` recharge son `biasMem` à CHAQUE
-   tensor depuis le flux re-diffusé ✓ ; les buffers B internes des matmuls reçoivent une copie
-   fraîche du flux à chaque passe → se comportent comme nourris par DMA ✓ ; im2col fenêtres
-   périmées (§3.7/M2) réécrites avant usage, OK — à surveiller en tiling Phase 3.
-5. ~~Jalon préalable gearbox×DAG~~ : levé (M1.7 open-mysteries — cloison principé).
+### 6.2 Phase 2b — Prefetch masqué des poids (`PREFETCH_EN`)
+- **CSR `0x10` bit1** = `PREFETCH_EN` : les rafraîchissements de poids s'exécutent en tâche de fond dans la banque IDLE pendant que la banque courante est consommée.
+- **Governed swap** (`switchArmed`, `refreshSettled`) : la bascule vers la nouvelle banque s'effectue strictement à la frontière de fin de passe (`nextTile`), jamais en cours de flux.
+
+### 6.3 Phase 3 — Tuilage image en bandes (`tileHeight`)
+- Découpe de l'image en `nBands` verticales (`Sequential.scala:338-362`).
+- Séquenceur d'état `imgBandActive` qui absorbe le `startTriggers(0)` immédiatement (`ready := True`) et déclenche les commandes 2D par bande à mesure que le datapath les consomme.
+
+### 6.4 Phase 4 — Spilling compute-side des accumulateurs (`spill`)
+- Découpage du GEMM en `P = K / Ks` passes (`spillKSlice`) pour franchir le mur de mémoire BRAM (`docs/ddr_final_impl.md`).
+- Les sommes partielles sont évacuées vers la DDR (`CSR 0x34 SPILL_BASE`) via `DMAWriter` et re-seedées à la passe suivante avec strict respect de la fence RAW (`writerDone`).
+
+### 6.5 Mode continu streaming (`RUN`)
+- **CSR `0x1C` bit0** = `RUN` (`Accelerator.scala:288-324`) : à chaque `frameDone`, le matériel réémet automatiquement un START interne et fait glisser `imgBaseOffset` (+ taille image) et `outBaseOffset` (+ taille sortie). Permet le traitement vidéo continu sans intervention CPU entre chaque frame.
 
 ---
 
@@ -499,19 +467,21 @@ Ce que la carte révèle pour la suite (résidence des poids, préfetch) :
 
 | Fichier | Contenu |
 |---|---|
-| `spinalML/src/spinalML/nn/Accelerator.scala` | Top-level SoC : AXI-Lite + AXI4 RO + Event |
-| `spinalML/src/spinalML/nn/Sequential.scala` | Orchestration : fork, DMAs, buffers, graphe d'ops, arbiter |
-| `spinalML/src/spinalML/memory/DMAReader.scala` | Reader 1D : bursts, trim, gearbox flushable |
-| `spinalML/src/spinalML/memory/DMAReader2D.scala` | Reader image : FSM lignes, trim head/tail |
-| `spinalML/src/spinalML/memory/StreamDoubleBuffer.scala` | Ping/pong BRAM + reArm |
-| `spinalML/src/spinalML/memory/DoubleBufferStreamer.scala` | Lecteur séquentiel + FIFO |
-| `spinalML/src/spinalML/memory/TapBuffer.scala` | Fork DAG à capacité exacte |
-| `spinalML/src/spinalML/ops/repack.scala` | Gearbox dual-mode (legacy/flushable) |
-| `spinalML/src/spinalML/ops/matmul.scala` | MatmulOp + buffer B interne |
-| `spinalML/src/spinalML/ops/bias_add.scala` | Broadcast add, rechargement par tensor |
-| `spinalML/src/spinalML/ops/im2col.scala` | Fenêtres glissantes (état de fenêtre persistant) |
+| `spinalML/src/spinalML/nn/Accelerator.scala` | Top-level SoC : AXI-Lite + AXI4 Master (R/W) + Event + curseurs RUN |
+| `spinalML/src/spinalML/nn/CsrMap.scala` | Définition gelée de l'espace d'adressage des registres CSR |
+| `spinalML/src/spinalML/nn/Sequential.scala` | Orchestration : fork, DMAs, buffers, graphe d'ops, séquenceur bandes, arbitre AXI |
+| `spinalML/src/spinalML/memory/DMAReader.scala` | Reader 1D : bursts 4 KiB, trim exact, gearbox flushable |
+| `spinalML/src/spinalML/memory/DMAReader2D.scala` | Reader image 2D : FSM lignes, trim head/tail, acceptation tardive |
+| `spinalML/src/spinalML/memory/DMAWriter.scala` | Moteur d'écriture AXI4 pour le write-back DDR et le spill |
+| `spinalML/src/spinalML/memory/StreamDoubleBuffer.scala` | Ping/pong BRAM + reArm + residentHold + prefetch FSM |
+| `spinalML/src/spinalML/memory/DoubleBufferStreamer.scala` | Lecteur séquentiel + FIFO 16 + port reArm |
+| `spinalML/src/spinalML/memory/TapBuffer.scala` | Fork DAG à té atomique avec entrée de slack (`depth/lanes + 1`) |
+| `spinalML/src/spinalML/ops/repack.scala` | Gearbox dual-mode (legacy / flushable structurée) |
+| `spinalML/src/spinalML/ops/matmul.scala` | MatmulOp + buffers B internes ping-pong + reArm |
+| `spinalML/src/spinalML/ops/bias_add.scala` | Broadcast add, rechargement par tenseur + port reArm |
+| `spinalML/src/spinalML/ops/im2col.scala` | Fenêtres glissantes 2D (état de fenêtre persistant) |
 | `spinalML/src/spinalML/tensors/Tensor.scala` | Définition Tensor = Stream(Vec(dtype, lanes)) |
-| `tests/python/test_dma_reader*.py` | Co-sim cocotb : mock AXI RAM + checks |
-| `docs/bugs/2026-08-rearm-session.md` | Post-mortem complet phases 0/1 |
-| `docs/open-mysteries.md` | Registre des comportements non expliqués (M1 gearbox×DAG, M2 im2col) + avertissements lib à relire |
-| Lib : `/home/leo/SpinalHDL-1.14.2/.../lib/Stream.scala` | Fork (:1321), WidthAdapter (:2120) |
+| `docs/data_flow.md` | Vue d'ensemble synthétique de l'architecture et statut silicium/sim |
+| `docs/ddr_impl.md` & `ddr_final_impl.md` | Tuyauterie DDR et spécification du spill compute-side S0-S3 |
+| `docs/bugs/2026-08-rearm-session.md` | Post-mortem exhaustif des deadlocks de ré-armement (RC1 à RC3) |
+| `docs/open-mysteries.md` | Registre des comportements non expliqués (M1 gearbox×DAG, M2 im2col) |

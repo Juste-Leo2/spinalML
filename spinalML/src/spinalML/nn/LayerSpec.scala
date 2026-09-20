@@ -85,13 +85,26 @@ case class Linear(
   // only the per-beat lane count and the matmul's internal K chunking
   // change. -1 (default) = inFeatures, the legacy full-width beats.
   weightLanes: Int = -1,
-  lanes: Int = 1
+  lanes: Int = 1,
+  // S0 compute-side spill (docs/ddr_final_impl.md): K-slice width streamed per
+  // pass (P = inFeatures / spillKSlice passes, M*N full-width partials in DDR
+  // between passes). -1 (default) = no spill, legacy one-shot GEMM.
+  spillKSlice: Int = -1
 ) extends LayerSpec {
   require(weightLanes == -1 || (weightLanes > 0 && inFeatures % weightLanes == 0),
     s"Linear weightLanes=$weightLanes must be -1 or a positive divisor of inFeatures=$inFeatures")
+  require(spillKSlice == -1 || (spillKSlice > 0 && inFeatures % spillKSlice == 0),
+    s"Linear spillKSlice=$spillKSlice must be -1 or a positive divisor of inFeatures=$inFeatures")
+  require(spillKSlice == -1 || spillKSlice % effLanes == 0,
+    s"Linear spillKSlice=$spillKSlice must be a multiple of effLanes=$effLanes " +
+      "(pass-internal chunking must match the replica fadd order exactly)")
 
   /** Effective per-beat width: inFeatures when the default (-1) is left untouched. */
   def effLanes: Int = if (weightLanes <= 0) inFeatures else weightLanes
+  /** True when this layer runs the K-pass spill GEMM (S1/S2 implement it). */
+  def spilling: Boolean = spillKSlice > 0
+  /** Number of K-passes; 1 = no spill. */
+  def spillPasses: Int = if (spillKSlice <= 0) 1 else inFeatures / spillKSlice
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   

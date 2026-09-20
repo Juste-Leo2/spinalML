@@ -45,16 +45,16 @@ Synthesized using **Yosys** and placed & routed via **nextpnr-himbaechel** for t
 
 | Resource | Used | Capacity | Utilization | Status |
 | :--- | :---: | :---: | :---: | :---: |
-| **Logic (LUT4)** | **9,884** | 20,736 | **47.7 %** | OK |
-| **Registers (FF)** | **5,137** | 15,552 | **33.0 %** | OK |
+| **Logic (LUT4)** | **10,219** | 20,736 | **49.3 %** | OK |
+| **Registers (FF)** | **5,197** | 15,552 | **33.4 %** | OK |
 | **Block RAM (BSRAM)** | **27** | 46 | **58.7 %** | OK |
 | **DSP (MULT)** | **25** | 48 | **52.1 %** (`MULT18X18`) | OK |
 
-*Numbers from the 2026-09-18 RNE build (25 `MULT18X18` DSPs).*
+*Numbers from the 2026-09-20 post-DDR-merge build (25 `MULT18X18` DSPs).*
 
 ### Timing & Performance Summary
 - **Target Clock**: 27.00 MHz
-- **Estimated Fmax**: **35.09 MHz** (Timing constraints MET, +8.09 MHz slack)
+- **Estimated Fmax**: **33.93 MHz** (Timing constraints MET, +6.93 MHz slack)
 - **Bitstream Size**: **7,091 KiB (~6.93 MiB)** (`top.fs`)
 - **Inference Latency**:
   - **~180 ms total roundtrip over UART** (a large portion of this duration is taken up by serial communication: transferring the 784-byte image and retrieving logits at 115,200 baud).

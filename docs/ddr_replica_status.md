@@ -130,3 +130,14 @@ par offset, re-stream A DDR-résident, bias-zéro hors passe finale,
 périmètre v1 = `Linear` à A DDR-résident) et `docs/wave6_ddr_scaling_plan.md`
 P1 le chiffrait (2-4 j). Il fera l'objet d'une PR dédiée : contrôleur
 multi-passes + RMW + fold réplica + spec formelle du contrôleur.
+
+**MàJ 20/09/2026** : S0-S2 sont livrées et validées e2e
+(`SequentialSpillTest` 10/10, cf. note de clôture `docs/ddr_final_impl.md`
+§S2 — dont le contrat layout W slice-transposé et le fencing inter-passes).
+Le **formel contrôleur** (2 harnais : safety + liveness bornée) et la
+**non-régression complète** (`test-all` + `test-all-formal` +
+`test-all-python`) sont verts. Reste, **reporté à une PR dédiée « réplica
+spill »** : support réplica d'un modèle spillé (fold `spillWidth` si besoin),
+outillage `WeightMemoryLayout` slice-transposé (consommé sans double
+transposition), comparaison `ModelReplica` e2e, mesure du trafic
+`P×(W_slice+A+2·M·N)` et note de clôture S3 définitive.

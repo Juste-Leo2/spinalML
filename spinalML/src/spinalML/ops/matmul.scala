@@ -38,6 +38,16 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   // complete, so the table shrinks to min(temporal, M) x N slots — the sum
   // order (and therefore bit-exactness) is unchanged; only storage shrinks.
   temporal: Int = 0,
+  // S1 compute-side spill (docs/ddr_final_impl.md): K-pass slice engine. The
+  // op is deliberately slice-agnostic — each pass looks like one self-
+  // contained GEMM over the slice geometry (A [M, Ks], B [Ks, N]) chained by
+  // the spill streams: pass 0 seeds zeros, passes > 0 seed from spillIn,
+  // non-final passes drain M*N partials to spillOut, the final pass drains
+  // to io.c. The pass LOOP (re-fire, slice addresses, pass counting) lives
+  // in Sequential (S2); this op only exposes passFirst/passLast levels
+  // (held stable by the controller from pass-fire to passDone) and pulses
+  // passDone on every pass-drain completion.
+  spill: Boolean = false,
   dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default
 ) extends Component {
   val M = shapeA(0)
@@ -47,6 +57,10 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   require(temporal >= 0, s"temporal=$temporal must be >= 0")
   require(temporal == 0 || !parallelN,
     s"temporal=$temporal requires the sequential-N matmul (parallelN=false)")
+  require(!spill || !parallelN,
+    s"spill=true requires the sequential-N matmul (parallelN=false)")
+  require(!spill || temporal >= 1,
+    s"spill=true requires temporal >= 1 (the spill drain reuses the windowed row drain)")
   
   val chunksK = (K + lanes - 1) / lanes
   val paddedK = chunksK * lanes
@@ -60,6 +74,15 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     // it, a stale tileReady lets the next command start on the previous
     // command's data. See StreamDoubleBuffer.io.reArm.
     val reArm = in Bool()
+    // S1 spill ports (spill=true only): M*N full-width partials, row-major,
+    // lanes=1 — the same beat order as io.c. Level contract: the S2 pass
+    // controller holds passFirst/passLast stable from pass-fire to passDone.
+    val spillIn = if (spill) Some(slave(Tensor(accType, Seq(M, N), lanes = 1))) else None
+    val spillOut = if (spill) Some(master(Tensor(accType, Seq(M, N), lanes = 1))) else None
+    val passFirst = if (spill) Some(in Bool()) else None
+    val passLast = if (spill) Some(in Bool()) else None
+    // Single-cycle pulse on every pass-drain completion (spill or final).
+    val passDone = if (spill) Some(out Bool()) else None
   }
   
   // ==========================================
@@ -100,6 +123,11 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   io.a.stream.ready := False
   io.c.stream.valid := False
   io.c.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
+  // S1 spill-port defaults (no-ops when spill=false: the Options are empty).
+  io.spillIn.foreach(_.stream.ready := False)
+  io.spillOut.foreach(_.stream.valid := False)
+  io.spillOut.foreach(_.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits)))
+  io.passDone.foreach(_ := False)
 
   if (parallelN) {
     // ==========================================
@@ -308,7 +336,159 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       accTable(flatIdx) := nextAcc
     }
     
-    val fsm = if (temporal >= 1) {
+    // S1 spill slice-engine FSM: the windowed-drain FSM above, plus per-row
+    // seeding (non-first passes) and a drain-target mux on exit (spill
+    // region vs layer output). Seeding is row-interleaved — each row is
+    // seeded just before its LoadA — because the window holds at most
+    // `temporal` rows: seeding the whole MxN table upfront would overwrite
+    // row r with row r+slots in the same slots. Drain order (row-major) and
+    // seed order match, and within a pass each row's seed precedes its drain
+    // (read-before-write on the same DDR row region: correct RMW order).
+    // Counter invariant: every pass seeds exactly M rows (non-first) or zero
+    // rows (first), so seedRow is 0 at every pass entry from reset on.
+    // A pass is otherwise indistinguishable from a legacy command (reArm +
+    // tileReady + row loop unchanged), so the S2 controller sequences passes
+    // with the same signals as commands, with one hardening difference: pass
+    // entry waits for an explicit pass-fire (rising edge of reArm), NOT for
+    // a bare tileReady level. A stale-high tileReady left over from the
+    // previous pass would otherwise self-trigger a phantom pass on old
+    // passFirst/passLast levels during the controller's inter-pass latency.
+    // Contract: one 1-cycle reArm pulse per pass (it also clears the B
+    // buffer's tileReady, so the following tileReady wait always observes
+    // the fresh slice fetch).
+    val fsm = if (spill) {
+      val rowBits = scala.math.max(1, log2Up(M + 1))
+      val nBits = scala.math.max(1, log2Up(N + 1))
+      val emitIdx = Reg(UInt(rowBits bits)) init (U(0))
+      val emitLast = Reg(Bool) init (False)
+      val emitCounter = Counter(N)
+      val seedRow = Counter(M)
+      val seedCol = Counter(N)
+      val prevReArm = RegInit(False)
+      prevReArm := io.reArm
+
+      new StateMachine {
+        val stateWaitPass: State = new State with EntryPoint {
+          whenIsActive {
+            when(io.reArm && !prevReArm) {
+              goto(stateWaitTile)
+            }
+          }
+        }
+
+        val stateWaitTile: State = new State {
+          whenIsActive {
+            when(bufferB.io.tileReady) {
+              when(io.passFirst.get) {
+                goto(stateLoadA)
+              } otherwise {
+                goto(stateSeedRow)
+              }
+            }
+          }
+        }
+
+        // Seed one accumulator row from the previous pass's DDR partials
+        // (N beats, same row-major order as the drain below). Entered once
+        // per row on non-first passes: rows beyond the window would alias,
+        // so each row is seeded just before its own LoadA. seedRow advances
+        // on every visit (M visits per pass keep the 0-at-entry invariant).
+        val stateSeedRow: State = new State {
+          whenIsActive {
+            io.spillIn.get.stream.ready := True
+            when(io.spillIn.get.stream.valid) {
+              accTable(accIdxSel(seedRow.value, seedCol.value)) := io.spillIn.get.stream.payload(0)
+              seedCol.increment()
+              when(seedCol.willOverflowIfInc) {
+                seedRow.increment()
+                goto(stateLoadA)
+              }
+            }
+          }
+        }
+
+        val stateLoadA: State = new State {
+          whenIsActive {
+            io.a.stream.ready := True
+            when(io.a.stream.valid) {
+              memA.write(loadACounter.value, io.a.stream.payload)
+              loadACounter.increment()
+              when(loadACounter.willOverflowIfInc) {
+                goto(stateComputeN)
+              }
+            }
+          }
+        }
+
+        val stateComputeN: State = new State {
+          whenIsActive {
+            stage1_fire := True
+            computeACounter.increment()
+            when(computeACounter.willOverflowIfInc) {
+              nCounter.increment()
+              when(nCounter.willOverflowIfInc) {
+                emitIdx := rowCounter.value.resize(rowBits)
+                emitLast := rowCounter.value.resize(rowBits) === U(M - 1, rowBits bits)
+                rowCounter.increment()
+                when(rowCounter.willOverflowIfInc) {
+                  bufferB.io.nextTile := True
+                }
+                goto(stateWaitFlush)
+              }
+            }
+          }
+        }
+
+        val stateWaitFlush: State = new State {
+          val waitCounter = Counter(3 + treeLatency)
+          whenIsActive {
+            waitCounter.increment()
+            when(waitCounter.willOverflowIfInc) {
+              goto(stateEmitRow)
+            }
+          }
+        }
+
+        val stateEmitRow: State = new State {
+          whenIsActive {
+            val emitFire = Bool()
+            emitFire := False
+            when(io.passLast.get) {
+              io.c.stream.valid := True
+              io.c.stream.payload(0) := accTable(accIdxSel(emitIdx, emitCounter.value.resize(nBits)))
+              emitFire := io.c.stream.ready
+            } otherwise {
+              io.spillOut.get.stream.valid := True
+              io.spillOut.get.stream.payload(0) := accTable(accIdxSel(emitIdx, emitCounter.value.resize(nBits)))
+              emitFire := io.spillOut.get.stream.ready
+            }
+            when(emitFire) {
+              val idx = accIdxSel(emitIdx, emitCounter.value.resize(nBits))
+              accTable(idx) := accTable(idx).getZero
+              emitCounter.increment()
+              when(emitCounter.willOverflowIfInc) {
+                when(emitLast) {
+                  // Pass-drain completion: exactly one pulse per pass (not
+                  // per row — emitCounter overflows on every row).
+                  io.passDone.get := True
+                  emitLast := False
+                  goto(stateWaitPass)
+                } otherwise {
+                  // Next row: re-seed on non-first passes (window slots must
+                  // be reloaded — the just-drained row was cleared); first
+                  // passes stream on (drain-clear left zeros behind).
+                  when(io.passFirst.get) {
+                    goto(stateLoadA)
+                  } otherwise {
+                    goto(stateSeedRow)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else if (temporal >= 1) {
       // Windowed-drain FSM: after each row's last product beats, the tree
       // pipeline (3 + treeLatency) is flushed, then the completed row is
       // emitted N beats to the output; only then is the next row loaded.
@@ -476,7 +656,15 @@ object matmul {
     parallelN: Boolean = false,
     reArm: Option[Bool] = None,
     temporal: Int = 0,
-    dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default
+    dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default,
+    // S1 spill threading (all None = legacy one-shot GEMM): the caller owns
+    // the pass loop and provides the spill streams per pass.
+    spill: Boolean = false,
+    passFirst: Option[Bool] = None,
+    passLast: Option[Bool] = None,
+    spillSource: Option[Tensor[TAcc]] = None,
+    spillSink: Option[Tensor[TAcc]] = None,
+    passDone: Option[Bool] = None
   ): Tensor[TAcc] = {
     val rankA = a.shape.length
     val rankB = b.shape.length
@@ -499,8 +687,15 @@ object matmul {
 
     val outShape = batchDimsA ++ Seq(M, N)
 
-    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal, dspConfig = dspConfig)
+    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal, dspConfig = dspConfig, spill = spill)
     matmulComp.io.reArm := reArm.getOrElse(False)
+    if (spill) {
+      matmulComp.io.passFirst.get := passFirst.getOrElse(False)
+      matmulComp.io.passLast.get := passLast.getOrElse(True)
+      passDone.foreach(_ := matmulComp.io.passDone.get)
+      spillSource.foreach(s => matmulComp.io.spillIn.get.stream << s.stream)
+      spillSink.foreach(s => s.stream << matmulComp.io.spillOut.get.stream)
+    }
     
     // Connect the continuous batched streams directly to the 2D MatmulOp.
     // MatmulOp natively loops back to stateWaitTile after each 2D matrix, allowing zero-overhead batching.
