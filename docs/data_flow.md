@@ -170,8 +170,8 @@ flowchart TB
 | `tileHeight` | tuilage image en bandes (`DMAReader2D` patches) | borne le buffer image BRAM |
 | `spillKSlice` | largeur de tranche K par passe ; `P = K / Ks` | borne le buffer B (`Ks x N`) et le trafic DDR |
 | `StreamTap` | replay on-chip de l'opérande A | nœud profond/partagé (pas de re-fire DDR), budget `spillReplayBudgetBytes` |
-| Ping-pong `StreamDoubleBuffer` | deux banques BRAM + `reArm` | masque la latence de fetch ; frontière de commande explicite |
-| `TapBuffer` | fork DAG à capacité exacte | branches différées sans famine |
+| Ping-pong `StreamDoubleBuffer` | deux banques BRAM + `reArm` (buffer + `DoubleBufferStreamer`) | masque la latence de fetch ; frontière de commande explicite |
+| `TapBuffer` | fork DAG à capacité exacte (+ 1 slack beat) | branches différées sans famine ni duplication (M1.7 bis) |
 | Résidence / prefetch | `MODE 0x10` bit0/bit1 + `RELOAD 0x14` | poids tenus on-chip / rafraîchis en tâche de fond |
 
 > Cap scaling (tuiles physiques LUT/DSP vs slices BRAM/trafic, planner budgété
