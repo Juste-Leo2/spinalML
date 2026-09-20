@@ -130,6 +130,12 @@ gros modèles :
 **Gate** : un modèle du type « 7×7 conv / Linear 4096 » tient dans le budget
 d'une board cible, régression bit-exacte sur les modèles existants.
 
+**Généralisation 3 axes** : ce qui précède est la version V1 (lanes, arbiter,
+contrat du beat partiel). Le cadre complet — tuiles physiques (LUT/DSP) vs
+slices informationnels (BRAM/trafic) sur les axes M/K/N, modèle de ressources,
+policy globale + résolution par couche et planner budgété board — est documenté
+dans `docs/tiling_resource_scaling.md` (phases R0-R3).
+
 ## 6. Priorité 4 — Layer Folding L2 (LLM-style) (2–4 j)
 
 Une **seule couche physique**, poids **re-fetchés par passe** (au lieu d'être

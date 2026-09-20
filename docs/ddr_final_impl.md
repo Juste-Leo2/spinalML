@@ -1,8 +1,9 @@
 # Compute-side spill — Plan final d'implémentation (étapes S0-S3)
 
 > **Statut** : plan figé le 19/09/2026. **S0, S1 et S2 validées** (voir notes de
-> clôture dans chaque section) ; prochaine étape : S3 (formel contrôleur +
-> non-régression complète + docs).
+> clôture dans chaque section). **S3 partiellement close** : formel contrôleur
+> + non-régression ✅ (20/09/2026) ; réplica spill + mesure de trafic reportés
+> à une PR dédiée (voir §S3).
 > **Docs liés** : `docs/ddr_impl.md` §5.3 (soudure compute), `docs/ddr_replica_status.md`
 > (contrat numérique, non-régression), `docs/wave6_ddr_scaling_plan.md` P1 (contexte cap DRAM),
 > `docs/roadmap_board.md` §4 (mémoire par board).
@@ -133,18 +134,38 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
 
 ## S3 — Formel + non-régression + docs (0.5-1 j)
 
-- BMC contrôleur : progression 0→P-1 + terminaison, bias consommé exactement une fois
-  (passe finale), pas de deadlock fetch→compute→drain→seed, bias exactement N beats.
-- `MemorySpecFormal`/`CsrMap` étendus au `spillBytes` calculé ; vérif réplica zéro-change
-  (fallback fold `spillWidth` si besoin) ; trafic/inférence `P×(W_slice+A+2·M·N)` mesuré
-  et consigné ; màj `ddr_impl.md` §5.3 + `ddr_replica_status.md` §7.
-- **Gate du cap** : `test-all` + `test-all-formal` + python verts.
+- **✅ Formel contrôleur (20/09/2026)** : `SpillPassControllerFormal` (safety,
+  BMC 40, Boolector, 16.5 s) + `SpillPassControllerLivenessFormal` (liveness
+  bornée, BMC 80, 12.1 s) — progression 0→P-1, prelude jamais sauté (fix S2d
+  pinné), commandes/pulses one-shot, `refetchW` tenu jusqu'à acceptation
+  (drop uniquement fire/residency), terminaison sous inputs fair, covers de
+  non-vacuité. « Bias exactement N beats » déjà couvert par `BiasAddFormal` ;
+  bias-une-fois prouvé au niveau contrôleur (le gate final-only de
+  `Sequential` reste prouvé par l'e2e zero-tail).
+- **✅ Non-régression complète (20/09/2026)** : `test-all` + `test-all-formal`
+  (dont les 2 harnais ci-dessus) + `test-all-python` verts.
+- **⏳ Reporté à une PR dédiée « réplica spill »** (le cœur S0-S2 est complet
+  et prouvé sans lui ; l'outillage réplica/CLI ne bloque pas le merge) :
+  - vérification réplica zéro-change (fold `spillWidth` si besoin) — la
+    comparaison `ModelReplica` complète sur un modèle spillé (aujourd'hui
+    l'oracle est scala dans `SequentialSpillTest`) ;
+  - outillage `WeightMemoryLayout` slice-transposé + consommation réplica
+    sans double transposition (gaps listés en §S2) ;
+  - trafic/inférence `P×(W_slice+A+2·M·N)` mesuré et consigné.
+- **Docs** : `ddr_impl.md` §5.3 + `ddr_replica_status.md` §7 à jour (S2d-3) ;
+  note de clôture S3 définitive à écrire avec la PR réplica.
+- **Gate du cap** : `test-all` + `test-all-formal` + python verts → ✅.
 
 ## Volontairement hors v1 (v2+)
 
 A-spill vers DDR (gros A profonds), Conv spillées, N-split (K petit / N énorme),
 KV-cache, folding L2, spill × residency/prefetch, `parallelN` + spill.
 Chacun se branche sur le gabarit S0-S2 (pass-controller, curseurs, fit-check) sans rework.
+
+Le cadre général de scaling (tuiles physiques LUT/DSP vs slices informationnels
+BRAM/trafic sur les axes M/K/N, modèle de ressources, planner budgété board)
+est esquissé dans `docs/tiling_resource_scaling.md` — c'est la généralisation
+du K-slice validé ici, et le prérequis du cœur plié (Phase 3).
 
 ## Stratégie PR
 

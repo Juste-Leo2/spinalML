@@ -153,9 +153,11 @@ Objectif : scaling sans DDR physique. Tout est validé sur `BramAdapter` / `AxiM
       profond/échelles K8-K64/rerun `TILE_CNT`-STOP-`MODE`-`0x34`) ; écarts et
       contrat layout W slice-transposé consignés dans
       `docs/ddr_final_impl.md` §S2.
-    - Testé sur `AxiMemorySim` spill (oracle scala) ; la comparaison
-      `ModelReplica` complète, le formel contrôleur et la non-régression
-      totale restent en S3.
+    - Formel contrôleur et non-régression complète : **✅** (20/09/2026, cf.
+      `docs/ddr_final_impl.md` §S3). Testé sur `AxiMemorySim` spill (oracle
+      scala) ; la comparaison `ModelReplica` complète (support réplica d'un
+      modèle spillé + outillage `WeightMemoryLayout` slice-transposé) et la
+      mesure de trafic sont **reportées à une PR dédiée « réplica spill »**.
 4. **Gate Phase 4.**
    - `Linear 4096 / Conv 7x7` élabore dans le budget (`maxWeightLanes` + `temporal`), spill bit-exact, formels `DMAWriterFormal` / `AcceleratorFormal` verts.
    - Interdit : toujours aucune dépendance au silicium Tang.

@@ -28,6 +28,7 @@ flowchart TD
     P2["2. ONNX Ingestion\nOne-Line Model Import"] --> OUT
     P3["3. Target Expansion\nXilinx, Lattice & ASIC Flow"] --> OUT
     P4["4. Edge Small Language Models\nLow-Bit Attention Blocks"] --> OUT
+    P5["5. Tiling & Resource Scaling\nBudget-Shaped Ops"] --> OUT
 ```
 
 ---
@@ -74,3 +75,16 @@ flowchart TD
   - [ ] Streaming Softmax with hardware exponent LUTs and dynamic online normalization.
   - [ ] Rotary Position Embeddings (RoPE) and RMSNorm operators.
   - [ ] INT4 weight-only quantized Multi-Head Attention blocks.
+
+---
+
+### 5. Tiling & Resource Scaling (Budget-Shaped Ops)
+
+- **Challenge**: layer hardware is currently sized *by the layer's shape* (`Linear -> inFeatures` lanes, `Conv2D -> K²`), so silicon area explodes with model width and each op is locked to whatever its dimensions dictate.
+- **Solution**: first-class tiling axes — M/K/N **slices** for data blocking (BRAM/DDR traffic) and M/N **tiles** for instantiated parallelism (LUT/DSP) — plus `lanes` for the datapath width. A global `TilingPolicy` is resolved per layer by an elaboration-time planner from the board budget (BSRAM/LUT/DSP/bandwidth), with fail-fast fit checks. This is the resource-shaping foundation of the folded core (pillar 1) and of deep-model deployment on edge silicon.
+- **Key Milestones**:
+  - [ ] R0 — resource model + `reportResources` (LUT/FF/BRAM/DSP/cycles/traffic per layer, board-calibrated).
+  - [ ] R1 — unified `Tiling` API on `Linear`/`MatmulOp` + `TilingPolicy`.
+  - [ ] R2 — N then M axis implementation (bit-exact e2e, replica + formal).
+  - [ ] R3 — board-driven planner: budget -> per-layer tiling, fail-fast, report.
+- See [**tiling_resource_scaling.md**](tiling_resource_scaling.md) for the vocabulary, the decomposition constraints (buffers, bandwidth, numeric order, framing) and the full phased plan.
