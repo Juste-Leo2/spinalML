@@ -1,0 +1,2 @@
+# Gowin bitstreams are binary payloads: no EOL conversion, no line diff.
+*.fs binary
