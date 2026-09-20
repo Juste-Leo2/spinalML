@@ -1,7 +1,8 @@
 # Compute-side spill — Plan final d'implémentation (étapes S0-S3)
 
-> **Statut** : plan figé le 19/09/2026. **S0 validée, S1 validée** (voir notes de
-> clôture dans chaque section) ; prochaine étape : S2.
+> **Statut** : plan figé le 19/09/2026. **S0, S1 et S2 validées** (voir notes de
+> clôture dans chaque section) ; prochaine étape : S3 (formel contrôleur +
+> non-régression complète + docs).
 > **Docs liés** : `docs/ddr_impl.md` §5.3 (soudure compute), `docs/ddr_replica_status.md`
 > (contrat numérique, non-régression), `docs/wave6_ddr_scaling_plan.md` P1 (contexte cap DRAM),
 > `docs/roadmap_board.md` §4 (mémoire par board).
@@ -72,6 +73,63 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
 - **Gate** : e2e `BramAdapter` petit + `AxiMemorySim` grand (Linear > capacité déclarée)
   bit-exact vs `ModelReplica` ; assertions contenu région spill par passe ;
   `TILE_CNT`/STOP/curseurs cohérents.
+- **✅ VALIDÉE le 20/09/2026** (`SequentialSpillTest` 10/10 + sous-ensembles
+  spill/sequential/accelerator/specs verts ; commits `Step S2c`, `Dtep S2c first e2e`,
+  puis S2d-1/S2d-2). Ce qui a réellement tourné, écarts et durcissements :
+  - **E2E** (`AxiMemorySim`, oracle scala dans le test — la comparaison
+    `ModelReplica` complète reste S3) : nœud 0 exclusif P=2 bit-exact **et**
+    région = partielles passe 0 (P=1 dégénère, zero-tail prouve seed+bias) ;
+    nœud profond P=2 via `StreamTap` (replay on-chip) ; échelle
+    auto-identifiante K8/K12/K16 (chaque passe reconnaissable) ;
+    K64-P2 et K64-P8 (fit exact 344B, 8 passes) ; rerun back-to-back
+    (y/région identiques, `TILE_CNT`/STOP/`MODE`/`0x34` cohérents).
+  - **Géométrie slice** : la couche spillée instancie le moteur en
+    `[M,Ks]×[Ks,N]` + fenêtre-K sur A (un moteur full-shape starve ses
+    compteurs shape-driven sur des flux partiels). Beats hors fenêtre
+    acceptés-puis-jetés (l'amont ne stalle jamais), `passIdx` stable en prelude.
+  - **`refetchW` retardé d'un cycle** (`preludeHeld`) : le plan de fetch adresse
+    depuis le registre `passIdx`, qui settle un cycle après `cnt`.
+  - **Bias** : re-arm sur la prelude finale uniquement, gaté `passLast`
+    (un pulse à chaque prelude peut charger un bias partiel à cheval sur le
+    flip `passLast`) ; zéros hors passe finale côté moteur (S1).
+  - **`restartA` ne re-arm PAS le buffer/streamer image** : le re-fire des
+    mêmes sweeps se resynchronise seul (ping-pong + `tileReady`) ; re-armer
+    coupait le sweep en vol et le repack legacy non-flushable gardait un
+    octet résiduel → décalage de trame permanent (K64-P8 faux). Le `reArm`
+    image reste sur le front START (nouvelle inférence).
+  - **Contrôleur** : pas de sortie de prelude au cycle d'entrée (les flags
+    servants y sont encore rassis) — sinon prelude 2 sauté et stall P≥3.
+  - **Fetch W de START = slice 0 forcée** : le registre `passIdx` retient
+    l'index final du run précédent au 2ᵉ START (RERUN faux sinon).
+  - **Re-stream A** : nœud 0 exclusif = re-fire image DDR (gratuit) ; nœud
+    partagé/profond = `StreamTap` (snoop passe 0, replay verbatim, budget S0) ;
+    jamais de re-fire d'un nœud partagé (dupliquerait dans l'autre branche).
+  - **RMW inter-passes** : `WaitFence` sur `writerDone` (B du drain) avant le
+    prelude suivant — RAW sur la région unique. La visibilité inter-masters
+    repose sur l'ordre du contrôleur mémoire (fence strict `DdrAdapter`,
+    Phase 4.1) et reste séquentiellement cohérente sur `AxiMemorySim`.
+  - **Contrat runtime `STREAM_PER_PASS` confirmé** : spill × residency interdit
+    (`refetchW` supprimé sous residency → stall bruyant) ; `MODE = 0` asserté
+    par run en e2e. Une seule couche spillée (v1), `temporal >= 1`, A éligible
+    (nœud 0 exclusif ou ≤ budget replay).
+  - **Contrat layout DDR W** (découverte e2e majeure) : l'engine consomme la
+    région en colonne-major (`readAddr = n*chunksK+k`, côté réplica
+    `slice(o*K..)`), donc l'ordre physique est le transposé. Legacy (non-spill) :
+    un seul fetch de toute la région, ordre `n*K+k`. Spill : chaque passe fetche
+    UNE slice contiguë, donc l'ordre physique doit être **slice-transposé
+    contigu** — `p*Ks*N + n*Ks + k_local`, cf. `programmedW(ks)` de
+    `SequentialSpillTest`. Un whole-transpose legacy n'est PAS découpable : les
+    slices y sont strideés (Ks valeurs par colonne puis trou de K-Ks). P=1
+    (Ks=K) dégénère exactement en whole-transpose. **Outillage** :
+    `WeightMemoryLayout.buildDeterministicWeights` (test/réplica + CLI `generate`)
+    émet encore le whole-transpose legacy ; quand une couche spillera il devra
+    émettre le slice-transposé (et le réplica le consommer sans double
+    transposition). Tant que ce n'est pas fait, les benches spill programment
+    la DDR elles-mêmes.
+  - **Bring-up sim** : settle des agents mémoire avant stimulus (un B/R
+    parasite au release du reset cale un compteur DMA) ; gardes saturantes
+    `pendingB`/`burstRemain` (neutres au formel) ; discipline bench v3
+    (le VCD `withWave` est lossy, le bench fait foi).
 
 ## S3 — Formel + non-régression + docs (0.5-1 j)
 

@@ -124,7 +124,7 @@ Objectif : scaling sans DDR physique. Tout est validé sur `BramAdapter` / `AxiM
     - **Mémoire (FAIT)** : CSR `0x34 SPILL_BASE` live dans `Accelerator`
       (init depuis `MemorySpec.spillBase`, R/W hôte), `spillBytes` dans le
       fit check, `CsrMap`/`MemorySpecFormal` à jour (13 wired / 2 reserved).
-    - **Compute (PROCHAINE ÉTAPE, design figé le 19/09)** : K-split du GEMM
+    - **Compute (FAIT — S0/S1/S2 validées, 20/09/2026 ; reste S3 formel)** : K-split du GEMM
       avec sommes partielles M×N en DDR entre passes. Soudure identifiée :
       le drain temporal existant (`MatmulOp` `stateEmitRow`/`stateOutput`,
       drain + clear par ligne) devient la sortie spill sur passes non
@@ -140,7 +140,22 @@ Objectif : scaling sans DDR physique. Tout est validé sur `BramAdapter` / `AxiM
       contrôleur multi-passes (progression, bias unique, pas de deadlock).
       Périmètre v1 : `Linear` à A DDR-résident (cas MLP-4k : la première
       couche est la grosse) ; `Conv`/couches profondes ensuite.
-    - Testé sur `BramAdapter` petit spill puis `AxiMemorySim` grand spill, bit-exact vs `ModelReplica`.
+    - **Contrat runtime (S2)** : `STREAM_PER_PASS` seul (`CSR 0x10 = 0`) —
+      sous residency le contrôleur supprime `refetchW` (stall bruyant, pas de
+      corruption silencieuse) ; `temporal >= 1` ; une seule couche spillée
+      (v1) ; re-stream A = re-fire image DDR (nœud 0 exclusif) ou replay
+      `StreamTap` budgeté (nœud profond/partagé).
+    - **Fencing inter-passes** : le prelude p+1 n'est émis qu'après le B du
+      drain p (`writerDone`) — RAW sur la région spill unique. La visibilité
+      inter-masters dépend de l'ordre du contrôleur mémoire (fence strict
+      `DdrAdapter`, item 1) ; séquentiellement cohérente sur `AxiMemorySim`.
+    - **Preuves e2e** : `SequentialSpillTest` 10/10 (P=2/P=1/zero-tail/tap
+      profond/échelles K8-K64/rerun `TILE_CNT`-STOP-`MODE`-`0x34`) ; écarts et
+      contrat layout W slice-transposé consignés dans
+      `docs/ddr_final_impl.md` §S2.
+    - Testé sur `AxiMemorySim` spill (oracle scala) ; la comparaison
+      `ModelReplica` complète, le formel contrôleur et la non-régression
+      totale restent en S3.
 4. **Gate Phase 4.**
    - `Linear 4096 / Conv 7x7` élabore dans le budget (`maxWeightLanes` + `temporal`), spill bit-exact, formels `DMAWriterFormal` / `AcceleratorFormal` verts.
    - Interdit : toujours aucune dépendance au silicium Tang.
@@ -166,7 +181,7 @@ Objectif : scaling sans DDR physique. Tout est validé sur `BramAdapter` / `AxiM
 | 1 | `Target` propagé + factory complète | — | 1-2 j |
 | 2 | `MemorySpec/MemoryMap` + CSR figée | 1 | 2-3 j |
 | 3 | `boards/*.json` `memory/ddr` + `board.py` | 2 | 1 j |
-| 4 | Fencingrégion + arbiter cascade + lanes + spill générique | 1-3 | 2-4 j |
+| 4 | Fencing région + arbiter cascade + lanes + spill générique | 1-3 | 2-4 j |
 | 5a | `DdrAdapter` e2e en sim | 1-4 | 1-2 j |
 | 5b | Bring-up DDR3 Tang + mesures | 5a | 3-5 j + HW |
 
