@@ -53,7 +53,11 @@ object UniversalTestHarness {
     expectedLogits: Option[Seq[Double]] = None,
     imgBase: Long = 0x10000L,
     weightBase: Long = 0x20000L,
-    timeoutCycles: Int = 50000
+    timeoutCycles: Int = 50000,
+    // Seam for the future `--stress` CLI flag (timing/pressure only, the
+    // bit-exact oracle stays untouched): stress will supply a degraded
+    // memory-model config here. Default = the historical ideal model.
+    memorySimConfig: AxiMemorySimConfig = AxiMemorySimConfig(maxOutstandingReads = 8)
   ): Seq[Float] = {
 
     var collectedOutput = ArrayBuffer[Float]()
@@ -64,7 +68,7 @@ object UniversalTestHarness {
       val memorySim = AxiMemorySim(
         axi = dut.io.axiMaster,
         clockDomain = dut.clockDomain,
-        config = AxiMemorySimConfig(maxOutstandingReads = 8)
+        config = memorySimConfig
       )
       memorySim.start()
 
