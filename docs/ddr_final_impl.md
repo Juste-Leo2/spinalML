@@ -1,9 +1,9 @@
 # Compute-side spill — Plan final d'implémentation (étapes S0-S3)
 
-> **Statut** : plan figé le 19/09/2026. **S0, S1 et S2 validées** (voir notes de
-> clôture dans chaque section). **S3 partiellement close** : formel contrôleur
-> + non-régression ✅ (20/09/2026) ; réplica spill + mesure de trafic reportés
-> à une PR dédiée (voir §S3).
+> **Statut** : plan figé le 19/09/2026. **S0, S1, S2 et S3 closes** (notes de
+> clôture dans chaque section — S3 soldée par la PR « réplica spill »,
+> commits R1-R6 sur `ddrImpl2` : layout slice-transposé, fold réplica,
+> e2e `ModelReplica`, CLI minimale, trafic mesuré).
 > **Docs liés** : `docs/ddr_impl.md` §5.3 (soudure compute), `docs/ddr_replica_status.md`
 > (contrat numérique, non-régression), `docs/wave6_ddr_scaling_plan.md` P1 (contexte cap DRAM),
 > `docs/roadmap_board.md` §4 (mémoire par board).
@@ -144,17 +144,35 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
   `Sequential` reste prouvé par l'e2e zero-tail).
 - **✅ Non-régression complète (20/09/2026)** : `test-all` + `test-all-formal`
   (dont les 2 harnais ci-dessus) + `test-all-python` verts.
-- **⏳ Reporté à une PR dédiée « réplica spill »** (le cœur S0-S2 est complet
-  et prouvé sans lui ; l'outillage réplica/CLI ne bloque pas le merge) :
-  - vérification réplica zéro-change (fold `spillWidth` si besoin) — la
-    comparaison `ModelReplica` complète sur un modèle spillé (aujourd'hui
-    l'oracle est scala dans `SequentialSpillTest`) ;
-  - outillage `WeightMemoryLayout` slice-transposé + consommation réplica
-    sans double transposition (gaps listés en §S2) ;
-  - trafic/inférence `P×(W_slice+A+2·M·N)` mesuré et consigné.
-- **Docs** : `ddr_impl.md` §5.3 + `ddr_replica_status.md` §7 à jour (S2d-3) ;
-  note de clôture S3 définitive à écrire avec la PR réplica.
-- **Gate du cap** : `test-all` + `test-all-formal` + python verts → ✅.
+- **✅ PR « réplica spill » — close la S3 (voir commits R1-R6, branche `ddrImpl2`)** :
+  - outillage `WeightMemoryLayout` slice-transposé (R1) : région W émise en
+    `p*Ks*N + n*Ks + k_local`, P=1 dégénère en whole-transpose legacy ;
+    `LayerWeightInfo` porte `spillKSlice`/`spillPasses` (défauts = legacy) ;
+  - fold réplica `spillWidth` (R2) : `LayerReplicas.linear(..., spillKSlice=-1
+    = legacy, instruction par instruction)`, `DenseHandlers` regroupe les
+    lignes logiques depuis l'ordre physique + rejette tout mismatch
+    couche/layout (pas de double transposition silencieuse) ; int et BF16
+    bit-exacts vs oracle dense sur le même modèle logique ;
+  - comparaison `ModelReplica` complète sur HW spillé (R3) :
+    `SequentialReplicaSpillTest` I8-K8-P2 et BF16-K8-P2, `dev=0.0`, cohérence
+    `TILE_CNT`/STOP/`MODE`/`0x34` ;
+  - CLI `test` minimale (R4) : le scaffold propage `dut.memory`
+    (fini les bases en dur) + timeout ×4 sur modèle spillé ;
+    `tests/universal/UniversalSpillDemo.scala` prouve `spinalml test`
+    bit-exact sur spill ; seam `memorySimConfig` (défaut = modèle idéal
+    historique) où le futur `--stress` branchera la pression timing sans
+    toucher l'oracle ;
+  - trafic/inférence mesuré (R5, sondes AR/AW en sim, modèle
+    `P×(W_slice+A+2·M·N)`, M=1 N=4 K=8 Ks=4 P=2) :
+    - I8 : 93 cycles, AR = 8 beats (64 B lus : W 2×16 + A 2×8 + bias + seed),
+      AW = 1 beat pré-collecte (drain spill 4 B ; writeback out hors fenêtre
+      de collecte), région W = 40 B ;
+    - BF16 : 93 cycles, AR = 14 beats (112 B : W 2×32 + A 2×16 + bias + seed),
+      AW = 1 beat (drain spill 8 B), région W = 72 B.
+- **Docs** : `ddr_impl.md` §5.3 + `ddr_replica_status.md` §7 à jour (S2d-3 +
+  PR réplica) ; la présente note est la clôture S3 définitive.
+- **Gate du cap** : `test-all` + `test-all-formal` verts (R6 ; python skippé
+  par consigne).
 
 ## Volontairement hors v1 (v2+)
 

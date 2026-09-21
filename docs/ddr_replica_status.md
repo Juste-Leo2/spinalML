@@ -136,8 +136,16 @@ multi-passes + RMW + fold réplica + spec formelle du contrôleur.
 §S2 — dont le contrat layout W slice-transposé et le fencing inter-passes).
 Le **formel contrôleur** (2 harnais : safety + liveness bornée) et la
 **non-régression complète** (`test-all` + `test-all-formal` +
-`test-all-python`) sont verts. Reste, **reporté à une PR dédiée « réplica
-spill »** : support réplica d'un modèle spillé (fold `spillWidth` si besoin),
-outillage `WeightMemoryLayout` slice-transposé (consommé sans double
-transposition), comparaison `ModelReplica` e2e, mesure du trafic
-`P×(W_slice+A+2·M·N)` et note de clôture S3 définitive.
+`test-all-python`) sont verts.
+
+**MàJ PR « réplica spill » (commits R1-R6, `ddrImpl2`) — S3 soldée** :
+support réplica livré sans régression (fold `spillKSlice`, défaut = legacy),
+`WeightMemoryLayout` slice-transposé consommé sans double transposition
+(mismatch couche/layout rejeté), e2e `ModelReplica`
+(`SequentialReplicaSpillTest` I8 + BF16, `dev=0.0`), trafic mesuré
+(I8-K8-P2 : 93 cyc, AR 8/AW 1 ; BF16-K8-P2 : 93 cyc, AR 14/AW 1 — voir
+`docs/ddr_final_impl.md` §S3), CLI `test` sur spill
+(`tests/universal/UniversalSpillDemo.scala`).
+Seam d'avenir : `UniversalTestHarness.run(..., memorySimConfig = idéal)` —
+le futur `--stress` y branchera la pression timing/AXI sans toucher
+l'oracle ; le réplica reste purement fonctionnel par construction.
