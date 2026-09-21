@@ -60,7 +60,7 @@ class Accelerator[T <: Data](
   // S2b: on spilling models this writer shares the AXI write path with the
   // spill drain writer through a 2:1 arbiter below — both leaves drop one ID
   // bit for the route bit (mirror of the read-side routeBits in Sequential).
-  val spillActive = modelSpec.exists { case l: Linear if l.spilling => true; case _ => false }
+  val spillActive = modelSpec.exists { case s: SpillableGEMM if s.spilling => true; case _ => false }
   if (spillActive)
     require(axiConfig.idWidth >= 1,
       s"Accelerator: axiConfig.idWidth (${axiConfig.idWidth}) leaves no route bit for the spill write arbiter")

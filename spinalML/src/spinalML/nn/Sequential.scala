@@ -61,15 +61,15 @@ case class Sequential(
 
   // S2a/S2b compute-side spill (docs/ddr_final_impl.md): v1 supports at most
   // ONE spilling layer (a single SpillPassController in S2b; multi-spill
-  // generalizes on this template later). Only Linear carries spillKSlice
-  // today, so this also pins spill to Linear (Conv spill is an explicit v2
-  // item). Placed before `io`: the spill write port below depends on it.
+  // generalizes on this template later). Any SpillableGEMM layer (Linear,
+  // Conv2D, ...) may spill; v1 supports at most one spilling layer (pinned
+  // below). Placed before `io`: the spill write port below depends on it.
   // The spill WRITE path cannot join the shared read arbiter
   // (io.axiMaster is read-only): the drain DMAWriter gets its own write
   // master port, merged with the output dmaWriter in Accelerator (S2b 2:1
   // write arbiter). The seed reader joins allAxiMasters normally.
   val spillLayerIdx: Option[Int] = {
-    val idx = layers.zipWithIndex.collect { case (l: Linear, i) if l.spilling => i }
+    val idx = layers.zipWithIndex.collect { case (l: SpillableGEMM, i) if l.spilling => i }
     require(idx.size <= 1,
       s"Sequential: ${idx.size} spilling layers (${idx.mkString(",")}) — v1 supports at most one " +
         "(single pass controller, see docs/ddr_final_impl.md S2)")
@@ -266,16 +266,26 @@ case class Sequential(
   // spillLayerIdx above), hoisted before the fetch plane: the W-slice
   // refetch (S2b, per-iteration fetch site below) AND the image re-fire
   // (S2c, image plane further below) must both see its pulses.
-  // (passes, spill AXI beats for the M*N region command).
+  // (passes, spill AXI beats for the M*N region command). M = GEMM rows:
+  // Linear input rows, Conv2D total windows (H-K+1)*(W-K+1).
   val spillSpec: Option[(Int, Int)] = spillLayerIdx.map { idx =>
-    val l = layers(idx).asInstanceOf[Linear]
-    val accType = l.outType(nodeTypes(idx))
-    val mRows = nodeShapes(idx).dropRight(1).product
-    val elems = mRows * l.outFeatures
+    val (passes, mRows, n, accType) = layers(idx) match {
+      case l: Linear =>
+        (l.spillPasses, nodeShapes(idx).dropRight(1).product, l.outFeatures, l.outType(nodeTypes(idx)))
+      case c: Conv2D =>
+        val h = nodeShapes(idx)(0)
+        val w = nodeShapes(idx)(1)
+        val m = (h - c.kernelSize + 1) * (w - c.kernelSize + 1)
+        (c.spillPasses, m, c.outChannels, c.outType(nodeTypes(idx)))
+      case other =>
+        throw new IllegalArgumentException(
+          s"Sequential: layer $idx ($other) spills but is not a SpillableGEMM — spillLayerIdx only collects SpillableGEMM")
+    }
+    val elems = mRows * n
     val accLanes = axiConfig.dataWidth / accType.getBitsWidth
     require(accLanes >= 1,
       s"Spill accumulator dtype (${accType.getBitsWidth}b) is wider than the AXI beat (${axiConfig.dataWidth}b) — unsupported spill element size")
-    (l.spillPasses, (elems + accLanes - 1) / accLanes)
+    (passes, (elems + accLanes - 1) / accLanes)
   }
   val spillCtrl = spillSpec.map { case (p, beats) =>
     SpillPassController(p, axiConfig.addressWidth, spillBeats = beats)
@@ -510,8 +520,9 @@ case class Sequential(
       // contiguous in DDR. A spilling layer fetches ONE slice per pass into
       // slice-sized buffers (the full-K mur is exactly what spill removes);
       // S2b re-fires this fetch per pass. Legacy layers keep full-region.
+      // P1: any SpillableGEMM (Linear K=inFeatures, Conv2D K=K*K*inChannels).
       val spillSlice: Option[(Int, Int)] = layer match {
-        case l: Linear if l.spilling => Some((l.spillKSlice, l.spillPasses))
+        case s: SpillableGEMM if s.spilling => Some((s.spillKSlice, s.spillPasses))
         case _ => None
       }
       val fetchElems = spillSlice match {
@@ -751,6 +762,25 @@ case class Sequential(
                 "quantize the activations or run this stage on integer activations")
             layerWeights
           }
+        // P1 spill sizing (mirror of the Linear block below): the K-pass GEMM
+        // needs the windowed row drain (temporal) and a re-streamable A every
+        // pass (node 0 DDR-backed re-fire, or on-chip StreamTap replay within
+        // budget); M*N full-width partials sized here (M = total windows).
+        if (c.spilling) {
+          require(temporal >= 1,
+            s"Sequential: Conv2D layer $i spills (spillKSlice=${c.spillKSlice}) but temporal=$temporal — " +
+              "the spill drain reuses the windowed row drain, require temporal >= 1")
+          val aElems = nodeShapes(i).product
+          val aBytes = MemLayout.regionBytes(aElems, nodeTypes(i).getBitsWidth)
+          require((i == 0 && consumers(0).size == 1) || aBytes <= spillReplayBudgetBytes,
+            s"Sequential: Conv2D layer $i spills but its A operand (node $i, ${aBytes}B) is neither " +
+              "exclusively DDR-backed (sole consumer of node 0, re-fired per pass) nor within " +
+              "spillReplayBudgetBytes=$spillReplayBudgetBytes (StreamTap replay) — " +
+              "spill A to DDR first (v2, see docs/ddr_final_impl.md)")
+          val mRows = (nodeShapes(i)(0) - c.kernelSize + 1) * (nodeShapes(i)(1) - c.kernelSize + 1)
+          val spillElems = mRows * c.outChannels
+          spillBytesAcc += alignToBeat(MemLayout.regionBytes(spillElems, lType.getBitsWidth))
+        }
         Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
 
       case _: ReLU =>
