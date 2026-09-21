@@ -82,8 +82,7 @@ class ReplicaSpillFoldTest extends AnyFunSuite {
       "spillKSlice=K must reproduce the legacy path exactly")
   }
 
-  test("R2: handler rejects layer/layout spill mismatch (no silent double transpose)") {
-    val k = 8; val n = 4
+  test("R2: handler rejects layer/layout spill mismatch (no silent double transpose)") {    val k = 8; val n = 4
     val spillPacked = buildLayout(
       Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2, spillKSlice = 4)), () => I8())
     val denseLayers = Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2))
@@ -93,5 +92,42 @@ class ReplicaSpillFoldTest extends AnyFunSuite {
       ModelReplica.forwardWithTrace(
         denseLayers, shape, ModelReplica.IntTensor(shape, inInts, 8), spillPacked)
     }
+  }
+
+  test("P0a: int spill fold matches dense oracle with M=2 rows") {
+    val m = 2; val k = 8; val n = 4; val ks = 4
+    val spillLayers = Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2, spillKSlice = ks))
+    val denseLayers = Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2))
+    val spillPacked = buildLayout(spillLayers, () => I8())
+    val densePacked = buildLayout(denseLayers, () => I8())
+
+    val shape = Seq(m, k)
+    val inInts = (0 until m * k).map(idx => (((idx * 7 + 3) % 15) - 7).toLong)
+    val spillOut = ModelReplica.forwardWithTrace(
+      spillLayers, shape, ModelReplica.IntTensor(shape, inInts, 8), spillPacked).logits
+    val denseOut = ModelReplica.forwardWithTrace(
+      denseLayers, shape, ModelReplica.IntTensor(shape, inInts, 8), densePacked).logits
+    assert(spillOut.length == m * n, s"spill logits ${spillOut.length} != M*N=${m * n}")
+    assert(spillOut == denseOut, s"spill $spillOut != dense $denseOut")
+  }
+
+  test("P0a: float spill fold is bit-exact vs dense oracle with M=2 rows") {
+    val m = 2; val k = 8; val n = 4; val ks = 4
+    val spillLayers = Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2, spillKSlice = ks))
+    val denseLayers = Seq(Linear(inFeatures = k, outFeatures = n, weightLanes = 2))
+    val spillPacked = buildLayout(spillLayers, () => BF16())
+    val densePacked = buildLayout(denseLayers, () => BF16())
+
+    val shape = Seq(m, k)
+    val inVals = (0 until m * k).map { idx =>
+      val sign = if (idx % 2 == 0) 1.0 else -1.0
+      fromDouble(sign * (((idx % 7) + 1) * 0.125), 8, 7)
+    }
+    val spillOut = ModelReplica.forwardWithTrace(
+      spillLayers, shape, ModelReplica.FloatTensor(shape, inVals, 8, 7), spillPacked).logits
+    val denseOut = ModelReplica.forwardWithTrace(
+      denseLayers, shape, ModelReplica.FloatTensor(shape, inVals, 8, 7), densePacked).logits
+    val dev = spillOut.zip(denseOut).map { case (a, b) => math.abs(a - b) }.max
+    assert(dev == 0.0, s"float M=2 spill fold deviates: dev=$dev spill=$spillOut dense=$denseOut")
   }
 }
