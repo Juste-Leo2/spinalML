@@ -5,6 +5,25 @@ package spinalML.harness
 import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi.{Axi4, Axi4Config}
+import spinal.lib.bus.amba4.axilite.AxiLite4
+
+/**
+ * Interface a stress-test top must expose for `UniversalTestHarness.runStress`.
+ *
+ * The generated CLI scaffold wraps any user DUT in such a top (DUT +
+ * `DramChaosInterposer` + exposed ports); the harness stays generic by
+ * programming against this trait instead of a concrete wrapper type.
+ * Concrete port types only — no timing/config leaks into the oracle path.
+ */
+trait ChaosDut {
+  def memAxi: Axi4
+  def ctrlAxi: AxiLite4
+  def outShape: Seq[Int]
+  def outLanes: Int
+  def setOutReady(v: Boolean): Unit
+  def outValid: Boolean
+  def outPayload(lane: Int): Data
+}
 
 /**
  * DRAM chaos model (Phase A, docs/ddr_stress.md) — TEST-ONLY interposer.
