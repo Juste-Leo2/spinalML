@@ -781,7 +781,68 @@ case class Sequential(
           val spillElems = mRows * c.outChannels
           spillBytesAcc += alignToBeat(MemLayout.regionBytes(spillElems, lType.getBitsWidth))
         }
-        Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
+        // P1 K-pass wiring (mirror of the Linear S2b block above): direct
+        // Conv2DLayer instantiation (not via apply) so the pass controller
+        // owns the spill ports. SLICE GEOMETRY (S1 proven): the engine is
+        // shaped [M,Ks]x[Ks,N] per pass with M = total windows; the A-window
+        // lives inside Conv2DLayer on the im2col cols stream (same
+        // accept-and-drop discipline, passIdx held by the controller).
+        val convOut: Tensor[Data] = if (c.spilling) {
+          // A re-stream: exclusive node 0 re-fires the image sweep from DDR
+          // (im2col reproduces cols verbatim per pass, self-restarting);
+          // shared/deep nodes replay through an on-chip StreamTap.
+          val inFed: Tensor[Data] = if (!spillImgRefire) {
+            val tap = StreamTap(nodeTypes(i), nodeShapes(i), nodeLanes(i))
+            tap.io.arm := io.start.valid && !prevStartValid
+            tap.io.replay := spillCtrl.get.io.restartA
+            tap.io.streamIn.stream << inTensor.stream
+            val fed = Tensor(nodeTypes(i), nodeShapes(i), nodeLanes(i))
+            fed.stream << tap.io.streamOut.stream
+            fed
+          } else inTensor
+          val hIn = nodeShapes(i)(0)
+          val wIn = nodeShapes(i)(1)
+          val chIn = if (nodeShapes(i).length >= 3) nodeShapes(i)(2) else 1
+          val mRows = (hIn - c.kernelSize + 1) * (wIn - c.kernelSize + 1)
+          val layerSpillOffset = spillBytesAcc
+          val convComp = spinalML.layers.Conv2DLayer(
+            inFed.dataType, lType, hIn, wIn, chIn, c.outChannels, c.kernelSize,
+            outLanes = c.effLanes, temporal = temporal, inLanes = inFed.lanes,
+            convOutLanes = c.lanes, spill = true, spillKSlice = c.spillKSlice)
+          convComp.io.reArm := weightDmaFire
+          convComp.io.x.stream << inFed.stream
+          convComp.io.w.stream << wForConv.stream
+          convComp.io.b <> layerBias
+          val ctrl = spillCtrl.get // Some <=> spilling (v1 single layer)
+          val spillWriter = DMAWriter(lType, Seq(mRows, c.outChannels), 1, spillWriteLeafCfg)
+          val spillReader = DMAReader(lType, Seq(mRows, c.outChannels), 1, dmaAxiConfig,
+            trimToElements = true, flushableGearbox = true)
+          allAxiMasters += spillReader.io.axiMaster
+          io.spillWrite.get <> spillWriter.io.axiMaster
+          // Pass-loop wiring: identical contract to the Linear block.
+          convComp.io.passFirst.get := ctrl.io.passFirst
+          convComp.io.passLast.get := ctrl.io.passLast
+          convComp.io.passIdx.get := spillPassIdxOf(i)
+          convComp.io.spillIn.get.stream << spillReader.io.outStream.stream
+          spillWriter.io.inStream.stream << convComp.io.spillOut.get.stream
+          spillReader.io.cmd << ctrl.io.readerCmd
+          spillWriter.io.cmd << ctrl.io.writerCmd
+          ctrl.io.passDone := convComp.io.passDone.get
+          ctrl.io.writerDone := spillWriter.io.done
+          ctrl.io.wFetchFire := weightDmaFire
+          ctrl.io.residentMode := residentMode
+          ctrl.io.spillBase := io.spillBaseAddress + layerSpillOffset
+          ctrl.io.start := io.start.valid && !prevStartValid
+          // Per-pass bias re-arm WITHOUT bias re-fetch (final prelude only).
+          convComp.io.biasReArm := biasDmaFire || (ctrl.io.biasReArm && ctrl.io.passLast)
+          // The S2a pass index follows the controller (single source of
+          // truth for the slice addressing in the fetch plane above).
+          spillPassIdxOf(i) := ctrl.io.passIdx
+          convComp.io.y
+        } else {
+          Conv2DHW(inTensor, wForConv, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
+        }
+        convOut
 
       case _: ReLU =>
         relu(inTensor)

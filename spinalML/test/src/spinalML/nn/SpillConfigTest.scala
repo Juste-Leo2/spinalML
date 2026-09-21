@@ -223,4 +223,21 @@ class SpillConfigTest extends AnyFunSuite {
     assert(reportPlain.toplevel.spillLayerIdx.isEmpty)
     assert(reportPlain.toplevel.spillSliceInfo.isEmpty)
   }
+
+  test("P1-3 Sequential: spilling Conv2D elaborates, sizes slice fetch + spill footprint") {
+    // Conv2D(inC=2, outC=2, K=2, Ks=4) on [6,6,2]: windows = 5*5 = 25,
+    // M*N = 50B I8 => beat-aligned 56B.
+    val layers = Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 4))
+    intercept[Exception] {
+      SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 6, 2), temporal = 0))
+    }
+    val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 6, 2)))
+    assert(report.toplevel.spillLayerIdx.contains(0),
+      s"spillLayerIdx=${report.toplevel.spillLayerIdx} should pinpoint layer 0")
+    assert(report.toplevel.totalSpillBytes == 56,
+      s"totalSpillBytes=${report.toplevel.totalSpillBytes} != 56")
+    // Slice fetch: Ks*N = 8 elems I8 = 8B = 1 beat per pass.
+    assert(report.toplevel.spillSliceInfo.get(0).contains((8, 1)),
+      s"spillSliceInfo=${report.toplevel.spillSliceInfo} != (8 elems, 1 beat)")
+  }
 }
