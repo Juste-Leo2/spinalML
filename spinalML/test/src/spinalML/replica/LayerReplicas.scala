@@ -45,7 +45,10 @@ object LayerReplicas {
     for (cOut <- 0 until outChannels; y <- 0 until hOut; x <- 0 until wOut) {
       val prods = ArrayBuffer[F]()
       var wIdx = 0
-      for (cIn <- 0 until inChannels; r <- 0 until kernelSize; k <- 0 until kernelSize) {
+      // Window order matches the HW im2col shift register ([K,K,C] row-major:
+      // kernel row, kernel col, channel fastest) so flat index wIdx is the
+      // DDR offset the engine reads. C=1 degenerates to the legacy order.
+      for (r <- 0 until kernelSize; k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val pix = input(cIn)(y + r)(x + k)
         val weight = weights(cOut)(wIdx)
         wIdx += 1
@@ -301,7 +304,8 @@ object LayerReplicas {
     for (cOut <- 0 until outChannels; y <- 0 until hOut; x <- 0 until wOut) {
       var acc = if (cOut < bias.length) bias(cOut) else 0L
       var wIdx = 0
-      for (cIn <- 0 until inChannels; r <- 0 until kernelSize; k <- 0 until kernelSize) {
+      // Same (r,k,c) window order as the float path / HW shift register.
+      for (r <- 0 until kernelSize; k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val pix = input(cIn)(y + r)(x + k)
         val weight = weights(cOut)(wIdx)
         wIdx += 1

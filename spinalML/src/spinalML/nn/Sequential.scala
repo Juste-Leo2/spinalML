@@ -343,16 +343,20 @@ case class Sequential(
   // previous patch's output fully crossed the trim stage — i.e. exactly when
   // the current band has landed in a bank).
   val inputDataType = globalDataType
-  val dmaImg = DMAReader2D(inputDataType, inputShape, outLanes = inLanes, dmaAxiConfig)
-
+  // P1: a 3D [H,W,C] input fetches as H rows of W*C elements (row-major
+  // [y][x][ch], matching the replica layout and im2col consumption). For 2D
+  // or single-channel inputs W*C == W, so this is a no-op on legacy shapes —
+  // previously the fetch silently delivered a short frame (W per row).
   val elemsPerRowImg = inputShape.product / inputShape.head
+  val dmaImg = DMAReader2D(inputDataType, Seq(inputShape.head, elemsPerRowImg), outLanes = inLanes, dmaAxiConfig)
+
   val bandRows = if (tileHeight > 0) inputShape.head.min(tileHeight) else inputShape.head
   val nBands = (inputShape.head + bandRows - 1) / bandRows
   val bandElements = bandRows * elemsPerRowImg
   val pixelBytes = inputDataType.getBitsWidth / 8
   require(pixelBytes >= 1, "image dtype narrower than 8 bits is unsupported")
   require(bandElements > 0, "band must hold at least one pixel row")
-  val strideBytesImg = inputShape(1) * pixelBytes
+  val strideBytesImg = elemsPerRowImg * pixelBytes
   val bandBytes = bandRows * strideBytesImg
 
   // Beat-width element sanity (kept from the legacy site).
