@@ -191,4 +191,18 @@ class DramChaosSpillTest extends AnyFunSuite {
   test("S2 chaos-heavy BF16 spill P=2 bit-exact vs ModelReplica") {
     runChaosCase(isInt = false, DramChaosConfig.heavy(), label = "CHAOS-BF16-K8-P2")
   }
+
+  test("P0c chaos-light I8 spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = true, DramChaosConfig.light(), label = "CHAOS-LIGHT-I8-K8-P2")
+  }
+
+  test("P0c chaos-light BF16 spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = false, DramChaosConfig.light(), label = "CHAOS-LIGHT-BF16-K8-P2")
+  }
+
+  test("P0c chaos-heavy seed sweep I8 spill P=2 bit-exact vs ModelReplica") {
+    // Two extra deterministic seeds: no seed-dependent deadlock/deviation.
+    runChaosCase(isInt = true, DramChaosConfig.heavy(0xBEEF01L), label = "CHAOS-SEED1-I8-K8-P2")
+    runChaosCase(isInt = true, DramChaosConfig.heavy(0x123456L), label = "CHAOS-SEED2-I8-K8-P2")
+  }
 }
