@@ -42,9 +42,11 @@ Légende : HW = spill côté hardware, RPL = fold réplica, E2E = preuve bit-exa
 Donc « toutes les ops compatibles » = en pratique **Conv2D puis Conv1D**.
 Le reste ne spillera jamais par nature (pas de GEMM, pas de mur `K`).
 
-## 2. P0 — Combler l'enveloppe Linear (même gabarit, que des cas)
+## 2. P0 — Combler l'enveloppe Linear ✅ FAIT (commits P0a-P0d, `ddrimpl3`)
 
-Rien de structurel, que des cas à ajouter aux suites existantes :
+Tous les cas ajoutés aux suites existantes, verts du premier coup
+(aucun fix HW — seul le chemin int M=1-only du réplica a demandé une
+correction, P0a) :
 
 1. **M>1 sous spill** (tout est M=1 aujourd'hui, HW + réplica) : la boucle `rows`
    de `LayerReplicas.linear` et le reshape `Sequential` en mode spill ne sont
@@ -64,7 +66,8 @@ Rien de structurel, que des cas à ajouter aux suites existantes :
    croisés réplica.
 
 Gate P0 : suites ci-dessus vertes + sélection 12+6 (R6) toujours verte.
-Après P0, l'enveloppe Linear est close pour de bon.
+Après P0, l'enveloppe Linear est close pour de bon — vérifié le 21/09/2026
+(P0d : 12 sim + 6 formels verts, voir R6 pour la sélection).
 
 ## 3. P1 — Conv2D-spill (le gabarit Linear, axe différent)
 
