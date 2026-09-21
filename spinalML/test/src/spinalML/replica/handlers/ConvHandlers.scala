@@ -27,6 +27,11 @@ object ConvHandlers {
     val wOut = w - kSize + 1
     val nextShape = Seq(hOut, wOut, outC)
 
+    // P1 spill: layer and layout must agree (no silent double transposition).
+    require((c.spilling && wInfo.spillKSlice > 0) || (!c.spilling && wInfo.spillKSlice <= 0),
+      s"ConvHandlers: Conv2D(spillKSlice=${c.spillKSlice}) vs layout spillKSlice=${wInfo.spillKSlice} mismatch — " +
+        "rebuild weights with WeightMemoryLayout.buildDeterministicWeights (no double transposition)")
+
     val nextTensor: ReplicaTensor = curTensor match {
       case it: IntTensor =>
         val arr3D = Array.ofDim[Long](inC, h, w)
@@ -36,7 +41,19 @@ object ConvHandlers {
           arr3D(ch)(y)(x) = if (idx < raw.length) raw(idx) else 0L
           idx += 1
         }
-        val convW = (0 until outC).map(o => wInfo.weightInts.slice(o * kElems, (o + 1) * kElems))
+        val convW = if (wInfo.spillKSlice <= 0) {
+          (0 until outC).map(o => wInfo.weightInts.slice(o * kElems, (o + 1) * kElems))
+        } else {
+          // Same physical gather as the float path (int math is associative,
+          // but the slice-transposed order must still be unwound per output).
+          val ks = wInfo.spillKSlice
+          def physIdx(o: Int, k: Int): Int = {
+            val p = k / ks
+            val kl = k % ks
+            p * (ks * outC) + o * ks + kl
+          }
+          (0 until outC).map(o => (0 until kElems).map(k => wInfo.weightInts(physIdx(o, k))))
+        }
         val convB = (0 until outC).map(o => if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L)
         val convOut = LayerReplicas.conv2DInt(arr3D, convW, convB, inC, outC, kSize)
         val flat = LayerReplicas.flattenInt(convOut)
@@ -51,10 +68,25 @@ object ConvHandlers {
           arr3D(ch)(y)(x) = if (idx < raw.length) raw(idx) else PZERO
           idx += 1
         }
-        val convW = (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
+        // P1 spill: the layout tool emits spilling layers slice-transposed
+        // (WeightMemoryLayout); gather logical [o][k] rows from the physical
+        // `p*Ks*N + n*Ks + k_local` order and fold passes in the replica.
+        // Non-spilling layers keep the legacy direct slicing, untouched.
+        // (Layer/layout consistency is required once above, both paths.)
+        val ks = if (wInfo.spillKSlice > 0) wInfo.spillKSlice else kElems
+        def physIdx(o: Int, k: Int): Int = {
+          val p = k / ks
+          val kl = k % ks
+          p * (ks * outC) + o * ks + kl
+        }
+        val convW = if (wInfo.spillKSlice <= 0) {
+          (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
+        } else {
+          (0 until outC).map(o => (0 until kElems).map(k => wInfo.weightValues(physIdx(o, k))))
+        }
         val convB = (0 until outC).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
         val convOut = LayerReplicas.conv2D(arr3D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits,
-          lanes = c.effLanes)
+          lanes = c.effLanes, spillKSlice = wInfo.spillKSlice)
         val flat = LayerReplicas.flatten(convOut)
         FloatTensor(nextShape, flat, ft.expBits, ft.mantBits)
     }

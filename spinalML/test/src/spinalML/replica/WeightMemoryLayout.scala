@@ -143,11 +143,12 @@ object WeightMemoryLayout {
       var wInts = Seq[Long]()
       var bInts = Seq[Long]()
 
-      // S2 spill v1: a spilling Linear streams one Ks-slice per pass, so its
-      // weight region is emitted slice-transposed (see sliceTransposeFlat).
-      // -1 = no spill, legacy whole-transpose order, bit-identical to before.
+      // S2 spill v1 (P1: any SpillableGEMM): a spilling layer streams one
+      // Ks-slice per pass, so its weight region is emitted slice-transposed
+      // (see sliceTransposeFlat). -1 = no spill, legacy whole-transpose
+      // order, bit-identical to before.
       val (spillKs, spillPasses) = layer match {
-        case l: Linear if l.spilling => (l.spillKSlice, l.spillPasses)
+        case s: SpillableGEMM if s.spilling => (s.spillKSlice, s.spillPasses)
         case _ => (-1, 1)
       }
 
@@ -187,7 +188,7 @@ object WeightMemoryLayout {
         val spillActive = spillKs > 0
         if (spillActive) {
           val (spillK, spillN) = layer match {
-            case l: Linear => (l.inFeatures, l.outFeatures)
+            case s: SpillableGEMM => (s.spillKFull, s.spillN)
             case _ => (wElems, 1)
           }
           require(wElems == spillK * spillN,
@@ -200,7 +201,7 @@ object WeightMemoryLayout {
         val rawBits: Seq[Long] =
           if (spillActive) {
             val (spillK, spillN) = layer match {
-              case l: Linear => (l.inFeatures, l.outFeatures)
+              case s: SpillableGEMM => (s.spillKFull, s.spillN)
               case _ => (wElems, 1)
             }
             sliceTransposeFlat(rawBitsLegacy, spillK, spillN, spillKs)

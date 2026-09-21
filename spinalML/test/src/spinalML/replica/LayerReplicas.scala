@@ -27,7 +27,14 @@ object LayerReplicas {
     // (Conv2D.weightLanes): chunks accumulate sequentially via fadd, exactly
     // like Linear. <= 0 (default) = single chunk over the whole window, the
     // historical behavior. Must divide K*K*inChannels when > 0.
-    lanes: Int = -1
+    lanes: Int = -1,
+    // P1 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
+    // over the flattened window axis. <= 0 (default) = single pass, the
+    // historical behavior, instruction by instruction. > 0 = passes fold
+    // outermost (seeded from the running acc, bias once at the end), exactly
+    // like the multi-pass engine. Must divide the window, and be a multiple
+    // of lanes when > 0 (mirrors the LayerSpec spillKSlice requires).
+    spillKSlice: Int = -1
   ): Array[Array[Array[F]]] = {
     val h = input(0).length
     val w = input(0)(0).length
@@ -48,8 +55,21 @@ object LayerReplicas {
       require(prods.length % wLanes == 0,
         s"conv2D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
       var acc = PZERO
-      for (chunk <- 0 until prods.length by wLanes) {
-        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      if (spillKSlice <= 0) {
+        for (chunk <- 0 until prods.length by wLanes) {
+          acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+        }
+      } else {
+        require(prods.length % spillKSlice == 0,
+          s"conv2D: window ${prods.length} must be a multiple of spillKSlice=$spillKSlice (dense passes, no padding)")
+        require(spillKSlice % wLanes == 0,
+          s"conv2D: spillKSlice=$spillKSlice must be a multiple of lanes=$wLanes (pass-internal chunking matches HW)")
+        for (p <- 0 until prods.length by spillKSlice) {
+          for (chunk <- 0 until spillKSlice by wLanes) {
+            val len = math.min(wLanes, spillKSlice - chunk)
+            acc = fadd(acc, tree(prods.slice(p + chunk, p + chunk + len).toSeq, expBits, mantBits), expBits, mantBits)
+          }
+        }
       }
       out(cOut)(y)(x) = fadd(acc, bias(cOut), expBits, mantBits)
     }
