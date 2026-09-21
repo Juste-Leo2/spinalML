@@ -171,8 +171,14 @@ entre passes via paire `DMAReader`/`DMAWriter` + curseur spill (reset sur write 
       AW = 1 beat (drain spill 8 B), région W = 72 B.
 - **Docs** : `ddr_impl.md` §5.3 + `ddr_replica_status.md` §7 à jour (S2d-3 +
   PR réplica) ; la présente note est la clôture S3 définitive.
-- **Gate du cap** : `test-all` + `test-all-formal` verts (R6 ; python skippé
-  par consigne).
+- **Gate du cap (R6)** : sélection restreinte verte 12 sim + 6 formels
+  (python skippé par consigne, `test-all` complet non relancé) —
+  sim : `WeightLayoutSpillTest`, `ReplicaSpillFoldTest`,
+  `SequentialReplicaSpillTest`, `SequentialSpillTest`, `SpillConfigTest`,
+  `MatmulSpillTest`, `SequentialTest`, `AcceleratorTest`, `Conv2DTest`,
+  `LinearTest`, `ClassicalAttentionTest`, `MnistTest` ;
+  formel : `SpillPassControllerFormal` + `Liveness`, `AcceleratorFormal`,
+  `MemorySpecFormal`, `DMAWriterFormal`, `BiasAddFormal` → ✅ 18/18.
 
 ## Volontairement hors v1 (v2+)
 
