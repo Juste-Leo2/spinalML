@@ -32,12 +32,13 @@ class SequentialReplicaSpillTest extends AnyFunSuite {
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
   }
 
-  /** Generic replica-oracle e2e for a single spilling Linear. */
+  /** Generic replica-oracle e2e for spilling Linear models (single or chained). */
   def runReplicaCase(
     spec: Seq[LayerSpec],
     inShape: Seq[Int],
     isInt: Boolean,
-    label: String
+    label: String,
+    runs: Int = 1
   ): Unit = {
     var packedWords: Seq[BigInt] = null
     var imgWords: Seq[BigInt] = null
@@ -152,48 +153,54 @@ class SequentialReplicaSpillTest extends AnyFunSuite {
       writeCsr(0x08, imgBase)
       writeCsr(0x0C, weightBase)
       // 0x34 spill base: descriptor init path under test, no CSR write.
-      writeCsr(0x00, 1)
 
       // R5 traffic probes: count AXI command beats (fire cycles x len+1).
       var arBeats = 0L
       var awBeats = 0L
       val outCount = dut.io.outStream.shape.product
-      val collected = scala.collection.mutable.ArrayBuffer[Double]()
-      var cycles = 0
-      val timeout = 50000
-      while (collected.length < outCount && cycles < timeout) {
-        if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean)
-          arBeats += dut.io.axiMaster.ar.payload.len.toInt + 1
-        if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean)
-          awBeats += dut.io.axiMaster.aw.payload.len.toInt + 1
-        if (dut.io.outStream.stream.valid.toBoolean) {
-          for (l <- 0 until dut.io.outStream.lanes if collected.length < outCount) {
-            if (isInt) collected += dut.io.outStream.stream.payload(l).asInstanceOf[SInt].toInt.toDouble
-            else collected += UniversalTestHarness.decodeFloat(dut.io.outStream.stream.payload(l)).toDouble
+      var runTag = label
+      for (run <- 1 to runs) {
+        if (runs > 1) runTag = s"$label-run$run"
+        writeCsr(0x00, 1)
+
+        val collected = scala.collection.mutable.ArrayBuffer[Double]()
+        var cycles = 0
+        val timeout = 50000
+        while (collected.length < outCount && cycles < timeout) {
+          if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean)
+            arBeats += dut.io.axiMaster.ar.payload.len.toInt + 1
+          if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean)
+            awBeats += dut.io.axiMaster.aw.payload.len.toInt + 1
+          if (dut.io.outStream.stream.valid.toBoolean) {
+            for (l <- 0 until dut.io.outStream.lanes if collected.length < outCount) {
+              if (isInt) collected += dut.io.outStream.stream.payload(l).asInstanceOf[SInt].toInt.toDouble
+              else collected += UniversalTestHarness.decodeFloat(dut.io.outStream.stream.payload(l)).toDouble
+            }
           }
+          tick(); cycles += 1
         }
-        tick(); cycles += 1
-      }
-      assert(collected.length == outCount,
-        s"[$label] collected ${collected.length}/$outCount outputs in $cycles cycles")
+        assert(collected.length == outCount,
+          s"[$runTag] collected ${collected.length}/$outCount outputs in $cycles cycles")
 
-      val devs = collected.toSeq.zip(expected).map { case (h, s) => math.abs(h - s) }
-      val dev = devs.max
-      devs.zipWithIndex.foreach { case (d, i) =>
-        if (d != 0.0) println(f"R3 [$label DEV] out[$i] hw=${collected(i)}%9.5f sw=${expected(i)}%9.5f dev=$d%9.6f")
-      }
-      assert(dev == 0.0, s"R3 [$label] replica bit-exact failed: max dev=$dev")
-      println(s"R3 [$label] replica bit-exact PASSED in $cycles cycles " +
-        s"(AR beats=$arBeats, AW beats=$awBeats, weightRegionBytes=$weightBytesTotal)")
+        val devs = collected.toSeq.zip(expected).map { case (h, s) => math.abs(h - s) }
+        val dev = devs.max
+        devs.zipWithIndex.foreach { case (d, i) =>
+          if (d != 0.0) println(f"R3 [$runTag DEV] out[$i] hw=${collected(i)}%9.5f sw=${expected(i)}%9.5f dev=$d%9.6f")
+        }
+        assert(dev == 0.0, s"R3 [$runTag] replica bit-exact failed: max dev=$dev")
+        println(s"R3 [$runTag] replica bit-exact PASSED in $cycles cycles " +
+          s"(AR beats=$arBeats, AW beats=$awBeats, weightRegionBytes=$weightBytesTotal)")
 
-      val tileCnt = readCsr(CsrMap.TileCnt)
-      assert(tileCnt == 1, s"TILE_CNT=$tileCnt (expected 1 frame)")
-      val status = readCsr(CsrMap.Status)
-      assert(status == 0, s"status=0x${status.toString(16)} (expected idle STOP)")
-      val mode = readCsr(CsrMap.Mode)
-      assert(mode == 0, s"MODE=0x${mode.toString(16)} (expected STREAM_PER_PASS)")
-      val spillRb = readCsr(CsrMap.SpillBase)
-      assert(spillRb == spillBase, f"CSR 0x34=0x$spillRb%X (expected 0x$spillBase%X)")
+        val tileCnt = readCsr(CsrMap.TileCnt)
+        assert(tileCnt == run, s"TILE_CNT=$tileCnt after run $run (expected $run)")
+        val status = readCsr(CsrMap.Status)
+        assert(status == 0, s"status=0x${status.toString(16)} after run $run (expected idle STOP)")
+        val mode = readCsr(CsrMap.Mode)
+        assert(mode == 0, s"MODE=0x${mode.toString(16)} after run $run (expected STREAM_PER_PASS)")
+        val spillRb = readCsr(CsrMap.SpillBase)
+        assert(spillRb == spillBase, f"CSR 0x34=0x$spillRb%X after run $run (expected 0x$spillBase%X)")
+        tick(); tick()
+      }
     }
   }
 
@@ -207,5 +214,44 @@ class SequentialReplicaSpillTest extends AnyFunSuite {
     runReplicaCase(
       Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
       Seq(1, 8), isInt = false, label = "BF16-K8-P2")
+  }
+
+  test("P0b e2e I8 spill P=4 bit-exact vs ModelReplica") {
+    runReplicaCase(
+      Seq(Linear(inFeatures = 16, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(1, 16), isInt = true, label = "I8-K16-P4")
+  }
+
+  test("P0b e2e BF16 spill P=4 bit-exact vs ModelReplica") {
+    runReplicaCase(
+      Seq(Linear(inFeatures = 16, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(1, 16), isInt = false, label = "BF16-K16-P4")
+  }
+
+  test("P0b e2e I8 spill P=2 with M=2 rows bit-exact vs ModelReplica") {
+    runReplicaCase(
+      Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(2, 8), isInt = true, label = "I8-M2-K8-P2")
+  }
+
+  test("P0b e2e deep-node spill P=2 via StreamTap bit-exact vs ModelReplica") {
+    // [dense 4->4, spill 4->4 Ks=2]: the spill sits at node 1, its A is the
+    // layer-0 output replayed on-chip (tap), layers share one W region.
+    runReplicaCase(
+      Seq(Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2),
+        Linear(inFeatures = 4, outFeatures = 4, weightLanes = 2, spillKSlice = 2)),
+      Seq(1, 4), isInt = true, label = "I8-TAP-P2")
+  }
+
+  test("P0b e2e I8 spill K=64 P=8 at scale bit-exact vs ModelReplica") {
+    runReplicaCase(
+      Seq(Linear(inFeatures = 64, outFeatures = 4, weightLanes = 2, spillKSlice = 8)),
+      Seq(1, 64), isInt = true, label = "I8-K64-P8")
+  }
+
+  test("P0b e2e I8 spill P=2 back-to-back rerun bit-exact vs ModelReplica") {
+    runReplicaCase(
+      Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+      Seq(1, 8), isInt = true, label = "I8-K8-P2-RERUN", runs = 2)
   }
 }
