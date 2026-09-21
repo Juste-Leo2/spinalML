@@ -184,23 +184,51 @@ object LayerReplicas {
     bias: Seq[F],         // [outFeatures]
     expBits: Int,
     mantBits: Int,
-    weightLanes: Int
+    weightLanes: Int,
+    // S2 spill contract (docs/ddr_final_impl.md): K-slice width streamed per
+    // HW pass. <= 0 (default) = single pass over the whole row, the
+    // historical behavior, instruction by instruction. > 0 = passes fold
+    // outermost (seeded from the running acc, bias once at the end), exactly
+    // like the multi-pass GEMM. Must divide inFeatures, and be a multiple of
+    // weightLanes when > 0 (mirrors the LayerSpec spillKSlice requires).
+    spillKSlice: Int = -1
   ): Seq[F] = {
     val inFeatures = weights.head.length
     val outFeatures = weights.length
     val rows = input.length / inFeatures
     val out = ArrayBuffer[F]()
 
-    for (r <- 0 until rows) {
-      val rowInput = input.slice(r * inFeatures, (r + 1) * inFeatures)
-      for (o <- 0 until outFeatures) {
-        var acc = PZERO
-        for (chunk <- 0 until inFeatures by weightLanes) {
-          val len = math.min(weightLanes, inFeatures - chunk)
-          val prods = (0 until len).map(k => fmul(rowInput(chunk + k), weights(o)(chunk + k), expBits, mantBits))
-          acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+    if (spillKSlice <= 0) {
+      for (r <- 0 until rows) {
+        val rowInput = input.slice(r * inFeatures, (r + 1) * inFeatures)
+        for (o <- 0 until outFeatures) {
+          var acc = PZERO
+          for (chunk <- 0 until inFeatures by weightLanes) {
+            val len = math.min(weightLanes, inFeatures - chunk)
+            val prods = (0 until len).map(k => fmul(rowInput(chunk + k), weights(o)(chunk + k), expBits, mantBits))
+            acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+          }
+          out += fadd(acc, bias(o), expBits, mantBits)
         }
-        out += fadd(acc, bias(o), expBits, mantBits)
+      }
+    } else {
+      require(inFeatures % spillKSlice == 0,
+        s"linear: inFeatures=$inFeatures must be a multiple of spillKSlice=$spillKSlice (dense passes, no padding)")
+      require(spillKSlice % weightLanes == 0,
+        s"linear: spillKSlice=$spillKSlice must be a multiple of weightLanes=$weightLanes (pass-internal chunking matches HW)")
+      for (r <- 0 until rows) {
+        val rowInput = input.slice(r * inFeatures, (r + 1) * inFeatures)
+        for (o <- 0 until outFeatures) {
+          var acc = PZERO
+          for (p <- 0 until inFeatures by spillKSlice) {
+            for (chunk <- 0 until spillKSlice by weightLanes) {
+              val len = math.min(weightLanes, spillKSlice - chunk)
+              val prods = (0 until len).map(k => fmul(rowInput(p + chunk + k), weights(o)(p + chunk + k), expBits, mantBits))
+              acc = fadd(acc, tree(prods, expBits, mantBits), expBits, mantBits)
+            }
+          }
+          out += fadd(acc, bias(o), expBits, mantBits)
+        }
       }
     }
     out.toSeq

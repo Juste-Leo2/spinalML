@@ -19,12 +19,30 @@ object DenseHandlers {
     val outFeatures = l.outFeatures
     val lanes = l.effLanes
     val nextShape = Seq(1, outFeatures)
+    // S2 spill v1: the layout tool emits spilling layers slice-transposed
+    // (WeightMemoryLayout R1); gather logical [o][k] rows from the physical
+    // `p*Ks*N + n*Ks + k_local` order and fold passes in the replica.
+    // Non-spilling layers keep the legacy direct slicing, untouched.
+    require((l.spilling && wInfo.spillKSlice > 0) || (!l.spilling && wInfo.spillKSlice <= 0),
+      s"DenseHandlers: Linear(spillKSlice=${l.spillKSlice}) vs layout spillKSlice=${wInfo.spillKSlice} mismatch — " +
+        "rebuild weights with WeightMemoryLayout.buildDeterministicWeights (no double transposition)")
+    val ks = if (wInfo.spillKSlice > 0) wInfo.spillKSlice else inFeatures
+    def physIdx(o: Int, k: Int): Int = {
+      val p = k / ks
+      val kl = k % ks
+      p * (ks * outFeatures) + o * ks + kl
+    }
 
     val nextTensor: ReplicaTensor = curTensor match {
       case ft: FloatTensor =>
-        val fcW = (0 until outFeatures).map(o => wInfo.weightValues.slice(o * inFeatures, (o + 1) * inFeatures))
+        val fcW = if (wInfo.spillKSlice <= 0) {
+          (0 until outFeatures).map(o => wInfo.weightValues.slice(o * inFeatures, (o + 1) * inFeatures))
+        } else {
+          (0 until outFeatures).map(o => (0 until inFeatures).map(k => wInfo.weightValues(physIdx(o, k))))
+        }
         val fcB = (0 until outFeatures).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
-        val out = LayerReplicas.linear(ft.asFloats, fcW, fcB, ft.expBits, ft.mantBits, lanes)
+        val out = LayerReplicas.linear(ft.asFloats, fcW, fcB, ft.expBits, ft.mantBits, lanes,
+          spillKSlice = wInfo.spillKSlice)
         FloatTensor(nextShape, out, ft.expBits, ft.mantBits)
 
       case it: IntTensor =>
@@ -39,7 +57,11 @@ object DenseHandlers {
           }
         }
         val outInts = (0 until outFeatures).map { o =>
-          val fcW = wInfo.weightInts.slice(o * inFeatures, (o + 1) * inFeatures)
+          val fcW = if (wInfo.spillKSlice <= 0) {
+            wInfo.weightInts.slice(o * inFeatures, (o + 1) * inFeatures)
+          } else {
+            (0 until inFeatures).map(k => wInfo.weightInts(physIdx(o, k)))
+          }
           val fcB = if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L
           var acc = fcB
           for (k <- 0 until inFeatures) {
