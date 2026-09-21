@@ -47,8 +47,18 @@ contrôleur, donc le seul réordonnancement légal est inter-ID au niveau de l'a
   aucun deadlock. Leçons de bring-up : règle same-tag parent/enfant pour `<>`
   (le flip s'annule), ports top-level exposés (`ctrlBus`, `outStream`, `memPort`),
   sondes sur `memPort` (le cône interne `dut.io.axiMaster` est élagué par Verilator).
-- **Reste** : généralisation harness (`chaos` param sur `UniversalTestHarness.run`)
-  + flag CLI `--stress` (passthrough seed/niveau vers le scaffold).
+- **Reste (généralisation, commits T1-T3, `ddrImpl2`)** ✅ LIVRÉ :
+  - `ChaosDut` trait (`harness/DramChaos.scala`) : le harness programme contre
+    des accesseurs concrets (`memAxi`/`ctrlAxi`/`outShape`/`outLanes`/`outValid`/…)
+    au lieu d'un type wrapper — zéro generics douloureux ;
+  - `UniversalTestHarness.runStress` : même moteur bit-exact que `run` (corps
+    partagé `execute`), timeout défaut relevé (200000) pour les runs ralentis ;
+  - flag CLI `spinalml test --stress [--stress-level light|heavy] [--stress-seed N]` :
+    le scaffold élabore un `StressWrapper` (DUT + interposeur + ports exposés),
+    l'oracle tourne inchangé sur `wrapper.dut`, `runStress` partage le moteur ;
+  - chaîne complète prouvée sur Linear : `spinalml test UniversalSpillDemo`
+    (idéal, R4) + `spinalml test --stress [--stress-level light]` (chaos,
+    bit-exact), non-régression `Universal1DDemo` sans stress.
 
 ### B. Formels d'invariants (indépendants du timing)
 
