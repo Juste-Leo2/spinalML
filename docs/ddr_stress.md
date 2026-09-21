@@ -31,23 +31,24 @@ et consomme R comme un flux ordonné ; AXI garantit l'ordre par ID même sur un 
 contrôleur, donc le seul réordonnancement légal est inter-ID au niveau de l'arbiter
 (schéma route-bit de `Accelerator`) — modélisable par entrelacement inter-masters.
 
-### A. Chaos DRAM slave (sim-only, branché sur le seam R4)
+### A. Chaos DRAM slave ✅ LIVRÉ (commits S1-S2, `ddrImpl2`)
 
-Remplace `AxiMemorySim` via `UniversalTestHarness.run(..., memorySimConfig = ...)`
-(seam ajouté en R4, défaut = modèle idéal historique) :
-
-1. latence de lecture **distributionnelle**, fonction de l'historique d'adresses
-   (pénalités row-miss / bank-conflict simplifiées) ;
-2. blackouts **refresh** périodiques + pénalité de **turnaround** R/W ;
-3. jitter `ready/valid` sur AR/R/AW/W/B, `maxOutstandingReads` réduit ;
-4. backpressure `outStream`, timing START/reset ;
-5. réordonnancement **légal uniquement** (jamais intra-ID) ;
-6. seeds déterministes, niveaux `light` / `heavy`.
-
-Invariants exigés sous stress : `dev == 0.0`, aucun timeout/deadlock, fencing correct.
-À appliquer **en premier aux suites spill** (multi-passes, RMW, `WaitFence` — le plus
-timing-sensible : `SequentialSpillTest`, `SequentialReplicaSpillTest`, `MatmulSpillTest`),
-puis à l'e2e replica et à la non-régression.
+- **Code** : `spinalML/test/src/spinalML/harness/DramChaos.scala` —
+  `DramChaosConfig` (`disabled` / `light` / `heavy`, seeds déterministes) +
+  `DramChaosInterposer` (interposeur RTL test-only entre `dut.io.axiMaster`
+  et `AxiMemorySim) + `ChaosGate` (FIFO données + FIFO release-time, hold LFSR
+  par transaction). Ordre strict par canal (jamais de réordonnancement intra-ID),
+  blackouts refresh, pénalités row-miss/turnaround depuis l'historique AR.
+- **Preuve** : `spinalML/test/src/spinalML/nn/DramChaosSpillTest.scala` —
+  Linear spill P=2 sous chaos-heavy, oracle `ModelReplica` **inchangé** :
+  - I8-K8-P2 : `dev=0.0` en 116 cycles (vs 93 idéal), AR=8 / AW=1 ;
+  - BF16-K8-P2 : `dev=0.0` en 116 cycles, AR=14 / AW=1.
+  Mêmes beats qu'en idéal (les gates préservent le trafic, seul le timing glisse),
+  aucun deadlock. Leçons de bring-up : règle same-tag parent/enfant pour `<>`
+  (le flip s'annule), ports top-level exposés (`ctrlBus`, `outStream`, `memPort`),
+  sondes sur `memPort` (le cône interne `dut.io.axiMaster` est élagué par Verilator).
+- **Reste** : généralisation harness (`chaos` param sur `UniversalTestHarness.run`)
+  + flag CLI `--stress` (passthrough seed/niveau vers le scaffold).
 
 ### B. Formels d'invariants (indépendants du timing)
 
@@ -94,7 +95,8 @@ d'arguments) — cf. seam documenté dans `docs/ddr_replica_status.md`.
 ## 4. Ordre de marche acté
 
 1. **Chaîne Linear verrouillée** ✅ (R1-R6 : layout, fold, e2e, CLI, trafic, gates).
-2. **Chaos model (A)** sur les suites spill existantes — dérisque logique à peu de frais.
+2. **Chaos model (A)** ✅ livré et prouvé sur les suites spill (S1-S2 : 2/2,
+   `dev=0.0`, pas de deadlock) ; généralisation harness/CLI `--stress` ensuite.
 3. **Conv-spill** avec le gabarit Linear (knob `LayerSpec`, slice fetch `Sequential`,
    fold réplica, layout si l'ordre W change, e2e + formel).
 4. **LiteDRAM sim (C)** comme backend, mêmes suites bit-exactes.
