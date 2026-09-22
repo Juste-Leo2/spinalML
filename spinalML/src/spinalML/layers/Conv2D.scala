@@ -32,7 +32,11 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
   // The A-window sits on the im2col cols stream (beats per cols row); the
   // pass loop (re-fire, slice addresses, pass counting) lives in Sequential.
   spill: Boolean = false,
-  spillKSlice: Int = -1
+  spillKSlice: Int = -1,
+  // Trailing pad elements closing the seed region's last AXI beat (see
+  // MatmulOp spillPadElems). Computed by Sequential from the region beats;
+  // 0 = beat-exact region.
+  spillPadElems: Int = 0
 ) extends Component {
   val H_out = H - K + 1
   val W_out = W_in - K + 1
@@ -117,7 +121,7 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
   //    which carries this layer's weights; temporal bounds the rows in flight)
   val matmulResult = matmul(matmulA, matmulW, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
     spill = spill, passFirst = io.passFirst, passLast = io.passLast,
-    spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone)
+    spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
 
   // 3. Add Bias — S1 bias-zero mux (mirror of LinearLayer): BiasAddOp always
   // consumes exactly N beats per pass, but on non-final passes the beats come

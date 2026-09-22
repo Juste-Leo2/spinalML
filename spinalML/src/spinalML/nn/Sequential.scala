@@ -288,7 +288,7 @@ case class Sequential(
     (passes, (elems + accLanes - 1) / accLanes)
   }
   val spillCtrl = spillSpec.map { case (p, beats) =>
-    SpillPassController(p, axiConfig.addressWidth, spillBeats = beats)
+    SpillPassController(p, axiConfig.addressWidth, spillBeats = beats, beatBytes = axiConfig.dataWidth / 8)
   }
   // S2c A re-stream routing: an EXCLUSIVE node-0 spill re-fires the image
   // sweep from DDR (free); a shared node 0 or a deep node replays an
@@ -808,19 +808,37 @@ case class Sequential(
           val wIn = nodeShapes(i)(1)
           val chIn = if (nodeShapes(i).length >= 3) nodeShapes(i)(2) else 1
           val mRows = (hIn - c.kernelSize + 1) * (wIn - c.kernelSize + 1)
+          // S2e seed-region pad (MatmulOp spillPadElems): trailing elements
+          // closing the region's last AXI beat. The controller fetches the
+          // seed in single-beat chunks (no per-command trim — the trim
+          // counter restarts at every cmd.fire), so the engine drop-drains
+          // this pad per non-first pass. spillSpec beats already cover it.
+          val convAccBits = c.outType(nodeTypes(i)).getBitsWidth
+          require(convAccBits == lType.getBitsWidth,
+            s"Sequential: spilling Conv2D layer $i accumulator (${convAccBits}b) != compute dtype (${lType.getBitsWidth}b) — seed pad math needs equal widths")
+          val convPadElems = spillSpec.get._2 * (axiConfig.dataWidth / lType.getBitsWidth) - mRows * c.outChannels
+          require(convPadElems >= 0,
+            s"Sequential: spilling Conv2D layer $i pad $convPadElems < 0 (region beats ${spillSpec.get._2} do not cover ${mRows * c.outChannels} partials)")
           val layerSpillOffset = spillBytesAcc
           val convComp = spinalML.layers.Conv2DLayer(
             inFed.dataType, lType, hIn, wIn, chIn, c.outChannels, c.kernelSize,
             outLanes = c.effLanes, temporal = temporal, inLanes = inFed.lanes,
-            convOutLanes = c.lanes, spill = true, spillKSlice = c.spillKSlice)
+            convOutLanes = c.lanes, spill = true, spillKSlice = c.spillKSlice, spillPadElems = convPadElems)
           convComp.io.reArm := weightDmaFire
           convComp.io.x.stream << inFed.stream
           convComp.io.w.stream << wForConv.stream
           convComp.io.b <> layerBias
           val ctrl = spillCtrl.get // Some <=> spilling (v1 single layer)
           val spillWriter = DMAWriter(lType, Seq(mRows, c.outChannels), 1, spillWriteLeafCfg)
+          // S2e: the seed reader fetches single-beat chunks (controller
+          // beat loop), so trimToElements is OFF — the trim counter restarts
+          // at every cmd.fire and could never suppress the region-end pad.
+          // The flushable gearbox stays ON: its accept gate (empty = received
+          // AND consumed) paces chunks at the engine's consumption rate, and
+          // the per-chunk flush keeps the split-phase aligned. The engine
+          // drop-drains the pad per non-first pass (spillPadElems above).
           val spillReader = DMAReader(lType, Seq(mRows, c.outChannels), 1, dmaAxiConfig,
-            trimToElements = true, flushableGearbox = true)
+            trimToElements = false, flushableGearbox = true)
           allAxiMasters += spillReader.io.axiMaster
           io.spillWrite.get <> spillWriter.io.axiMaster
           // Pass-loop wiring: identical contract to the Linear block.
@@ -997,9 +1015,19 @@ case class Sequential(
           // The spill region offset of this layer (single region per layer,
           // captured before the += in the sizing block below).
           val layerSpillOffset = spillBytesAcc
+          // S2e seed-region pad (MatmulOp spillPadElems): trailing elements
+          // closing the region's last AXI beat; the engine drop-drains them
+          // per non-first pass. spillSpec beats already cover them.
+          val linAccBits = l.outType(nodeTypes(i)).getBitsWidth
+          require(linAccBits == lType.getBitsWidth,
+            s"Sequential: spilling Linear layer $i accumulator (${linAccBits}b) != compute dtype (${lType.getBitsWidth}b) — seed pad math needs equal widths")
+          val linPadElems = spillSpec.get._2 * (axiConfig.dataWidth / lType.getBitsWidth) -
+            nodeShapes(i).dropRight(1).product * l.outFeatures
+          require(linPadElems >= 0,
+            s"Sequential: spilling Linear layer $i pad $linPadElems < 0 (region beats ${spillSpec.get._2} do not cover the partials)")
           val linComp = spinalML.layers.LinearLayer(repackedTensor.dataType, layerWeights.dataType, lType,
             Seq(rows, l.spillKSlice), Seq(l.spillKSlice, l.outFeatures), repackedTensor.lanes,
-            l.weightScales, 1024, false, temporal, spill = true)
+            l.weightScales, 1024, false, temporal, spill = true, spillPadElems = linPadElems)
           linComp.io.reArm := weightDmaFire
           linComp.io.a.stream << aSlice.stream
           linComp.io.w.stream << wSlice.stream
@@ -1009,8 +1037,15 @@ case class Sequential(
           // the sizing block below; beats match the controller's command).
           val mRows = nodeShapes(i).dropRight(1).product
           val spillWriter = DMAWriter(lType, Seq(mRows, l.outFeatures), 1, spillWriteLeafCfg)
+          // S2e: the seed reader fetches single-beat chunks (controller
+          // beat loop), so trimToElements is OFF — the trim counter restarts
+          // at every cmd.fire and could never suppress the region-end pad.
+          // The flushable gearbox stays ON: its accept gate (empty = received
+          // AND consumed) paces chunks at the engine's consumption rate, and
+          // the per-chunk flush keeps the split-phase aligned. The engine
+          // drop-drains the pad per non-first pass (spillPadElems above).
           val spillReader = DMAReader(lType, Seq(mRows, l.outFeatures), 1, dmaAxiConfig,
-            trimToElements = true, flushableGearbox = true)
+            trimToElements = false, flushableGearbox = true)
           allAxiMasters += spillReader.io.axiMaster
           io.spillWrite.get <> spillWriter.io.axiMaster
           // Pass-loop wiring: the controller owns both spill cmd streams;

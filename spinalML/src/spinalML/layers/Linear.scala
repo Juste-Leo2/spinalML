@@ -35,7 +35,11 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   // layer streams one K-slice per pass (S2 re-fires); pass 0 seeds zeros,
   // passes > 0 seed from spillIn, non-final passes drain partials to
   // spillOut, the final pass drives io.y with the real bias added once.
-  spill: Boolean = false
+  spill: Boolean = false,
+  // Trailing pad elements closing the seed region's last AXI beat (see
+  // MatmulOp spillPadElems). Computed by Sequential from the region beats;
+  // 0 = beat-exact region.
+  spillPadElems: Int = 0
 ) extends Component {
   require(!spill || temporal >= 1,
     s"LinearLayer spill=true requires temporal >= 1 (the spill drain reuses the windowed row drain)")
@@ -77,7 +81,7 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   //    which carries this layer's weights; temporal bounds the rows in flight)
   val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
     spill = spill, passFirst = io.passFirst, passLast = io.passLast,
-    spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone)
+    spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
 
   // 2. Add Bias (Broadcast): (A * W_deq) + b
   // S1 bias-zero mux: BiasAddOp always consumes exactly N beats per pass

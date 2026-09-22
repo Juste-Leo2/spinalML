@@ -47,7 +47,17 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   // in Sequential (S2); this op only exposes passFirst/passLast levels
   // (held stable by the controller from pass-fire to passDone) and pulses
   // passDone on every pass-drain completion.
+  // spillPadElems: trailing pad elements closing the seed region's last AXI
+  // beat (region beats cover ceil(M*N*accBytes/beatBytes) beats; the pad is
+  // M*N's complement to whole beats). The S2 controller fetches the seed in
+  // single-beat chunks paced by the flushable reader's accept gate, so every
+  // fetched beat — pad included — lands in the reader gearbox; on non-first
+  // passes the engine drop-drains exactly spillPadElems beats after the last
+  // row's emit, before pulsing passDone. Without the drain the pad would sit
+  // in the gearbox, blocking the next pass's first chunk (accept gate) or
+  // poisoning its row-0 seed. 0 = beat-exact region (no drain phase).
   spill: Boolean = false,
+  spillPadElems: Int = 0,
   dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default
 ) extends Component {
   val M = shapeA(0)
@@ -61,6 +71,10 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     s"spill=true requires the sequential-N matmul (parallelN=false)")
   require(!spill || temporal >= 1,
     s"spill=true requires temporal >= 1 (the spill drain reuses the windowed row drain)")
+  require(spillPadElems >= 0,
+    s"spillPadElems=$spillPadElems must be >= 0")
+  require(spill || spillPadElems == 0,
+    s"spillPadElems=$spillPadElems without spill=true (nothing fetches a pad)")
   
   val chunksK = (K + lanes - 1) / lanes
   val paddedK = chunksK * lanes
@@ -364,6 +378,10 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       val emitCounter = Counter(N)
       val seedRow = Counter(M)
       val seedCol = Counter(N)
+      // Seed-region pad drain (spillPadElems closes the last AXI beat).
+      // Always elaborated (harmless when spillPadElems == 0: the emit path
+      // below never enters the drain state, so no behavior change).
+      val drainCounter = Counter(spillPadElems max 1)
       val prevReArm = RegInit(False)
       prevReArm := io.reArm
 
@@ -469,10 +487,27 @@ case class MatmulOp[T <: Data, TAcc <: Data](
               when(emitCounter.willOverflowIfInc) {
                 when(emitLast) {
                   // Pass-drain completion: exactly one pulse per pass (not
-                  // per row — emitCounter overflows on every row).
-                  io.passDone.get := True
+                  // per row — emitCounter overflows on every row). On
+                  // non-first passes with a non-beat-exact seed region, the
+                  // last beat's pad elements are still parked in the seed
+                  // reader's gearbox: drop-drain them first (passDone only
+                  // afterwards), otherwise the next pass's first seed chunk
+                  // wedges on the reader's accept gate or seeds row 0 with
+                  // pad garbage. First passes fetch no seed: nothing to
+                  // drain, pulse passDone immediately.
                   emitLast := False
-                  goto(stateWaitPass)
+                  if (spillPadElems > 0) {
+                    when(io.passFirst.get) {
+                      io.passDone.get := True
+                      goto(stateWaitPass)
+                    } otherwise {
+                      drainCounter.clear()
+                      goto(stateDrainPad)
+                    }
+                  } else {
+                    io.passDone.get := True
+                    goto(stateWaitPass)
+                  }
                 } otherwise {
                   // Next row: re-seed on non-first passes (window slots must
                   // be reloaded — the just-drained row was cleared); first
@@ -483,6 +518,27 @@ case class MatmulOp[T <: Data, TAcc <: Data](
                     goto(stateSeedRow)
                   }
                 }
+              }
+            }
+          }
+        }
+
+        // Seed-region pad drop-drain (entered from stateEmitRow on non-first
+        // passes when spillPadElems > 0; unreachable otherwise). Consumes
+        // exactly spillPadElems elements from spillIn and discards them, so
+        // the seed reader's gearbox is empty when passDone pulses — the next
+        // pass's first seed chunk is then accepted immediately and seeds
+        // from valid data. Backpressure-only wait: the pad beats are already
+        // commanded (or in flight behind consumed image beats), so they
+        // always arrive; no bus dependency, no deadlock.
+        val stateDrainPad: State = new State {
+          whenIsActive {
+            io.spillIn.get.stream.ready := True
+            when(io.spillIn.get.stream.fire) {
+              drainCounter.increment()
+              when(drainCounter.willOverflowIfInc) {
+                io.passDone.get := True
+                goto(stateWaitPass)
               }
             }
           }
@@ -664,7 +720,10 @@ object matmul {
     passLast: Option[Bool] = None,
     spillSource: Option[Tensor[TAcc]] = None,
     spillSink: Option[Tensor[TAcc]] = None,
-    passDone: Option[Bool] = None
+    passDone: Option[Bool] = None,
+    // Trailing pad elements closing the seed region's last AXI beat (see
+    // MatmulOp spillPadElems). 0 = beat-exact region (legacy behavior).
+    spillPadElems: Int = 0
   ): Tensor[TAcc] = {
     val rankA = a.shape.length
     val rankB = b.shape.length
@@ -687,7 +746,7 @@ object matmul {
 
     val outShape = batchDimsA ++ Seq(M, N)
 
-    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal, dspConfig = dspConfig, spill = spill)
+    val matmulComp = MatmulOp(a.dataType, accType, Seq(M, K_A), Seq(K_B, N), a.lanes, parallelN = parallelN, temporal = temporal, dspConfig = dspConfig, spill = spill, spillPadElems = spillPadElems)
     matmulComp.io.reArm := reArm.getOrElse(False)
     if (spill) {
       matmulComp.io.passFirst.get := passFirst.getOrElse(False)
