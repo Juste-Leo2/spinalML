@@ -267,7 +267,8 @@ case class Sequential(
   // refetch (S2b, per-iteration fetch site below) AND the image re-fire
   // (S2c, image plane further below) must both see its pulses.
   // (passes, spill AXI beats for the M*N region command). M = GEMM rows:
-  // Linear input rows, Conv2D total windows (H-K+1)*(W-K+1).
+  // Linear input rows, Conv2D total windows (H-K+1)*(W-K+1), Conv1D windows
+  // (L-K+1).
   val spillSpec: Option[(Int, Int)] = spillLayerIdx.map { idx =>
     val (passes, mRows, n, accType) = layers(idx) match {
       case l: Linear =>
@@ -277,6 +278,9 @@ case class Sequential(
         val w = nodeShapes(idx)(1)
         val m = (h - c.kernelSize + 1) * (w - c.kernelSize + 1)
         (c.spillPasses, m, c.outChannels, c.outType(nodeTypes(idx)))
+      case c1: Conv1D =>
+        val m = nodeShapes(idx)(0) - c1.kernelSize + 1
+        (c1.spillPasses, m, c1.outChannels, c1.outType(nodeTypes(idx)))
       case other =>
         throw new IllegalArgumentException(
           s"Sequential: layer $idx ($other) spills but is not a SpillableGEMM — spillLayerIdx only collects SpillableGEMM")
@@ -746,6 +750,30 @@ case class Sequential(
 
     val nextTensor: Tensor[Data] = layer match {
       case c: Conv1D =>
+        // P2 spill sizing (mirror of the Conv2D block below): the K-pass GEMM
+        // needs the windowed row drain (temporal) and a re-streamable A every
+        // pass; M*N full-width partials sized here (M = L-K+1 windows).
+        if (c.spilling) {
+          require(temporal >= 1,
+            s"Sequential: Conv1D layer $i spills (spillKSlice=${c.spillKSlice}) but temporal=$temporal — " +
+              "the spill drain reuses the windowed row drain, require temporal >= 1")
+          val aElems = nodeShapes(i).product
+          val aBytes = MemLayout.regionBytes(aElems, nodeTypes(i).getBitsWidth)
+          require((i == 0 && consumers(0).size == 1) || aBytes <= spillReplayBudgetBytes,
+            s"Sequential: Conv1D layer $i spills but its A operand (node $i, ${aBytes}B) is neither " +
+              "exclusively DDR-backed (sole consumer of node 0, re-fired per pass) nor within " +
+              "spillReplayBudgetBytes=$spillReplayBudgetBytes (StreamTap replay) — " +
+              "spill A to DDR first (v2, see docs/ddr_final_impl.md)")
+          val mRows1D = nodeShapes(i)(0) - c.kernelSize + 1
+          val spillElems = mRows1D * c.outChannels
+          spillBytesAcc += alignToBeat(MemLayout.regionBytes(spillElems, lType.getBitsWidth))
+          // P2-2 stops here: the fetch plane already slices W per pass and
+          // the pass controller exists, but the P2-3 engine (seed/drain
+          // ports + pass wiring below) is not built yet — running one-shot
+          // on slices would silently corrupt, so fail loudly instead.
+          require(false,
+            s"Sequential: Conv1D layer $i spills (spillKSlice=${c.spillKSlice}) but the P2-3 spill engine is not implemented yet")
+        }
         Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
 
       case c: Conv2D =>

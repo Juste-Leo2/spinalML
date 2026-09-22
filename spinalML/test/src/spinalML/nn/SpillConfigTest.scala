@@ -116,6 +116,20 @@ class SpillConfigTest extends AnyFunSuite {
     spillReplayBudgetBytes = spillReplayBudgetBytes
   )
 
+  test("P2-2 spilling Conv1D fails loudly until the P2-3 engine (spec/slice/sizing ready)") {
+    // K=2, inC=4 -> KFull=8, weightLanes=4 -> effLanes=4: Ks=4, P=2, slice
+    // 4xN=8B beat-aligned; L=6 -> M=5 windows, region 5x2 I8 = 2 beats.
+    // spillSpec + fetch-plane slice + region sizing elaborate; only the
+    // compute branch refuses (running one-shot on slices would silently
+    // corrupt, and an undriven spill port would fail obscurely).
+    val layers = Seq(Conv1D(inChannels = 4, outChannels = 2, kernelSize = 2,
+      weightLanes = 4, spillKSlice = 4))
+    val ex = intercept[Exception] {
+      SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 4)))
+    }
+    assert(ex.getMessage.contains("P2-3"), s"unexpected failure: ${ex.getMessage}")
+  }
+
   test("Sequential: spill requires temporal >= 1") {
     // The windowed row drain is the spill drain path (S1/S2).
     val layers = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4))
