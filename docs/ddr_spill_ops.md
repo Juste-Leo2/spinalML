@@ -31,7 +31,7 @@ Légende : HW = spill côté hardware, RPL = fold réplica, E2E = preuve bit-exa
 |---|---|---|---|
 | `Linear` | W `K×N` + bias N | `MatmulOp` (K-split) | ✅ **Fait (R1-R6)** — reste P0 ci-dessous |
 | `Conv2D` | W `(K²·inC)×outC` + bias | `Conv2DHW` dédié | ✅ **P1 FAIT** (reste cleanup P1-5, voir §3) |
-| `Conv1D` | W `(K·inC)×outC` + bias | `Conv1DHW` dédié | ▶️ **P2** : même gabarit que P1, plus petit |
+| `Conv1D` | W `(K·inC)×outC` + bias | `Conv1DHW` dédié | ✅ **P2 FAIT** (reste cleanup + gate, voir §4) |
 | `ClassicalAttention` | W Q/K/V/proj via DDR | `ClassicalAttentionHW` (matmuls internes) | ⏸️ **P3 (étude)** : scores `seqLen²` on-chip, spill = projections + KV-cache, structure différente |
 | `BatchNorm1D`, `LayerNorm1D` | gamma/beta (vecteurs) | pointwise | ❌ Jamais de spill (poids minuscules, streaming) — réplica ✅ existant |
 | `MaxPool*`, `AvgPool*` | aucun | pointwise | ❌ Jamais — réplica ✅ existant |
@@ -106,6 +106,21 @@ Même découpage en commits qu'en R1-R6. Différences connues à l'avance :
 
 P1 en plus petit (axe `K·inC`, moteur `Conv1DHW`). Réutilisation maximale :
 même knob, même fold, mêmes suites adaptées.
+
+**Statut 22/09/2026 : FAIT.** P2-1 knob `spillKSlice` (`SpillableGEMM`,
+diviseur de `K·inC`, multiple de `effLanes`), P2-2 `spillSpec` + sizing +
+fetch slice (déjà générique) avec garde loud en attendant le moteur, P2-3
+moteur `Conv1DLayer` spill (A-window sur `seq2col`, seed/drain/bias-final,
+`biasReArm` conditionnel — zéro casse des instanciations legacy,
+contrairement au choix Conv2D) + branche `Sequential`, P2-4 layout
+(déjà générique) + fold réplica `conv1D` (`Conv1DSpillFoldTest` 4/4 ;
+l'ordre fenêtre `(k,c)` matchait `seq2col` d'origine, aucun bug d'ordre),
+P2-5 e2e `Conv1DReplicaSpillTest` 4/4 du premier coup (I8-P2 262c AW=2 +
+BF16-P2 214c AW=3 bit-exacts, P1 + dense 140c) — la machinerie S2e a marché
+telle quelle sur le nouvel op. P2-6 chaos conv1d 4/4 (heavy+light,
+I8+BF16, beats identiques à l'idéal) + CLI `UniversalConv1DSpillDemo`
+idéal et `--stress` heavy bit-exacts. Reste : PR nettoyage (repoussée
+avant LiteDRAM) + gate complet.
 
 ## 5. P3 — Attention (étude, pas d'implémentation)
 

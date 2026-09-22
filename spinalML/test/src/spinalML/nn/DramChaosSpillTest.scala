@@ -238,4 +238,30 @@ class DramChaosSpillTest extends AnyFunSuite {
     runChaosCase(isInt = false, DramChaosConfig.light(), label = "CHAOS-CONV-LIGHT-BF16-P2",
       spec = convSpillSpec, inShape = convSpillShape)
   }
+
+  // P2-6 chaos on the spilling Conv1D ([6,4] in, K=2 -> [5,2] out,
+  // KFull=8, Ks=4, P=2 — same geometry as Conv1DReplicaSpillTest).
+  val conv1DSpillSpec = Seq(Conv1D(inChannels = 4, outChannels = 2, kernelSize = 2,
+    weightLanes = 4, spillKSlice = 4))
+  val conv1DSpillShape = Seq(6, 4)
+
+  test("P2-6 chaos-heavy I8 conv1d spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = true, DramChaosConfig.heavy(), label = "CHAOS-CONV1D-I8-P2",
+      spec = conv1DSpillSpec, inShape = conv1DSpillShape)
+  }
+
+  test("P2-6 chaos-heavy BF16 conv1d spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = false, DramChaosConfig.heavy(), label = "CHAOS-CONV1D-BF16-P2",
+      spec = conv1DSpillSpec, inShape = conv1DSpillShape)
+  }
+
+  test("P2-6 chaos-light I8 conv1d spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = true, DramChaosConfig.light(), label = "CHAOS-CONV1D-LIGHT-I8-P2",
+      spec = conv1DSpillSpec, inShape = conv1DSpillShape)
+  }
+
+  test("P2-6 chaos-light BF16 conv1d spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = false, DramChaosConfig.light(), label = "CHAOS-CONV1D-LIGHT-BF16-P2",
+      spec = conv1DSpillSpec, inShape = conv1DSpillShape)
+  }
 }
