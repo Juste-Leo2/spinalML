@@ -176,8 +176,13 @@ class SpillPassControllerFormal extends Component {
       "waitFence left without writerDone (current pulse or latched early done)")
   }
   // cnt only advances on the fence, by exactly one, and never past passes-1.
+  // The advance condition is the LATCH, not the current pulse: the pulse at
+  // P sets the latch at P+1 and the fence exits (cnt++) on the latched level,
+  // so past(writerDone) alone both misses latched exits and fires a cycle
+  // early on a fresh pulse (no advance yet — the exit it causes lands one
+  // cycle later). past(latch) aligns exactly with the registered advance.
   when(pastValid() && past(state =/= sIdle)) {
-    when(past(state === sWaitFence) && past(dut.io.writerDone)) {
+    when(past(state === sWaitFence) && past(writerDoneSeen)) {
       assert(cnt === past(cnt) + 1, "cnt must advance on the fence")
       assert(past(cnt) < U(2, cnt.getWidth bits), "cnt advanced past passes-1")
     } otherwise {
