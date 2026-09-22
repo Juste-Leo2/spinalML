@@ -30,7 +30,7 @@ Légende : HW = spill côté hardware, RPL = fold réplica, E2E = preuve bit-exa
 | Op | Poids DDR | Moteur HW | Verdict |
 |---|---|---|---|
 | `Linear` | W `K×N` + bias N | `MatmulOp` (K-split) | ✅ **Fait (R1-R6)** — reste P0 ci-dessous |
-| `Conv2D` | W `(K²·inC)×outC` + bias | `Conv2DHW` dédié | ▶️ **P1** : spill + fold à construire |
+| `Conv2D` | W `(K²·inC)×outC` + bias | `Conv2DHW` dédié | ✅ **P1 FAIT** (reste cleanup P1-5, voir §3) |
 | `Conv1D` | W `(K·inC)×outC` + bias | `Conv1DHW` dédié | ▶️ **P2** : même gabarit que P1, plus petit |
 | `ClassicalAttention` | W Q/K/V/proj via DDR | `ClassicalAttentionHW` (matmuls internes) | ⏸️ **P3 (étude)** : scores `seqLen²` on-chip, spill = projections + KV-cache, structure différente |
 | `BatchNorm1D`, `LayerNorm1D` | gamma/beta (vecteurs) | pointwise | ❌ Jamais de spill (poids minuscules, streaming) — réplica ✅ existant |
@@ -86,6 +86,21 @@ Même découpage en commits qu'en R1-R6. Différences connues à l'avance :
   = mono-chunk historique), bias une fois, int inchangé (associatif).
 - **Preuves** : e2e `ModelReplica` I8 + BF16, chaos-heavy, `--stress` CLI,
   formel contrôleur si nouveau contrôleur (ou extension du prouvé).
+- **Statut 22/09/2026 : FAIT.** P1-1 knob `SpillableGEMM`+`spillKSlice`,
+  P1-2 plumbing générique, P1-3 moteur `Conv2DLayer` spill, P1-4 layout
+  slice-transposé + fold réplica, P1-5 e2e `ConvReplicaSpillTest` 5/5
+  (P2 I8 814c + BF16 766c bit-exacts, AW = region beats exacts).
+  Chemin : deux bugs trouvés et fixés (plan image 2D ignorant les canaux,
+  ordre fenêtre réplica `(c,r,k)` vs `(r,k,c)` HW), puis le deadlock seed
+  passe-1 (commande région entière devant les beats image en mémoire
+  in-order) fixé en S2e : seed en chunks d'1 beat pacés par la gate du
+  reader flushable + trim OFF + drain du pad moteur (`spillPadElems`) +
+  latch `writerDoneSeen` — voir
+  `docs/bugs/2026-09-conv-spill-seed-deadlock-session.md`.
+  P1-6 chaos conv 4/4 (heavy+light, I8+BF16, beats identiques à l'idéal),
+  P1-7 CLI `UniversalConvSpillDemo` idéal + `--stress` heavy bit-exacts,
+  formels contrôleur (+latch) verts. Reste : PR nettoyage P1-5 (tests TMP +
+  flags debug, repoussée avant LiteDRAM) + gate complet.
 
 ## 4. P2 — Conv1D-spill
 

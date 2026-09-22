@@ -14,21 +14,28 @@ import spinalML.harness.{DramChaosConfig, DramChaosInterposer, MemoryHarness, Un
 import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
 
 /**
- * S2 — DRAM chaos on the spilling Linear (Phase A, docs/ddr_stress.md).
+ * S2 — DRAM chaos on spilling GEMM layers (Phase A, docs/ddr_stress.md).
  *
  * The DUT talks to `AxiMemorySim` through the test-only `DramChaosInterposer`
  * (LFSR read/write latency, row-miss + turnaround penalties, periodic refresh
  * blackouts, strict per-ID order). The oracle is the untouched `ModelReplica`:
  * bit-exactness must hold identically with and without chaos — any deviation
  * is a DUT timing-assumption bug, never a replica bug.
+ *
+ * P1-6: the top and the case are parameterized by (spec, inShape) so the same
+ * chaos proof covers the spilling Linear (S2/P0c) and the spilling Conv2D
+ * (P1-6, [6,6,2] in, K=2 -> [5,5,2] out, KFull=8, Ks=4, P=2). Chaos is the
+ * harshest exerciser of the S2e single-beat seed pacing: blackouts and
+ * row-miss penalties stall chunk acceptance mid-pass.
  */
-class DramChaosSpillTop(val isInt: Boolean, val cfg: DramChaosConfig) extends Component {
+class DramChaosSpillTop(val isInt: Boolean, val cfg: DramChaosConfig,
+  val spec: Seq[LayerSpec], val inShape: Seq[Int]) extends Component {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   val dt: Data = if (isInt) I8() else BF16()
   val dut = new Accelerator(
     dataType = dt,
-    inputShape = Seq(1, 8),
-    modelSpec = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+    inputShape = inShape,
+    modelSpec = spec,
     axiConfig = axiConfig,
     temporal = 1,
     memory = MemorySpec(spillBase = Some(0x30000L), capacityBytes = Some(4096))
@@ -60,9 +67,10 @@ class DramChaosSpillTest extends AnyFunSuite {
     for ((w, i) <- words.zipWithIndex) mem.writeBigInt(base + i * 8, w, 8)
   }
 
-  def runChaosCase(isInt: Boolean, cfg: DramChaosConfig, label: String): Unit = {
-    val spec = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4))
-    val inShape = Seq(1, 8)
+  def runChaosCase(isInt: Boolean, cfg: DramChaosConfig, label: String,
+    spec: Seq[LayerSpec] = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4)),
+    inShape: Seq[Int] = Seq(1, 8)): Unit = {
+    val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
     var packedWords: Seq[BigInt] = null
     var imgWords: Seq[BigInt] = null
     var expected: Seq[Double] = null
@@ -91,7 +99,7 @@ class DramChaosSpillTest extends AnyFunSuite {
       }
     })
 
-    val compiled = SimConfig.withWave.compile(new DramChaosSpillTop(isInt, cfg))
+    val compiled = SimConfig.withWave.compile(new DramChaosSpillTop(isInt, cfg, spec, inShape))
     compiled.doSim { top =>
       val dut = top.dut
       dut.clockDomain.forkStimulus(10)
@@ -204,5 +212,30 @@ class DramChaosSpillTest extends AnyFunSuite {
     // Two extra deterministic seeds: no seed-dependent deadlock/deviation.
     runChaosCase(isInt = true, DramChaosConfig.heavy(0xBEEF01L), label = "CHAOS-SEED1-I8-K8-P2")
     runChaosCase(isInt = true, DramChaosConfig.heavy(0x123456L), label = "CHAOS-SEED2-I8-K8-P2")
+  }
+
+  // P1-6 chaos on the spilling Conv2D ([6,6,2] in, K=2 -> [5,5,2] out,
+  // KFull=8, Ks=4, P=2 — same geometry as ConvReplicaSpillTest).
+  val convSpillSpec = Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 4))
+  val convSpillShape = Seq(6, 6, 2)
+
+  test("P1-6 chaos-heavy I8 conv spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = true, DramChaosConfig.heavy(), label = "CHAOS-CONV-I8-P2",
+      spec = convSpillSpec, inShape = convSpillShape)
+  }
+
+  test("P1-6 chaos-heavy BF16 conv spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = false, DramChaosConfig.heavy(), label = "CHAOS-CONV-BF16-P2",
+      spec = convSpillSpec, inShape = convSpillShape)
+  }
+
+  test("P1-6 chaos-light I8 conv spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = true, DramChaosConfig.light(), label = "CHAOS-CONV-LIGHT-I8-P2",
+      spec = convSpillSpec, inShape = convSpillShape)
+  }
+
+  test("P1-6 chaos-light BF16 conv spill P=2 bit-exact vs ModelReplica") {
+    runChaosCase(isInt = false, DramChaosConfig.light(), label = "CHAOS-CONV-LIGHT-BF16-P2",
+      spec = convSpillSpec, inShape = convSpillShape)
   }
 }
