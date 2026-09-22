@@ -151,10 +151,21 @@ case class Conv1D(
   // Same M2 pattern as Conv2D: -1 (default) = kernelSize*inChannels, the
   // legacy width; otherwise must divide K*inChannels (no padding).
   weightLanes: Int = -1,
-  lanes: Int = 1
-) extends LayerSpec {
+  lanes: Int = 1,
+  // P2 compute-side spill (docs/ddr_spill_ops.md): K-slice width streamed per
+  // pass over the flattened K*inChannels axis (same gabarit as Conv2D P1).
+  // -1 (default) = no spill, legacy one-shot convolution.
+  spillKSlice: Int = -1
+) extends SpillableGEMM {
   require(weightLanes == -1 || (weightLanes > 0 && (kernelSize * inChannels) % weightLanes == 0),
     s"Conv1D weightLanes=$weightLanes must be -1 or a positive divisor of K*inChannels=${kernelSize * inChannels}")
+  require(spillKSlice == -1 || (spillKSlice > 0 && (kernelSize * inChannels) % spillKSlice == 0),
+    s"Conv1D spillKSlice=$spillKSlice must be -1 or a positive divisor of K*inChannels=${kernelSize * inChannels}")
+  require(spillKSlice == -1 || spillKSlice % effLanes == 0,
+    s"Conv1D spillKSlice=$spillKSlice must be a multiple of effLanes=$effLanes " +
+      "(pass-internal chunking must match the replica fadd order exactly)")
+  def spillKFull: Int = kernelSize * inChannels
+  def spillN: Int = outChannels
 
   /** Effective per-beat width: K*inChannels when the default (-1) is left untouched. */
   def effLanes: Int = if (weightLanes <= 0) kernelSize * inChannels else weightLanes

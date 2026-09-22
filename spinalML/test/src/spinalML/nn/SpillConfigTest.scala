@@ -74,6 +74,32 @@ class SpillConfigTest extends AnyFunSuite {
     }
   }
 
+  test("P2-1 Conv1D.spillKSlice: knob validation (Conv2D gabarit, K*inC axis)") {
+    // K=3, inC=1 -> KFull=3, effLanes=3: Ks=3 (P=1) legal.
+    val single = Conv1D(inChannels = 1, outChannels = 2, kernelSize = 3, spillKSlice = 3)
+    assert(single.spilling && single.spillPasses == 1)
+    assert(single.spillKFull == 3 && single.spillN == 2)
+
+    // K=3, inC=2 -> KFull=6, weightLanes=3 -> effLanes=3: Ks=3, P=2.
+    val l = Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, weightLanes = 3, spillKSlice = 3)
+    assert(l.spilling)
+    assert(l.spillPasses == 2)
+
+    val legacy = Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3)
+    assert(!legacy.spilling)
+    assert(legacy.spillPasses == 1)
+
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 5) }
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 0) }
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 12) }
+    // Slice narrower than the internal chunk width is incoherent...
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 2) }
+    // ...and so is a slice that is not a multiple of narrowed lanes.
+    intercept[Exception] {
+      Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, weightLanes = 6, spillKSlice = 3)
+    }
+  }
+
   private def spillSequential(
     layers: Seq[LayerSpec],
     inputShape: Seq[Int] = Seq(1, 8),
