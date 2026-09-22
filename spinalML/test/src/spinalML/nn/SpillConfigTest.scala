@@ -116,18 +116,16 @@ class SpillConfigTest extends AnyFunSuite {
     spillReplayBudgetBytes = spillReplayBudgetBytes
   )
 
-  test("P2-2 spilling Conv1D fails loudly until the P2-3 engine (spec/slice/sizing ready)") {
+  test("P2-3 spilling Conv1D elaborates and sizes totalSpillBytes") {
     // K=2, inC=4 -> KFull=8, weightLanes=4 -> effLanes=4: Ks=4, P=2, slice
-    // 4xN=8B beat-aligned; L=6 -> M=5 windows, region 5x2 I8 = 2 beats.
-    // spillSpec + fetch-plane slice + region sizing elaborate; only the
-    // compute branch refuses (running one-shot on slices would silently
-    // corrupt, and an undriven spill port would fail obscurely).
+    // 4xN=8B beat-aligned; L=6 -> M=5 windows, region 5x2 I8 = 10B -> 16B
+    // beat-aligned. Full engine + pass wiring elaborate (the P2-2 loud
+    // guard is gone); P2-4 proves the numerics.
     val layers = Seq(Conv1D(inChannels = 4, outChannels = 2, kernelSize = 2,
       weightLanes = 4, spillKSlice = 4))
-    val ex = intercept[Exception] {
-      SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 4)))
-    }
-    assert(ex.getMessage.contains("P2-3"), s"unexpected failure: ${ex.getMessage}")
+    val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 4)))
+    assert(report.toplevel.totalSpillBytes == 16,
+      s"totalSpillBytes=${report.toplevel.totalSpillBytes} != 16")
   }
 
   test("Sequential: spill requires temporal >= 1") {

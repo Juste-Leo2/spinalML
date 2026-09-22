@@ -767,14 +767,77 @@ case class Sequential(
           val mRows1D = nodeShapes(i)(0) - c.kernelSize + 1
           val spillElems = mRows1D * c.outChannels
           spillBytesAcc += alignToBeat(MemLayout.regionBytes(spillElems, lType.getBitsWidth))
-          // P2-2 stops here: the fetch plane already slices W per pass and
-          // the pass controller exists, but the P2-3 engine (seed/drain
-          // ports + pass wiring below) is not built yet — running one-shot
-          // on slices would silently corrupt, so fail loudly instead.
-          require(false,
-            s"Sequential: Conv1D layer $i spills (spillKSlice=${c.spillKSlice}) but the P2-3 spill engine is not implemented yet")
         }
-        Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
+        // P2 K-pass wiring (mirror of the Conv2D S2b block below): direct
+        // Conv1DLayer instantiation so the pass controller owns the spill
+        // ports. Engine shaped [M,Ks]x[Ks,N] per pass with M = L-K+1
+        // windows; the A-window lives inside Conv1DLayer on the seq2col cols
+        // stream (accept-and-drop, passIdx held by the controller).
+        val conv1Out: Tensor[Data] = if (c.spilling) {
+          // A re-stream: exclusive node 0 re-fires the sequence sweep from
+          // DDR (seq2col reproduces cols verbatim per pass, self-restarting);
+          // shared/deep nodes replay through an on-chip StreamTap.
+          val inFed: Tensor[Data] = if (!spillImgRefire) {
+            val tap = StreamTap(nodeTypes(i), nodeShapes(i), nodeLanes(i))
+            tap.io.arm := io.start.valid && !prevStartValid
+            tap.io.replay := spillCtrl.get.io.restartA
+            tap.io.streamIn.stream << inTensor.stream
+            val fed = Tensor(nodeTypes(i), nodeShapes(i), nodeLanes(i))
+            fed.stream << tap.io.streamOut.stream
+            fed
+          } else inTensor
+          val lIn = nodeShapes(i)(0)
+          val chIn = if (nodeShapes(i).length >= 2) nodeShapes(i)(1) else 1
+          val mRows = lIn - c.kernelSize + 1
+          // S2e seed-region pad (MatmulOp spillPadElems, same contract as the
+          // Conv2D block): the engine drop-drains it per non-first pass.
+          val conv1AccBits = c.outType(nodeTypes(i)).getBitsWidth
+          require(conv1AccBits == lType.getBitsWidth,
+            s"Sequential: spilling Conv1D layer $i accumulator (${conv1AccBits}b) != compute dtype (${lType.getBitsWidth}b) — seed pad math needs equal widths")
+          val conv1PadElems = spillSpec.get._2 * (axiConfig.dataWidth / lType.getBitsWidth) - mRows * c.outChannels
+          require(conv1PadElems >= 0,
+            s"Sequential: spilling Conv1D layer $i pad $conv1PadElems < 0 (region beats ${spillSpec.get._2} do not cover ${mRows * c.outChannels} partials)")
+          val layerSpillOffset = spillBytesAcc
+          val conv1Comp = spinalML.layers.Conv1DLayer(
+            inFed.dataType, lType, lIn, chIn, c.outChannels, c.kernelSize,
+            outLanes = c.effLanes, temporal = temporal, inLanes = inFed.lanes,
+            convOutLanes = c.lanes, spill = true, spillKSlice = c.spillKSlice, spillPadElems = conv1PadElems)
+          conv1Comp.io.reArm := weightDmaFire
+          conv1Comp.io.x.stream << inFed.stream
+          conv1Comp.io.w.stream << layerWeights.stream
+          conv1Comp.io.b <> layerBias
+          val ctrl = spillCtrl.get // Some <=> spilling (v1 single layer)
+          val spillWriter = DMAWriter(lType, Seq(mRows, c.outChannels), 1, spillWriteLeafCfg)
+          // S2e seed reader (same recipe as Linear/Conv2D: no trim, flushable
+          // accept gate paces single-beat chunks at engine consumption rate).
+          val spillReader = DMAReader(lType, Seq(mRows, c.outChannels), 1, dmaAxiConfig,
+            trimToElements = false, flushableGearbox = true)
+          allAxiMasters += spillReader.io.axiMaster
+          io.spillWrite.get <> spillWriter.io.axiMaster
+          // Pass-loop wiring: identical contract to the Conv2D block.
+          conv1Comp.io.passFirst.get := ctrl.io.passFirst
+          conv1Comp.io.passLast.get := ctrl.io.passLast
+          conv1Comp.io.passIdx.get := spillPassIdxOf(i)
+          conv1Comp.io.spillIn.get.stream << spillReader.io.outStream.stream
+          spillWriter.io.inStream.stream << conv1Comp.io.spillOut.get.stream
+          spillReader.io.cmd << ctrl.io.readerCmd
+          spillWriter.io.cmd << ctrl.io.writerCmd
+          ctrl.io.passDone := conv1Comp.io.passDone.get
+          ctrl.io.writerDone := spillWriter.io.done
+          ctrl.io.wFetchFire := weightDmaFire
+          ctrl.io.residentMode := residentMode
+          ctrl.io.spillBase := io.spillBaseAddress + layerSpillOffset
+          ctrl.io.start := io.start.valid && !prevStartValid
+          // Per-pass bias re-arm WITHOUT bias re-fetch (final prelude only).
+          conv1Comp.io.biasReArm.get := biasDmaFire || (ctrl.io.biasReArm && ctrl.io.passLast)
+          // The S2a pass index follows the controller (single source of
+          // truth for the slice addressing in the fetch plane above).
+          spillPassIdxOf(i) := ctrl.io.passIdx
+          conv1Comp.io.y
+        } else {
+          Conv1DHW(inTensor, layerWeights, layerBias, lType, reArm = Option(weightDmaFire), temporal = temporal, outLanes = c.lanes)
+        }
+        conv1Out
 
       case c: Conv2D =>
         // Integer-domain convolutions: narrow SInt weights (e.g. true I4
