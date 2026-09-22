@@ -90,7 +90,13 @@ object LayerReplicas {
     expBits: Int,
     mantBits: Int,
     // Same M2 chunk contract as conv2D (mirrors Conv1D.weightLanes).
-    lanes: Int = -1
+    lanes: Int = -1,
+    // P2 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
+    // over the flattened K*inChannels axis. <= 0 (default) = single pass,
+    // the historical behavior. > 0 = passes fold outermost (seeded from the
+    // running acc, bias once at the end), exactly like conv2D. Must divide
+    // the window, and be a multiple of lanes when > 0.
+    spillKSlice: Int = -1
   ): Array[Array[F]] = {
     val l = input.length
     val lOut = l - kernelSize + 1
@@ -99,6 +105,9 @@ object LayerReplicas {
     for (pos <- 0 until lOut; cOut <- 0 until outChannels) {
       val prods = ArrayBuffer[F]()
       var wIdx = 0
+      // Window order matches the HW seq2col shift register (step-major:
+      // kernel step, channel fastest) so flat index wIdx is the DDR offset
+      // the engine reads. (No P1-style order bug here: (k,c) from the start.)
       for (k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val inVal = input(pos + k)(cIn)
         val wVal = weights(cOut)(wIdx)
@@ -109,8 +118,21 @@ object LayerReplicas {
       require(prods.length % wLanes == 0,
         s"conv1D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
       var acc = PZERO
-      for (chunk <- 0 until prods.length by wLanes) {
-        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      if (spillKSlice <= 0) {
+        for (chunk <- 0 until prods.length by wLanes) {
+          acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+        }
+      } else {
+        require(prods.length % spillKSlice == 0,
+          s"conv1D: window ${prods.length} must be a multiple of spillKSlice=$spillKSlice (dense passes, no padding)")
+        require(spillKSlice % wLanes == 0,
+          s"conv1D: spillKSlice=$spillKSlice must be a multiple of lanes=$wLanes (pass-internal chunking matches HW)")
+        for (p <- 0 until prods.length by spillKSlice) {
+          for (chunk <- 0 until spillKSlice by wLanes) {
+            val len = math.min(wLanes, spillKSlice - chunk)
+            acc = fadd(acc, tree(prods.slice(p + chunk, p + chunk + len).toSeq, expBits, mantBits), expBits, mantBits)
+          }
+        }
       }
       out(pos)(cOut) = fadd(acc, bias(cOut), expBits, mantBits)
     }

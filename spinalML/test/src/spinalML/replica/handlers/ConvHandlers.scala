@@ -106,6 +106,19 @@ object ConvHandlers {
     val kElems = kSize * inC
     val nextShape = Seq(l - kSize + 1, outC)
 
+    // P2 spill: layer and layout must agree (no silent double transposition).
+    require((c.spilling && wInfo.spillKSlice > 0) || (!c.spilling && wInfo.spillKSlice <= 0),
+      s"ConvHandlers: Conv1D(spillKSlice=${c.spillKSlice}) vs layout spillKSlice=${wInfo.spillKSlice} mismatch — " +
+        "rebuild weights with WeightMemoryLayout.buildDeterministicWeights (no double transposition)")
+
+    // Slice-transposed physical gather (same p*Ks*N + n*Ks + k_local order
+    // as Conv2D): logical [o][k] rows unwound per output, both dtypes.
+    def physIdx(o: Int, k: Int, ks: Int): Int = {
+      val p = k / ks
+      val kl = k % ks
+      p * (ks * outC) + o * ks + kl
+    }
+
     val nextTensor: ReplicaTensor = curTensor match {
       case ft: FloatTensor =>
         val arr2D = Array.ofDim[F](l, inC)
@@ -115,10 +128,15 @@ object ConvHandlers {
           arr2D(pos)(ch) = if (idx < raw.length) raw(idx) else PZERO
           idx += 1
         }
-        val convW = (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
+        val convW = if (wInfo.spillKSlice <= 0) {
+          (0 until outC).map(o => wInfo.weightValues.slice(o * kElems, (o + 1) * kElems))
+        } else {
+          val ks = wInfo.spillKSlice
+          (0 until outC).map(o => (0 until kElems).map(k => wInfo.weightValues(physIdx(o, k, ks))))
+        }
         val convB = (0 until outC).map(o => if (o < wInfo.biasValues.length) wInfo.biasValues(o) else PZERO)
         val convOut = LayerReplicas.conv1D(arr2D, convW, convB, inC, outC, kSize, ft.expBits, ft.mantBits,
-          lanes = c.effLanes)
+          lanes = c.effLanes, spillKSlice = wInfo.spillKSlice)
         val flat = ArrayBuffer[F]()
         for (pos <- convOut.indices; ch <- 0 until outC) flat += convOut(pos)(ch)
         FloatTensor(nextShape, flat.toSeq, ft.expBits, ft.mantBits)
@@ -139,7 +157,14 @@ object ConvHandlers {
             if ((unsigned & (1L << (outBits - 1))) != 0) unsigned - (1L << outBits) else unsigned
           }
         }
-        val convW = (0 until outC).map(o => wInfo.weightInts.slice(o * kElems, (o + 1) * kElems))
+        val convW = if (wInfo.spillKSlice <= 0) {
+          (0 until outC).map(o => wInfo.weightInts.slice(o * kElems, (o + 1) * kElems))
+        } else {
+          // Same physical gather as the float path (int math is associative,
+          // but the slice-transposed order must still be unwound per output).
+          val ks = wInfo.spillKSlice
+          (0 until outC).map(o => (0 until kElems).map(k => wInfo.weightInts(physIdx(o, k, ks))))
+        }
         val convB = (0 until outC).map(o => if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L)
         val lOut = l - kSize + 1
         val flat = ArrayBuffer[Long]()
