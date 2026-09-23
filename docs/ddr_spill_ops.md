@@ -30,8 +30,8 @@ Légende : HW = spill côté hardware, RPL = fold réplica, E2E = preuve bit-exa
 | Op | Poids DDR | Moteur HW | Verdict |
 |---|---|---|---|
 | `Linear` | W `K×N` + bias N | `MatmulOp` (K-split) | ✅ **Fait (R1-R6)** — reste P0 ci-dessous |
-| `Conv2D` | W `(K²·inC)×outC` + bias | `Conv2DHW` dédié | ▶️ **P1** : spill + fold à construire |
-| `Conv1D` | W `(K·inC)×outC` + bias | `Conv1DHW` dédié | ▶️ **P2** : même gabarit que P1, plus petit |
+| `Conv2D` | W `(K²·inC)×outC` + bias | `Conv2DHW` dédié | ✅ **P1 FAIT** (reste cleanup P1-5, voir §3) |
+| `Conv1D` | W `(K·inC)×outC` + bias | `Conv1DHW` dédié | ✅ **P2 FAIT** (reste cleanup + gate, voir §4) |
 | `ClassicalAttention` | W Q/K/V/proj via DDR | `ClassicalAttentionHW` (matmuls internes) | ⏸️ **P3 (étude)** : scores `seqLen²` on-chip, spill = projections + KV-cache, structure différente |
 | `BatchNorm1D`, `LayerNorm1D` | gamma/beta (vecteurs) | pointwise | ❌ Jamais de spill (poids minuscules, streaming) — réplica ✅ existant |
 | `MaxPool*`, `AvgPool*` | aucun | pointwise | ❌ Jamais — réplica ✅ existant |
@@ -42,9 +42,11 @@ Légende : HW = spill côté hardware, RPL = fold réplica, E2E = preuve bit-exa
 Donc « toutes les ops compatibles » = en pratique **Conv2D puis Conv1D**.
 Le reste ne spillera jamais par nature (pas de GEMM, pas de mur `K`).
 
-## 2. P0 — Combler l'enveloppe Linear (même gabarit, que des cas)
+## 2. P0 — Combler l'enveloppe Linear ✅ FAIT (commits P0a-P0d, `ddrimpl3`)
 
-Rien de structurel, que des cas à ajouter aux suites existantes :
+Tous les cas ajoutés aux suites existantes, verts du premier coup
+(aucun fix HW — seul le chemin int M=1-only du réplica a demandé une
+correction, P0a) :
 
 1. **M>1 sous spill** (tout est M=1 aujourd'hui, HW + réplica) : la boucle `rows`
    de `LayerReplicas.linear` et le reshape `Sequential` en mode spill ne sont
@@ -64,7 +66,8 @@ Rien de structurel, que des cas à ajouter aux suites existantes :
    croisés réplica.
 
 Gate P0 : suites ci-dessus vertes + sélection 12+6 (R6) toujours verte.
-Après P0, l'enveloppe Linear est close pour de bon.
+Après P0, l'enveloppe Linear est close pour de bon — vérifié le 21/09/2026
+(P0d : 12 sim + 6 formels verts, voir R6 pour la sélection).
 
 ## 3. P1 — Conv2D-spill (le gabarit Linear, axe différent)
 
@@ -83,11 +86,41 @@ Même découpage en commits qu'en R1-R6. Différences connues à l'avance :
   = mono-chunk historique), bias une fois, int inchangé (associatif).
 - **Preuves** : e2e `ModelReplica` I8 + BF16, chaos-heavy, `--stress` CLI,
   formel contrôleur si nouveau contrôleur (ou extension du prouvé).
+- **Statut 22/09/2026 : FAIT.** P1-1 knob `SpillableGEMM`+`spillKSlice`,
+  P1-2 plumbing générique, P1-3 moteur `Conv2DLayer` spill, P1-4 layout
+  slice-transposé + fold réplica, P1-5 e2e `ConvReplicaSpillTest` 5/5
+  (P2 I8 814c + BF16 766c bit-exacts, AW = region beats exacts).
+  Chemin : deux bugs trouvés et fixés (plan image 2D ignorant les canaux,
+  ordre fenêtre réplica `(c,r,k)` vs `(r,k,c)` HW), puis le deadlock seed
+  passe-1 (commande région entière devant les beats image en mémoire
+  in-order) fixé en S2e : seed en chunks d'1 beat pacés par la gate du
+  reader flushable + trim OFF + drain du pad moteur (`spillPadElems`) +
+  latch `writerDoneSeen` — voir
+  `docs/bugs/2026-09-conv-spill-seed-deadlock-session.md`.
+  P1-6 chaos conv 4/4 (heavy+light, I8+BF16, beats identiques à l'idéal),
+  P1-7 CLI `UniversalConvSpillDemo` idéal + `--stress` heavy bit-exacts,
+  formels contrôleur (+latch) verts. Reste : PR nettoyage P1-5 (tests TMP +
+  flags debug, repoussée avant LiteDRAM) + gate complet.
 
 ## 4. P2 — Conv1D-spill
 
 P1 en plus petit (axe `K·inC`, moteur `Conv1DHW`). Réutilisation maximale :
 même knob, même fold, mêmes suites adaptées.
+
+**Statut 22/09/2026 : FAIT.** P2-1 knob `spillKSlice` (`SpillableGEMM`,
+diviseur de `K·inC`, multiple de `effLanes`), P2-2 `spillSpec` + sizing +
+fetch slice (déjà générique) avec garde loud en attendant le moteur, P2-3
+moteur `Conv1DLayer` spill (A-window sur `seq2col`, seed/drain/bias-final,
+`biasReArm` conditionnel — zéro casse des instanciations legacy,
+contrairement au choix Conv2D) + branche `Sequential`, P2-4 layout
+(déjà générique) + fold réplica `conv1D` (`Conv1DSpillFoldTest` 4/4 ;
+l'ordre fenêtre `(k,c)` matchait `seq2col` d'origine, aucun bug d'ordre),
+P2-5 e2e `Conv1DReplicaSpillTest` 4/4 du premier coup (I8-P2 262c AW=2 +
+BF16-P2 214c AW=3 bit-exacts, P1 + dense 140c) — la machinerie S2e a marché
+telle quelle sur le nouvel op. P2-6 chaos conv1d 4/4 (heavy+light,
+I8+BF16, beats identiques à l'idéal) + CLI `UniversalConv1DSpillDemo`
+idéal et `--stress` heavy bit-exacts. Reste : PR nettoyage (repoussée
+avant LiteDRAM) + gate complet.
 
 ## 5. P3 — Attention (étude, pas d'implémentation)
 

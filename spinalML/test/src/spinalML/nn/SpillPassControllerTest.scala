@@ -7,23 +7,23 @@ import spinal.lib._
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.amba4.axi.sim._
+import spinal.lib.sim.{StreamDriver, StreamMonitor}
 import spinalML.dtypes.I8
 import spinalML.tensors.Tensor
 import spinalML.memory.{DMAReader, DMAWriter}
 import org.scalatest.funsuite.AnyFunSuite
 
 // S2b unit harness: SpillPassController + spill DMA pair against AxiMemorySim.
-// P=2, M=1, N=4, I8 on a 64-bit AXI bus: 4 partial elems = 1 AXI beat.
-// The bench stubs the compute side: it sources the drain stream, sinks the
-// seed stream, and scripts passDone / wFetchFire. Pass 1 must read back
-// exactly what pass 0 wrote (single-region loopback through DDR).
-case class SpillPassLoopWrapper() extends Component {
+// P=2, I8 on a 64-bit AXI bus. The bench stubs the compute side: it sources
+// the drain stream, sinks the seed stream, and scripts passDone / wFetchFire.
+// Pass 1 must read back exactly what pass 0 wrote (single-region loopback
+// through DDR). Default M=1, N=4: 4 partial elems = 1 AXI beat.
+case class SpillPassLoopWrapper(M: Int = 1, N: Int = 4) extends Component {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   val accType = I8()
-  val M = 1
-  val N = 4
-  // 4 elems / 8 I8-per-beat = 1 AXI beat per spill command.
-  val spillBeats = 1
+  // Region beats covering the M*N I8 partials (ceil to whole beats; the last
+  // beat's pad is memory fill — the stub bench only collects M*N).
+  val spillBeats = (M * N + 7) / 8
 
   val io = new Bundle {
     val start = in Bool()
@@ -60,7 +60,11 @@ case class SpillPassLoopWrapper() extends Component {
   ctrl.io.residentMode := io.residentMode
 
   val reader = DMAReader(accType, Seq(M, N), outLanes = 1, axiConfig,
-    trimToElements = true, flushableGearbox = true)
+    // S2e production recipe mirror: single-beat seed chunks, so no trim (the
+    // trim counter restarts at every cmd.fire); the flushable accept gate
+    // paces chunks at the stub's consumption rate. No engine pad-drain here
+    // (the stub consumes exactly what the test collects).
+    trimToElements = false, flushableGearbox = true)
   val writer = DMAWriter(accType, Seq(M, N), inLanes = 1, axiConfig)
   reader.io.cmd << ctrl.io.readerCmd
   writer.io.cmd << ctrl.io.writerCmd
@@ -306,6 +310,159 @@ class SpillPassControllerTest extends AnyFunSuite {
       val memWord = memSim.memory.readBigInt(0x1000, 4)
       val expected = BigInt(0x04030201L)
       assert(memWord == expected, f"DDR region 0x$memWord%08X != 0x$expected%08X")
+    }
+  }
+
+  test("S2b multi-beat seed chunking: paced loopback over 2 beats") {
+    // S2e pin: M=2, N=8 I8 = 16 partials = 2 AXI beats (exact, no pad). The
+    // pass-1 seed must arrive as TWO single-beat chunks at base/base+8
+    // (length 0 each), paced by the reader's accept gate, and read back
+    // exactly what pass 0 drained. The drain write stays one full-region
+    // command (length 1).
+    SimConfig.withWave.compile {
+      val dut = SpillPassLoopWrapper(M = 2, N = 8)
+      dut.setDefinitionName("SpillPassLoopChunkComp")
+      dut
+    }.doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      def tick(): Unit = {
+        val _ = dut.io.busy.toBoolean
+        dut.clockDomain.waitSampling()
+      }
+      dut.io.start #= false
+      dut.io.passDone #= false
+      dut.io.wFetchFire #= false
+      dut.io.residentMode #= false
+      dut.io.spillBase #= 0x1000
+      dut.io.seedOut.stream.ready #= true
+      tick(); tick()
+
+      val memSim = AxiMemorySim(
+        axi = dut.io.axiMaster,
+        clockDomain = dut.clockDomain,
+        config = AxiMemorySimConfig(maxOutstandingReads = 4))
+      memSim.start()
+      tick(); tick()
+
+      var settled = 0
+      var sc = 0
+      while (settled < 5 && sc < 500) {
+        val bLow = !dut.io.axiMaster.b.valid.toBoolean
+        val awR = dut.io.axiMaster.aw.ready.toBoolean
+        val arR = dut.io.axiMaster.ar.ready.toBoolean
+        if (bLow && awR && arR) settled += 1 else settled = 0
+        tick(); sc += 1
+      }
+      assert(settled == 5, "memory-model agents never settled on the bus")
+
+      val partials = (1 to 16).toSeq
+      // Race-free scripting (manual ready/valid sampling races the sim
+      // kernel at backpressure transients — single-beat flakiness at the
+      // beat boundary). The framework's onSamplings driver/monitor own the
+      // handshakes kernel-synchronized: the drain queue feeds exactly 16
+      // beats (backpressure-safe), the always-ready seed sink collects each
+      // valid beat exactly once.
+      val seed = scala.collection.mutable.ArrayBuffer[Int]()
+      StreamMonitor(dut.io.seedOut.stream, dut.clockDomain) { p => seed += p(0).toInt }
+      val (_, drainQueue) = StreamDriver.queue(dut.io.drainIn.stream, dut.clockDomain)
+      partials.foreach { v => drainQueue.enqueue { p => p(0) #= v } }
+
+      // ---- Pass 0: full-region drain write (length 1 = 2 beats) -----------
+      dut.io.start #= true
+      tick()
+      dut.io.start #= false
+      var sawWriterCmd = false
+      var wLen = -1
+      var cycles = 0
+      while (!sawWriterCmd && cycles < 100) {
+        if (dut.io.writerCmdFire.toBoolean) {
+          sawWriterCmd = true
+          wLen = dut.io.writerCmdLen.toInt
+        }
+        tick(); cycles += 1
+      }
+      assert(sawWriterCmd, "pass-0 drain write never commanded")
+      assert(wLen == 1, s"drain write length $wLen != 1 (2-beat region)")
+      // Bench-side sticky done (mirror of the DUT's writerDoneSeen latch):
+      // the 2-beat drain can complete while the queue is still pushing, i.e.
+      // before passDone — a raw-pulse poll would miss the early done
+      // exactly like the pre-S2e fence did. writerDone is a clocked-reg
+      // pulse, so every-cycle sampling catches it.
+      var wDoneSeen = false
+      def pollDone(): Unit = {
+        if (dut.io.writerDone.toBoolean) wDoneSeen = true
+      }
+      cycles = 0
+      while (!wDoneSeen && cycles < 600) {
+        pollDone()
+        tick(); cycles += 1
+      }
+      assert(wDoneSeen, "writerDone never pulsed after pass-0 drain")
+      // Compute signals drain completion (the queue is fully accepted once
+      // the writer is done — 16 in, 16 packed, 2 beats out).
+      dut.io.passDone #= true
+      tick()
+      dut.io.passDone #= false
+      // Seed-chunk record starts here: chunk 0 can fire as soon as the
+      // pass-1 prelude opens (same record-vs-transfer trap as S1) — the
+      // passIdx poll below must record fires, not just collect seeds.
+      val chunkAddrs = scala.collection.mutable.ArrayBuffer[Long]()
+      val chunkLens = scala.collection.mutable.ArrayBuffer[Int]()
+      def recordChunk(): Unit = {
+        if (dut.io.readerCmdFire.toBoolean) {
+          chunkAddrs += dut.io.readerCmdAddr.toLong
+          chunkLens += dut.io.readerCmdLen.toInt
+        }
+      }
+      cycles = 0
+      while (dut.io.passIdx.toInt != 1 && cycles < 100) {
+        recordChunk()
+        tick(); cycles += 1
+      }
+      assert(dut.io.passIdx.toInt == 1, "controller never advanced to pass 1")
+
+      // ---- Pass 1: two single-beat seed chunks, then refetch ack -----------
+      var sawRefetch = false
+      var refetchAcked = false
+      var ackHigh = false
+      cycles = 0
+      while (!(chunkAddrs.length == 2 && sawRefetch && refetchAcked) && cycles < 300) {
+        recordChunk()
+        if (dut.io.refetchW.toBoolean) sawRefetch = true
+        if (sawRefetch && !refetchAcked) {
+          if (!ackHigh) { dut.io.wFetchFire #= true; ackHigh = true }
+          else { dut.io.wFetchFire #= false; refetchAcked = true }
+        }
+        tick(); cycles += 1
+      }
+      assert(chunkAddrs.length == 2, s"expected 2 seed chunks, saw ${chunkAddrs.length}")
+      assert(chunkAddrs.toSeq == Seq(0x1000L, 0x1008L),
+        s"seed chunk addrs ${chunkAddrs.map(a => f"0x$a%X")} != [0x1000, 0x1008]")
+      assert(chunkLens.forall(_ == 0), s"seed chunk lens $chunkLens != [0, 0]")
+      assert(sawRefetch, "refetchW never asserted for pass 1")
+      // The monitor collected seed beats alongside every wait above; drain
+      // the tail here.
+      cycles = 0
+      while (seed.length < 16 && cycles < 300) {
+        tick(); cycles += 1
+      }
+      assert(seed.toSeq == partials, s"seed read-back ${seed.toSeq} != written $partials")
+
+      // ---- Finish ------------------------------------------------------------
+      dut.io.passDone #= true
+      tick()
+      dut.io.passDone #= false
+      cycles = 0
+      while (!dut.io.done.toBoolean && cycles < 50) { tick(); cycles += 1 }
+      assert(dut.io.done.toBoolean, "controller done never pulsed after final pass")
+      tick(); tick()
+      assert(!dut.io.busy.toBoolean, "controller still busy after done")
+
+      // ---- DDR proof: both beats hold the pass-0 partials --------------------
+      val lo = memSim.memory.readBigInt(0x1000, 8)
+      val hi = memSim.memory.readBigInt(0x1008, 8)
+      assert(lo == BigInt("0807060504030201", 16), f"DDR beat0 0x$lo%016X mismatch")
+      assert(hi == BigInt("100F0E0D0C0B0A09", 16), f"DDR beat1 0x$hi%016X mismatch")
     }
   }
 

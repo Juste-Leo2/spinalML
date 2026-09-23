@@ -22,6 +22,22 @@ trait LayerSpec {
 }
 
 /**
+ * K-pass spill contract shared by GEMM-like layers (Linear, Conv2D, ...).
+ * The flattened K axis (`spillKFull`: inFeatures, or K*K*inChannels) streams
+ * one `spillKSlice` slice per pass (P = KFull/Ks passes, M*N full-width
+ * partials in DDR between passes). -1 (default) = no spill, legacy one-shot.
+ * Concrete layers add `require`s: Ks divides KFull and is a multiple of
+ * effLanes (pass-internal chunking must match the replica fadd order).
+ */
+trait SpillableGEMM extends LayerSpec {
+  def spillKSlice: Int
+  def spillKFull: Int
+  def spillN: Int
+  def spilling: Boolean = spillKSlice > 0
+  def spillPasses: Int = if (spillKSlice <= 0) 1 else spillKFull / spillKSlice
+}
+
+/**
  * 2D convolution layer. Weight/bias dtypes default to the pipeline dtype;
  * `customWeightType` enables narrow integer weights (e.g. true I4 nibbles),
  * which Sequential sign-extends to the activation width so the integer
@@ -44,10 +60,21 @@ case class Conv2D(
   // Any other value must divide K*K*inChannels (dense beats == column
   // groups, no zero-padding — see the OPS-07 note in Sequential).
   weightLanes: Int = -1,
-  lanes: Int = 1
-) extends LayerSpec {
+  lanes: Int = 1,
+  // P1 compute-side spill (docs/ddr_spill_ops.md): K-slice width streamed per
+  // pass over the flattened K*K*inChannels axis (same gabarit as Linear).
+  // -1 (default) = no spill, legacy one-shot convolution.
+  spillKSlice: Int = -1
+) extends SpillableGEMM {
   require(weightLanes == -1 || (weightLanes > 0 && (kernelSize * kernelSize * inChannels) % weightLanes == 0),
     s"Conv2D weightLanes=$weightLanes must be -1 or a positive divisor of K*K*inChannels=${kernelSize * kernelSize * inChannels}")
+  require(spillKSlice == -1 || (spillKSlice > 0 && (kernelSize * kernelSize * inChannels) % spillKSlice == 0),
+    s"Conv2D spillKSlice=$spillKSlice must be -1 or a positive divisor of K*K*inChannels=${kernelSize * kernelSize * inChannels}")
+  require(spillKSlice == -1 || spillKSlice % effLanes == 0,
+    s"Conv2D spillKSlice=$spillKSlice must be a multiple of effLanes=$effLanes " +
+      "(pass-internal chunking must match the replica fadd order exactly)")
+  def spillKFull: Int = kernelSize * kernelSize * inChannels
+  def spillN: Int = outChannels
 
   /** Effective per-beat width: K*K when the default (-1) is left untouched. */
   def effLanes: Int = if (weightLanes <= 0) kernelSize * kernelSize else weightLanes
@@ -90,7 +117,7 @@ case class Linear(
   // pass (P = inFeatures / spillKSlice passes, M*N full-width partials in DDR
   // between passes). -1 (default) = no spill, legacy one-shot GEMM.
   spillKSlice: Int = -1
-) extends LayerSpec {
+) extends SpillableGEMM {
   require(weightLanes == -1 || (weightLanes > 0 && inFeatures % weightLanes == 0),
     s"Linear weightLanes=$weightLanes must be -1 or a positive divisor of inFeatures=$inFeatures")
   require(spillKSlice == -1 || (spillKSlice > 0 && inFeatures % spillKSlice == 0),
@@ -101,10 +128,8 @@ case class Linear(
 
   /** Effective per-beat width: inFeatures when the default (-1) is left untouched. */
   def effLanes: Int = if (weightLanes <= 0) inFeatures else weightLanes
-  /** True when this layer runs the K-pass spill GEMM (S1/S2 implement it). */
-  def spilling: Boolean = spillKSlice > 0
-  /** Number of K-passes; 1 = no spill. */
-  def spillPasses: Int = if (spillKSlice <= 0) 1 else inFeatures / spillKSlice
+  def spillKFull: Int = inFeatures
+  def spillN: Int = outFeatures
   override def outType(default: HardType[Data]) = customType.getOrElse(default)
   override def weightType(default: HardType[Data]) = customWeightType.getOrElse(default)
   
@@ -126,10 +151,21 @@ case class Conv1D(
   // Same M2 pattern as Conv2D: -1 (default) = kernelSize*inChannels, the
   // legacy width; otherwise must divide K*inChannels (no padding).
   weightLanes: Int = -1,
-  lanes: Int = 1
-) extends LayerSpec {
+  lanes: Int = 1,
+  // P2 compute-side spill (docs/ddr_spill_ops.md): K-slice width streamed per
+  // pass over the flattened K*inChannels axis (same gabarit as Conv2D P1).
+  // -1 (default) = no spill, legacy one-shot convolution.
+  spillKSlice: Int = -1
+) extends SpillableGEMM {
   require(weightLanes == -1 || (weightLanes > 0 && (kernelSize * inChannels) % weightLanes == 0),
     s"Conv1D weightLanes=$weightLanes must be -1 or a positive divisor of K*inChannels=${kernelSize * inChannels}")
+  require(spillKSlice == -1 || (spillKSlice > 0 && (kernelSize * inChannels) % spillKSlice == 0),
+    s"Conv1D spillKSlice=$spillKSlice must be -1 or a positive divisor of K*inChannels=${kernelSize * inChannels}")
+  require(spillKSlice == -1 || spillKSlice % effLanes == 0,
+    s"Conv1D spillKSlice=$spillKSlice must be a multiple of effLanes=$effLanes " +
+      "(pass-internal chunking must match the replica fadd order exactly)")
+  def spillKFull: Int = kernelSize * inChannels
+  def spillN: Int = outChannels
 
   /** Effective per-beat width: K*inChannels when the default (-1) is left untouched. */
   def effLanes: Int = if (weightLanes <= 0) kernelSize * inChannels else weightLanes

@@ -19,8 +19,10 @@ import spinalML.nn.SpillPassController
  * command datapath and the state space tiny for fast BMC.
  *
  * Properties (all `pastValid()`-guarded):
- *  1. Command contract: one seed command per pass p>0, one drain command per
- *     pass p<P-1, both at `spillBase`, never in pass 0 / final pass.
+ *  1. Command contract: spillBeats single-beat seed chunks per pass p>0
+ *     (one command for the spillBeats=1 configuration proven here), one
+ *     drain command per pass p<P-1, both at `spillBase` (+ chunk stride),
+ *     never in pass 0 / final pass.
  *  2. Prelude service completeness AND the S2d entry-cycle fix: leaving the
  *     prelude requires `past(preludeHeld)` (never on the entry cycle, where
  *     the servant flags still hold the previous prelude's values) and the
@@ -31,7 +33,8 @@ import spinalML.nn.SpillPassController
  *  4. One-shot pulses: `biasReArm`/`restartA` pulse at most once per prelude;
  *     command fires at most once per prelude.
  *  5. FSM flow: idle leaves only on START, waitPass only on passDone,
- *     waitFence only on writerDone; `cnt` advances by one on the fence only,
+ *     waitFence only on writerDone (current pulse or the S2e sticky latch
+ *     for a pre-fence pulse); `cnt` advances by one on the fence only,
  *     stays bounded; `passFirst`/`passLast` latch the pass role; `done` is a
  *     single pulse per run with `busy` cleared.
  *  6. Residency fail-safe: no `refetchW`/`restartA` under `residentMode`
@@ -70,6 +73,7 @@ class SpillPassControllerFormal extends Component {
   val fetchSeen    = dut.fetchSeen.pull()
   val biasPulsed   = dut.biasPulsed.pull()
   val isLast       = dut.isLast.pull()
+  val writerDoneSeen = dut.writerDoneSeen.pull()
 
   val stW = state.getWidth bits
   val sIdle      = U(dut.State.sIdle.position, stW)
@@ -168,11 +172,17 @@ class SpillPassControllerFormal extends Component {
     assert(past(dut.io.passDone), "waitPass left without passDone")
   }
   when(pastValid() && past(state === sWaitFence) && state =/= sWaitFence) {
-    assert(past(dut.io.writerDone), "waitFence left without writerDone")
+    assert(past(dut.io.writerDone) || past(writerDoneSeen),
+      "waitFence left without writerDone (current pulse or latched early done)")
   }
   // cnt only advances on the fence, by exactly one, and never past passes-1.
+  // The advance condition is the LATCH, not the current pulse: the pulse at
+  // P sets the latch at P+1 and the fence exits (cnt++) on the latched level,
+  // so past(writerDone) alone both misses latched exits and fires a cycle
+  // early on a fresh pulse (no advance yet — the exit it causes lands one
+  // cycle later). past(latch) aligns exactly with the registered advance.
   when(pastValid() && past(state =/= sIdle)) {
-    when(past(state === sWaitFence) && past(dut.io.writerDone)) {
+    when(past(state === sWaitFence) && past(writerDoneSeen)) {
       assert(cnt === past(cnt) + 1, "cnt must advance on the fence")
       assert(past(cnt) < U(2, cnt.getWidth bits), "cnt advanced past passes-1")
     } otherwise {

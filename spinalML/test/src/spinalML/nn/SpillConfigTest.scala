@@ -47,6 +47,59 @@ class SpillConfigTest extends AnyFunSuite {
     assert(single.spilling && single.spillPasses == 1)
   }
 
+  test("P1-1 Conv2D.spillKSlice: knob validation (Linear gabarit, K*K*inC axis)") {
+    // K=3, inC=2 -> KFull=18; Ks=6 (multiple of effLanes=9? no: 6 % 9 != 0).
+    // Use inC=1, K=3 -> KFull=9, effLanes=9: Ks=9 (P=1) legal.
+    val single = Conv2D(inChannels = 1, outChannels = 2, kernelSize = 3, spillKSlice = 9)
+    assert(single.spilling && single.spillPasses == 1)
+    assert(single.spillKFull == 9 && single.spillN == 2)
+
+    // K=2, inC=2 -> KFull=8, effLanes=4: Ks=4, P=2.
+    val l = Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 4)
+    assert(l.spilling)
+    assert(l.spillPasses == 2)
+
+    val legacy = Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2)
+    assert(!legacy.spilling)
+    assert(legacy.spillPasses == 1)
+
+    intercept[Exception] { Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 3) }
+    intercept[Exception] { Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 0) }
+    intercept[Exception] { Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 16) }
+    // Slice narrower than the internal chunk width is incoherent...
+    intercept[Exception] { Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 2) }
+    // ...and so is a slice that is not a multiple of narrowed lanes.
+    intercept[Exception] {
+      Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, weightLanes = 8, spillKSlice = 4)
+    }
+  }
+
+  test("P2-1 Conv1D.spillKSlice: knob validation (Conv2D gabarit, K*inC axis)") {
+    // K=3, inC=1 -> KFull=3, effLanes=3: Ks=3 (P=1) legal.
+    val single = Conv1D(inChannels = 1, outChannels = 2, kernelSize = 3, spillKSlice = 3)
+    assert(single.spilling && single.spillPasses == 1)
+    assert(single.spillKFull == 3 && single.spillN == 2)
+
+    // K=3, inC=2 -> KFull=6, weightLanes=3 -> effLanes=3: Ks=3, P=2.
+    val l = Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, weightLanes = 3, spillKSlice = 3)
+    assert(l.spilling)
+    assert(l.spillPasses == 2)
+
+    val legacy = Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3)
+    assert(!legacy.spilling)
+    assert(legacy.spillPasses == 1)
+
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 5) }
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 0) }
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 12) }
+    // Slice narrower than the internal chunk width is incoherent...
+    intercept[Exception] { Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, spillKSlice = 2) }
+    // ...and so is a slice that is not a multiple of narrowed lanes.
+    intercept[Exception] {
+      Conv1D(inChannels = 2, outChannels = 2, kernelSize = 3, weightLanes = 6, spillKSlice = 3)
+    }
+  }
+
   private def spillSequential(
     layers: Seq[LayerSpec],
     inputShape: Seq[Int] = Seq(1, 8),
@@ -62,6 +115,18 @@ class SpillConfigTest extends AnyFunSuite {
     temporal = temporal,
     spillReplayBudgetBytes = spillReplayBudgetBytes
   )
+
+  test("P2-3 spilling Conv1D elaborates and sizes totalSpillBytes") {
+    // K=2, inC=4 -> KFull=8, weightLanes=4 -> effLanes=4: Ks=4, P=2, slice
+    // 4xN=8B beat-aligned; L=6 -> M=5 windows, region 5x2 I8 = 10B -> 16B
+    // beat-aligned. Full engine + pass wiring elaborate (the P2-2 loud
+    // guard is gone); P2-4 proves the numerics.
+    val layers = Seq(Conv1D(inChannels = 4, outChannels = 2, kernelSize = 2,
+      weightLanes = 4, spillKSlice = 4))
+    val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 4)))
+    assert(report.toplevel.totalSpillBytes == 16,
+      s"totalSpillBytes=${report.toplevel.totalSpillBytes} != 16")
+  }
 
   test("Sequential: spill requires temporal >= 1") {
     // The windowed row drain is the spill drain path (S1/S2).
@@ -195,5 +260,22 @@ class SpillConfigTest extends AnyFunSuite {
       spillSequential(Seq(Linear(inFeatures = 8, outFeatures = 4))))
     assert(reportPlain.toplevel.spillLayerIdx.isEmpty)
     assert(reportPlain.toplevel.spillSliceInfo.isEmpty)
+  }
+
+  test("P1-3 Sequential: spilling Conv2D elaborates, sizes slice fetch + spill footprint") {
+    // Conv2D(inC=2, outC=2, K=2, Ks=4) on [6,6,2]: windows = 5*5 = 25,
+    // M*N = 50B I8 => beat-aligned 56B.
+    val layers = Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 4))
+    intercept[Exception] {
+      SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 6, 2), temporal = 0))
+    }
+    val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 6, 2)))
+    assert(report.toplevel.spillLayerIdx.contains(0),
+      s"spillLayerIdx=${report.toplevel.spillLayerIdx} should pinpoint layer 0")
+    assert(report.toplevel.totalSpillBytes == 56,
+      s"totalSpillBytes=${report.toplevel.totalSpillBytes} != 56")
+    // Slice fetch: Ks*N = 8 elems I8 = 8B = 1 beat per pass.
+    assert(report.toplevel.spillSliceInfo.get(0).contains((8, 1)),
+      s"spillSliceInfo=${report.toplevel.spillSliceInfo} != (8 elems, 1 beat)")
   }
 }

@@ -27,7 +27,14 @@ object LayerReplicas {
     // (Conv2D.weightLanes): chunks accumulate sequentially via fadd, exactly
     // like Linear. <= 0 (default) = single chunk over the whole window, the
     // historical behavior. Must divide K*K*inChannels when > 0.
-    lanes: Int = -1
+    lanes: Int = -1,
+    // P1 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
+    // over the flattened window axis. <= 0 (default) = single pass, the
+    // historical behavior, instruction by instruction. > 0 = passes fold
+    // outermost (seeded from the running acc, bias once at the end), exactly
+    // like the multi-pass engine. Must divide the window, and be a multiple
+    // of lanes when > 0 (mirrors the LayerSpec spillKSlice requires).
+    spillKSlice: Int = -1
   ): Array[Array[Array[F]]] = {
     val h = input(0).length
     val w = input(0)(0).length
@@ -38,7 +45,10 @@ object LayerReplicas {
     for (cOut <- 0 until outChannels; y <- 0 until hOut; x <- 0 until wOut) {
       val prods = ArrayBuffer[F]()
       var wIdx = 0
-      for (cIn <- 0 until inChannels; r <- 0 until kernelSize; k <- 0 until kernelSize) {
+      // Window order matches the HW im2col shift register ([K,K,C] row-major:
+      // kernel row, kernel col, channel fastest) so flat index wIdx is the
+      // DDR offset the engine reads. C=1 degenerates to the legacy order.
+      for (r <- 0 until kernelSize; k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val pix = input(cIn)(y + r)(x + k)
         val weight = weights(cOut)(wIdx)
         wIdx += 1
@@ -48,8 +58,21 @@ object LayerReplicas {
       require(prods.length % wLanes == 0,
         s"conv2D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
       var acc = PZERO
-      for (chunk <- 0 until prods.length by wLanes) {
-        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      if (spillKSlice <= 0) {
+        for (chunk <- 0 until prods.length by wLanes) {
+          acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+        }
+      } else {
+        require(prods.length % spillKSlice == 0,
+          s"conv2D: window ${prods.length} must be a multiple of spillKSlice=$spillKSlice (dense passes, no padding)")
+        require(spillKSlice % wLanes == 0,
+          s"conv2D: spillKSlice=$spillKSlice must be a multiple of lanes=$wLanes (pass-internal chunking matches HW)")
+        for (p <- 0 until prods.length by spillKSlice) {
+          for (chunk <- 0 until spillKSlice by wLanes) {
+            val len = math.min(wLanes, spillKSlice - chunk)
+            acc = fadd(acc, tree(prods.slice(p + chunk, p + chunk + len).toSeq, expBits, mantBits), expBits, mantBits)
+          }
+        }
       }
       out(cOut)(y)(x) = fadd(acc, bias(cOut), expBits, mantBits)
     }
@@ -67,7 +90,13 @@ object LayerReplicas {
     expBits: Int,
     mantBits: Int,
     // Same M2 chunk contract as conv2D (mirrors Conv1D.weightLanes).
-    lanes: Int = -1
+    lanes: Int = -1,
+    // P2 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
+    // over the flattened K*inChannels axis. <= 0 (default) = single pass,
+    // the historical behavior. > 0 = passes fold outermost (seeded from the
+    // running acc, bias once at the end), exactly like conv2D. Must divide
+    // the window, and be a multiple of lanes when > 0.
+    spillKSlice: Int = -1
   ): Array[Array[F]] = {
     val l = input.length
     val lOut = l - kernelSize + 1
@@ -76,6 +105,9 @@ object LayerReplicas {
     for (pos <- 0 until lOut; cOut <- 0 until outChannels) {
       val prods = ArrayBuffer[F]()
       var wIdx = 0
+      // Window order matches the HW seq2col shift register (step-major:
+      // kernel step, channel fastest) so flat index wIdx is the DDR offset
+      // the engine reads. (No P1-style order bug here: (k,c) from the start.)
       for (k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val inVal = input(pos + k)(cIn)
         val wVal = weights(cOut)(wIdx)
@@ -86,8 +118,21 @@ object LayerReplicas {
       require(prods.length % wLanes == 0,
         s"conv1D: window ${prods.length} must be a multiple of lanes=$wLanes (dense chunks, no padding)")
       var acc = PZERO
-      for (chunk <- 0 until prods.length by wLanes) {
-        acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+      if (spillKSlice <= 0) {
+        for (chunk <- 0 until prods.length by wLanes) {
+          acc = fadd(acc, tree(prods.slice(chunk, chunk + wLanes).toSeq, expBits, mantBits), expBits, mantBits)
+        }
+      } else {
+        require(prods.length % spillKSlice == 0,
+          s"conv1D: window ${prods.length} must be a multiple of spillKSlice=$spillKSlice (dense passes, no padding)")
+        require(spillKSlice % wLanes == 0,
+          s"conv1D: spillKSlice=$spillKSlice must be a multiple of lanes=$wLanes (pass-internal chunking matches HW)")
+        for (p <- 0 until prods.length by spillKSlice) {
+          for (chunk <- 0 until spillKSlice by wLanes) {
+            val len = math.min(wLanes, spillKSlice - chunk)
+            acc = fadd(acc, tree(prods.slice(p + chunk, p + chunk + len).toSeq, expBits, mantBits), expBits, mantBits)
+          }
+        }
       }
       out(pos)(cOut) = fadd(acc, bias(cOut), expBits, mantBits)
     }
@@ -281,7 +326,8 @@ object LayerReplicas {
     for (cOut <- 0 until outChannels; y <- 0 until hOut; x <- 0 until wOut) {
       var acc = if (cOut < bias.length) bias(cOut) else 0L
       var wIdx = 0
-      for (cIn <- 0 until inChannels; r <- 0 until kernelSize; k <- 0 until kernelSize) {
+      // Same (r,k,c) window order as the float path / HW shift register.
+      for (r <- 0 until kernelSize; k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val pix = input(cIn)(y + r)(x + k)
         val weight = weights(cOut)(wIdx)
         wIdx += 1

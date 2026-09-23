@@ -23,9 +23,31 @@ case class Conv1DLayer[T <: Data, TAcc <: Data](
   parallelN: Boolean = false,
   temporal: Int = 0,
   inLanes: Int = 1,
-  convOutLanes: Int = 1
+  convOutLanes: Int = 1,
+  // P2 compute-side spill (docs/ddr_spill_ops.md): K-pass slice engine over
+  // the flattened K*inChannels axis. Same contract as Conv2DLayer P1: pass
+  // 0 seeds zeros, passes > 0 seed from spillIn, non-final passes drain M*N
+  // partials to spillOut, the final pass drives io.y with the real bias once.
+  // The A-window sits on the seq2col cols stream (beats per cols row); the
+  // pass loop (re-fire, slice addresses, pass counting) lives in Sequential.
+  spill: Boolean = false,
+  spillKSlice: Int = -1,
+  // Trailing pad elements closing the seed region's last AXI beat (see
+  // MatmulOp spillPadElems). Computed by Sequential from the region beats;
+  // 0 = beat-exact region.
+  spillPadElems: Int = 0
 ) extends Component {
   val L_out = L_in - K + 1
+  val windowSize = K * inChannels
+  require(!spill || temporal >= 1,
+    s"Conv1DLayer spill=true requires temporal >= 1 (the spill drain reuses the windowed row drain)")
+  require(!spill || (spillKSlice > 0 && windowSize % spillKSlice == 0),
+    s"Conv1DLayer spillKSlice=$spillKSlice must be a positive divisor of windowSize=$windowSize")
+  require(!spill || spillKSlice % outLanes == 0,
+    s"Conv1DLayer spillKSlice=$spillKSlice must be a multiple of outLanes=$outLanes " +
+      "(pass-internal chunking must match the replica fadd order exactly)")
+  require(!spill || !parallelN,
+    s"Conv1DLayer spill=true requires the sequential-N matmul (parallelN=false)")
 
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(L_in, inChannels), lanes = inLanes)) // Input Sequence
@@ -34,19 +56,99 @@ case class Conv1DLayer[T <: Data, TAcc <: Data](
     val y = master(Tensor(accType, Seq(L_out, outChannels), lanes = convOutLanes)) // Output Sequence
     // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
     val reArm = in Bool()
+    // Command-boundary re-arm for the bias cache (spill=true only: the S1
+    // bias-zero mux re-arms per pass; non-spill keeps bias_add on io.reArm
+    // as before, so legacy instantiations are untouched).
+    val biasReArm = if (spill) Some(in Bool()) else None
+    // P2 spill ports (spill=true only). Same level contract as MatmulOp:
+    // the Sequential pass controller holds passFirst/passLast/passIdx stable
+    // per pass (single source of truth — never counted locally).
+    val spillIn = if (spill) Some(slave(Tensor(accType, Seq(L_out, outChannels), lanes = 1))) else None
+    val spillOut = if (spill) Some(master(Tensor(accType, Seq(L_out, outChannels), lanes = 1))) else None
+    val passFirst = if (spill) Some(in Bool()) else None
+    val passLast = if (spill) Some(in Bool()) else None
+    val passDone = if (spill) Some(out Bool()) else None
+    val passIdx = if (spill) Some(in UInt((log2Up(windowSize / spillKSlice) max 1) bits)) else None
   }
 
   // 1. Seq2Col: Convert input sequence into sliding windows
-  // Output shape: [L_out, K * inChannels], lanes = outLanes
+  // Output shape: [L_out, K * inChannels], lanes = outLanes.
+  // Self-restarting per frame (stateDone clears counters): every A re-stream
+  // reproduces the identical cols sweep, so no window state ever leaks
+  // across passes.
   val cols = seq2col(io.x, K, outLanes)
 
-  // 2. Matrix Multiplication: cols * W (reArm re-arms the internal B buffer,
-  //    which carries this layer's weights)
-  // cols is [L_out, K * inChannels], W is [K * inChannels, outChannels]. Output is [L_out, outChannels]
-  val matmulResult = matmul(cols, io.w, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal)
+  // P2 A-window on the cols stream (mirror of Conv2DLayer P1): pass p
+  // consumes beats [p*Ks,(p+1)*Ks) of each cols row (beat-aligned by
+  // Ks%outLanes==0). Non-window beats are accepted-and-dropped so upstream
+  // (seq2col) never stalls; passIdx is prelude-stable during flow.
+  // SLICE GEOMETRY (S1 proven): the engine is shaped [M,Ks]x[Ks,N] per pass.
+  val rowBeatsA = if (spill) windowSize / outLanes else 1
+  val winBeatsA = if (spill) spillKSlice / outLanes else 1
+  val aBeatInRow = if (spill) Some(Reg(UInt((log2Up(rowBeatsA) max 1) bits)) init(0)) else None
+  val colsWin = if (spill) {
+    val winLo = (io.passIdx.get * U(winBeatsA, 16 bits)).resize(16 bits)
+    val inWin = aBeatInRow.get.resize(16 bits) >= winLo &&
+      aBeatInRow.get.resize(16 bits) < winLo + U(winBeatsA, 16 bits)
+    val gated = Tensor(dataType, cols.shape, cols.lanes)
+    gated.stream.valid := cols.stream.valid && inWin
+    gated.stream.payload := cols.stream.payload
+    cols.stream.ready := !inWin || gated.stream.ready
+    when(cols.stream.fire) {
+      when(aBeatInRow.get === U(rowBeatsA - 1, (log2Up(rowBeatsA) max 1) bits)) {
+        aBeatInRow.get := 0
+      } otherwise {
+        aBeatInRow.get := aBeatInRow.get + 1
+      }
+    }
+    gated
+  } else cols
+  // Slice views (stream aliases, S1 geometry): windowed cols [M,Ks],
+  // fetched W slice [Ks,N]. Beat counts match the flows exactly.
+  val matmulA = if (spill) {
+    val s = Tensor(dataType, Seq(L_out, spillKSlice), outLanes)
+    s.stream << colsWin.stream
+    s
+  } else colsWin
+  val matmulW = if (spill) {
+    val s = Tensor(dataType, Seq(spillKSlice, outChannels), outLanes)
+    s.stream << io.w.stream
+    s
+  } else io.w
 
-  // 3. Add Bias
-  val biased = bias_add(matmulResult, io.b, reArm = Some(io.reArm))
+  // 2. Matrix Multiplication: cols * W (reArm re-arms the internal B buffer,
+  //    which carries this layer's weights; temporal bounds the rows in flight)
+  // cols is [L_out, K * inChannels], W is [K * inChannels, outChannels]. Output is [L_out, outChannels]
+  val matmulResult = matmul(matmulA, matmulW, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
+    spill = spill, passFirst = io.passFirst, passLast = io.passLast,
+    spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
+
+  // 3. Add Bias — S1 bias-zero mux (mirror of Conv2DLayer): BiasAddOp always
+  // consumes exactly N beats per pass, but on non-final passes the beats come
+  // from an on-chip zero source; the real bias is added once, final pass only.
+  val bForAdd: Tensor[TAcc] = if (spill) {
+    val zeroRemain = Reg(UInt(log2Up(outChannels + 1) bits)) init (outChannels)
+    when(io.biasReArm.get) {
+      zeroRemain := outChannels
+    }
+    val bMux = Tensor(accType, Seq(1, outChannels), lanes = 1)
+    when(io.passLast.get) {
+      bMux.stream.valid := io.b.stream.valid
+      bMux.stream.payload := io.b.stream.payload
+      io.b.stream.ready := bMux.stream.ready
+    } otherwise {
+      bMux.stream.valid := zeroRemain =/= 0
+      bMux.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
+      io.b.stream.ready := False
+      when(bMux.stream.fire) {
+        zeroRemain := zeroRemain - 1
+      }
+    }
+    bMux
+  } else {
+    io.b
+  }
+  val biased = bias_add(matmulResult, bForAdd, reArm = if (spill) Some(io.biasReArm.get) else Some(io.reArm))
   if (convOutLanes == biased.lanes) io.y <> biased else io.y <> repack(biased, convOutLanes)
 }
 

@@ -18,7 +18,13 @@ object DenseHandlers {
     val inFeatures = l.inFeatures
     val outFeatures = l.outFeatures
     val lanes = l.effLanes
-    val nextShape = Seq(1, outFeatures)
+    // P0a: multi-row support. The float path already folded rows inside
+    // LayerReplicas.linear; the int path was M=1-only. rows=1 reproduces the
+    // historical behavior exactly (same shape, same accumulation order).
+    require(curTensor.length % inFeatures == 0,
+      s"DenseHandlers: Linear input length ${curTensor.length} is not a multiple of inFeatures=$inFeatures")
+    val rows = curTensor.length / inFeatures
+    val nextShape = Seq(rows, outFeatures)
     // S2 spill v1: the layout tool emits spilling layers slice-transposed
     // (WeightMemoryLayout R1); gather logical [o][k] rows from the physical
     // `p*Ks*N + n*Ks + k_local` order and fold passes in the replica.
@@ -56,20 +62,23 @@ object DenseHandlers {
             if ((unsigned & (1L << (outBits - 1))) != 0) unsigned - (1L << outBits) else unsigned
           }
         }
-        val outInts = (0 until outFeatures).map { o =>
-          val fcW = if (wInfo.spillKSlice <= 0) {
-            wInfo.weightInts.slice(o * inFeatures, (o + 1) * inFeatures)
-          } else {
-            (0 until inFeatures).map(k => wInfo.weightInts(physIdx(o, k)))
+        val outInts = (0 until rows).flatMap { r =>
+          val row = raw.slice(r * inFeatures, (r + 1) * inFeatures)
+          (0 until outFeatures).map { o =>
+            val fcW = if (wInfo.spillKSlice <= 0) {
+              wInfo.weightInts.slice(o * inFeatures, (o + 1) * inFeatures)
+            } else {
+              (0 until inFeatures).map(k => wInfo.weightInts(physIdx(o, k)))
+            }
+            val fcB = if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L
+            var acc = fcB
+            for (k <- 0 until inFeatures) {
+              val v = if (k < row.length) row(k) else 0L
+              val w = if (k < fcW.length) fcW(k) else 0L
+              acc += v * w
+            }
+            wrap(acc)
           }
-          val fcB = if (o < wInfo.biasInts.length) wInfo.biasInts(o) else 0L
-          var acc = fcB
-          for (k <- 0 until inFeatures) {
-            val v = if (k < raw.length) raw(k) else 0L
-            val w = if (k < fcW.length) fcW(k) else 0L
-            acc += v * w
-          }
-          wrap(acc)
         }
         IntTensor(nextShape, outInts, outBits)
     }
