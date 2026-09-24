@@ -1,0 +1,7 @@
+# Co-simulation extras, installed into the uv-managed env (~/.spinalml_tools/.venv)
+# by `spinalml setup --dev` only. cocotb is Linux-only (VPI bridge) and
+# version-sensitive: opt-in on purpose, plain `setup` never installs it
+# (and reinstalls the managed env without it).
+cocotb==1.9.2; sys_platform != 'win32'
+cocotb-test==0.2.6; sys_platform != 'win32'
+cocotbext-axi==0.1.28; sys_platform != 'win32'

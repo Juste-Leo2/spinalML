@@ -18,25 +18,19 @@ from .test_runner import setup_tool_env
 console = Console(force_terminal=True)
 
 def managed_test_env_pythons() -> List[str]:
-    """Candidate managed interpreters able to run pytest/cocotb (dev, then portable user)."""
-    from .pyenv import dev_env_dir, user_env_dir, venv_python
-    candidates = []
-    for env_dir in (dev_env_dir(), user_env_dir()):
-        py = venv_python(env_dir)
-        if py.exists():
-            candidates.append(str(py))
-    return candidates
+    """The single test runtime: the uv-managed env (sources and frozen alike)."""
+    from .pyenv import managed_env_dir, venv_python
+    py = venv_python(managed_env_dir())
+    return [str(py)] if py.exists() else []
 
 
 def find_python_interpreter() -> Optional[str]:
-    """Finds an interpreter capable of running pytest/cocotb.
+    """Finds the interpreter for pytest/cocotb flows.
 
-    Source mode: the running interpreter (normally the uv-managed dev .venv).
-    Frozen mode: dev .venv, then the portable user env. Bare PATH names are
-    never used: a silent wrong interpreter is worse than a loud error.
+    Single-runtime rule: always the uv-managed env by absolute path. Bare PATH
+    names are never used: a silent wrong interpreter is worse than a loud error.
+    (The root .venv runs the CLI only and cannot run tests.)
     """
-    if not getattr(sys, "frozen", False):
-        return sys.executable
     candidates = managed_test_env_pythons()
     return candidates[0] if candidates else None
 
@@ -61,7 +55,7 @@ def preflight_test_interpreter(py_bin: str) -> Optional[str]:
     missing = res.stdout.strip()
     if missing:
         return (f"{py_bin} is missing: {missing}. "
-                "Recreate the envs with 'spinalml setup --dev' (dev) or 'spinalml setup' (portable user).")
+                "Run 'spinalml setup' (or 'spinalml setup --dev' for co-simulation).")
     return None
 
 
@@ -174,8 +168,8 @@ def run_all_python_tests(
         rel_test_path = str(test_file.relative_to(project_root))
         py_bin = find_python_interpreter()
         if not py_bin:
-            console.print("[bold red]Error:[/] Could not locate a managed Python interpreter for pytest/cocotb.\n"
-                          "Run 'spinalml setup --dev' (dev) or 'spinalml setup' (portable user env).")
+            console.print("[bold red]Error:[/] Could not locate the managed Python env for pytest/cocotb.\n"
+                          "Run 'spinalml setup' (or 'spinalml setup --dev' for co-simulation).")
             return 1
         preflight_err = preflight_test_interpreter(py_bin)
         if preflight_err:

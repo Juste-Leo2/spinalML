@@ -41,13 +41,13 @@ SpinalML uses [**uv**](https://docs.astral.sh/uv/) for high-speed Python depende
 git clone https://github.com/Juste-Leo2/spinalML.git
 cd spinalML
 
-# Create virtualenv and install dependencies
-uv venv -p 3.12.1
+# Create CLI virtualenv and install the CLI runtime
+uv venv -p 3.12 --clear .venv
 # Windows: .\.venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# Provision EDA tools (Mill, Verilator, Yosys, nextpnr, openFPGALoader)
-python cli/main.py setup
+# Provision EDA tools (Mill, Verilator, Yosys, nextpnr, openFPGALoader) + managed Python envs
+python cli/main.py setup --dev
 ```
 
 ---

@@ -2,11 +2,14 @@
 
 """Managed Python environments powered by uv.
 
-Three environments, one source of truth for pins:
-- CLI env  (TOOLS_DIR/pyenv-cli) : strict minimum to run the CLI (cli/requirements.txt).
-- Dev env  (<root>/.venv)        : development + co-sim (root requirements.txt + litex).
-- User env (TOOLS_DIR/pyenv)     : portable runtime for end users / frozen exe.
-  Same pins as dev so `test-all-python` behaves identically everywhere.
+Two environments, one source of truth for pins:
+- CLI env     (<root>/.venv)          : strict minimum to run the CLI (/requirements.txt).
+- Managed env (TOOLS_DIR/.venv)       : every Python flow (pytest, dram-gen, ...).
+  Base (requirements/base.txt) + DRAM (requirements/dram.txt) by default,
+  + co-sim extras (requirements/dev.txt, cocotb, Linux-only) with --dev.
+
+Single test runtime rule: test/dram flows ALWAYS spawn the managed env python
+by absolute path, from sources and frozen alike. The root .venv never runs tests.
 
 All venvs are created with `uv venv -p 3.12 --clear` (explicit -p, no
 .python-version magic) then filled with `uv pip install -r` (full closure
@@ -14,6 +17,8 @@ resolved by uv). Exactness comes from --clear: install into an empty venv
 leaves no stale extras. (`uv pip sync` is deliberately NOT used: it installs
 only the literally-listed set and drops transitive deps like pluggy.)
 A venv holds no user data: recreation is always safe.
+Plain `setup` is stateless: it always reinstalls the managed env WITHOUT dev
+extras (use `setup --dev` to add cocotb back).
 """
 
 import os
@@ -23,21 +28,19 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root
+from .config import TOOLS_DIR, get_bin_path, get_project_root
 
 UV_PYTHON = "3.12"
 
 
 def cli_env_dir() -> Path:
-    return TOOLS_DIR / "pyenv-cli"
-
-
-def user_env_dir() -> Path:
-    return TOOLS_DIR / "pyenv"
-
-
-def dev_env_dir() -> Path:
+    """Root .venv: CLI runtime only."""
     return get_project_root() / ".venv"
+
+
+def managed_env_dir() -> Path:
+    """TOOLS_DIR/.venv: every Python flow (tests, dram-gen)."""
+    return TOOLS_DIR / ".venv"
 
 
 def venv_python(env_dir: Path) -> Path:
@@ -47,12 +50,19 @@ def venv_python(env_dir: Path) -> Path:
 
 
 def cli_requirements() -> List[Path]:
-    return [CLI_DIR / "requirements.txt"]
+    return [get_project_root() / "requirements.txt"]
 
 
-def full_requirements() -> List[Path]:
-    root = get_project_root()
-    return [root / "requirements.txt", root / "requirements-litex.txt"]
+def managed_requirements(with_dev: bool = False) -> List[Path]:
+    reqdir = get_project_root() / "requirements"
+    reqs = [reqdir / "base.txt", reqdir / "dram.txt"]
+    if with_dev:
+        reqs.append(reqdir / "dev.txt")
+    return reqs
+
+
+def dev_requirements() -> List[Path]:
+    return [get_project_root() / "requirements" / "dev.txt"]
 
 
 def _uv_bin() -> str:
@@ -110,12 +120,11 @@ def ensure_cli_env(debug: bool = False, console=None) -> Path:
     return ensure_env(cli_env_dir(), cli_requirements(), "CLI", "cli", debug=debug, console=console)
 
 
-def ensure_user_env(debug: bool = False, console=None) -> Path:
-    return ensure_env(user_env_dir(), full_requirements(), "user", "full", debug=debug, console=console)
-
-
-def ensure_dev_env(debug: bool = False, console=None) -> Path:
-    return ensure_env(dev_env_dir(), full_requirements(), "dev", "full", debug=debug, console=console)
+def ensure_managed_env(with_dev: bool = False, debug: bool = False, console=None) -> Path:
+    extra = " + dev extras" if with_dev else " (no dev extras; pass --dev for cocotb)"
+    return ensure_env(managed_env_dir(), managed_requirements(with_dev),
+                      f"managed{extra}", "full" if with_dev else "managed",
+                      debug=debug, console=console)
 
 
 def check_env(python: Path, kind: str) -> Tuple[bool, str]:
@@ -123,7 +132,7 @@ def check_env(python: Path, kind: str) -> Tuple[bool, str]:
     if not python.exists():
         return False, f"{python} does not exist"
     mods = "typer,rich,requests" if kind == "cli" else "pytest,numpy"
-    if kind != "cli" and os.name != "nt":
+    if kind == "full" and os.name != "nt":
         mods += ",cocotb"
     # importlib.util.find_spec avoids executing module code (fast, side-effect free).
     code = (
@@ -152,20 +161,36 @@ def check_env(python: Path, kind: str) -> Tuple[bool, str]:
     return True, f"python {version}, {len(mods.split(','))} modules ok"
 
 
+def has_dev_extras(python: Path) -> bool:
+    """True iff the managed env has the cocotb set (i.e. setup --dev was used)."""
+    code = "import importlib.util; print(importlib.util.find_spec('cocotb') is not None)"
+    try:
+        res = subprocess.run([str(python), "-c", code],
+                             capture_output=True, text=True, timeout=60)
+    except Exception:
+        return False
+    return res.returncode == 0 and res.stdout.strip() == "True"
+
+
 def doctor_data() -> List[Dict[str, str]]:
     """Per-env health rows for `spinalml doctor` / end-of-setup report."""
     rows = [
         ("CLI", cli_env_dir(), "cli"),
-        ("dev", dev_env_dir(), "full"),
-        ("user", user_env_dir(), "full"),
+        ("managed", managed_env_dir(), "managed"),
     ]
     out = []
     for name, path, kind in rows:
         ok, detail = check_env(venv_python(path), kind)
         out.append({"env": name, "path": str(path),
                     "status": "OK" if ok else "FAIL", "detail": detail})
+    managed_py = venv_python(managed_env_dir())
+    if managed_py.exists():
+        dev = has_dev_extras(managed_py)
+        out.append({"env": "dev-extras", "path": "cocotb set in managed env",
+                    "status": "installed" if dev else "missing",
+                    "detail": "setup --dev installs it; plain setup removes it"})
     exe = Path(sys.executable)
-    managed = [cli_env_dir(), dev_env_dir(), user_env_dir()]
+    managed = [cli_env_dir(), managed_env_dir()]
     home = "managed" if any(exe.is_relative_to(m) for m in managed if m.exists()) else "EXTERNAL"
     out.append({"env": "cli-process", "path": str(exe),
                 "status": home, "detail": "interpreter running this CLI"})
@@ -175,7 +200,8 @@ def doctor_data() -> List[Dict[str, str]]:
 def print_doctor(debug: bool = False, console=None) -> bool:
     """Prints the env health table. Returns True iff all managed envs are OK."""
     rows = doctor_data()
-    ok = all(r["status"] == "OK" for r in rows if r["env"] != "cli-process")
+    ok = all(r["status"] in ("OK", "installed", "managed", "EXTERNAL")
+             for r in rows if r["env"] not in ("cli-process", "dev-extras"))
     if debug or console is None:
         for r in rows:
             print(f"[{r['status']}] {r['env']:12s} {r['path']} :: {r['detail']}")
@@ -187,11 +213,12 @@ def print_doctor(debug: bool = False, console=None) -> bool:
         table.add_column("Status")
         table.add_column("Detail", style="dim")
         for r in rows:
-            style = "green" if r["status"] in ("OK", "managed") else ("yellow" if r["status"] == "EXTERNAL" else "red")
-            table.add_row(r["env"], r["path"], f"[{style}]{r['status']}[/{style}]", r["detail"])
+            color = {"OK": "green", "installed": "green", "managed": "green",
+                     "EXTERNAL": "yellow", "missing": "yellow"}.get(r["status"], "red")
+            table.add_row(r["env"], r["path"], f"[{color}]{r['status']}[/{color}]", r["detail"])
         console.print(table)
     if not ok:
-        hint = "Run 'spinalml setup' (or 'spinalml setup --dev' for the dev env) to (re)create them."
+        hint = "Run 'spinalml setup' (or 'spinalml setup --dev' for co-simulation) to (re)create them."
         if debug or console is None:
             print(hint)
         else:
@@ -199,7 +226,7 @@ def print_doctor(debug: bool = False, console=None) -> bool:
     return ok
 
 
-_PIN_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)==([^;\s#]+)")
+_PIN_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*(==|>=|~=|!=|<=|>|<|===)\s*([^;\s#]+)")
 
 
 def collect_pins(req_files: List[Path], _seen: Optional[set] = None) -> Dict[str, str]:
@@ -222,7 +249,7 @@ def collect_pins(req_files: List[Path], _seen: Optional[set] = None) -> Dict[str
                 continue
             m = _PIN_RE.match(line)
             if m:
-                pins.setdefault(m.group(1).lower(), m.group(2))
+                pins.setdefault(m.group(1).lower(), m.group(2) + m.group(3))
     return pins
 
 
@@ -244,8 +271,8 @@ def installed_version(python: Path, package: str) -> Optional[str]:
 def pylibs_data() -> List[Dict[str, str]]:
     """Per-env rows: pinned vs installed versions for `spinalml pylibs`."""
     envs = [("CLI", cli_env_dir(), cli_requirements()),
-            ("dev", dev_env_dir(), full_requirements()),
-            ("user", user_env_dir(), full_requirements())]
+            ("managed", managed_env_dir(),
+             managed_requirements() + dev_requirements())]
     rows = []
     for name, path, reqs in envs:
         py = venv_python(path)
@@ -259,22 +286,25 @@ def pylibs_data() -> List[Dict[str, str]]:
             ver = installed_version(py, pkg)
             if ver is None:
                 status = "MISSING"
-            elif ver == pin:
-                status = "OK"
-            else:
+            elif pin.startswith("==") and ver != pin[2:]:
                 status = "DRIFT"
+            else:
+                status = "OK"
             rows.append({"env": name, "package": pkg, "pinned": pin,
                          "installed": ver or "-", "status": status})
     return rows
 
 
 def print_pylibs(debug: bool = False, console=None) -> bool:
-    """Prints pinned-vs-installed table. Returns True iff no MISSING/DRIFT/NO ENV."""
+    """Prints pinned-vs-installed table. Returns True iff no MISSING/DRIFT/NO ENV,
+    except dev extras which are allowed to be MISSING without --dev."""
     rows = pylibs_data()
-    ok = all(r["status"] == "OK" for r in rows)
+    dev_pkgs = set(collect_pins(dev_requirements()))
+    ok = all(r["status"] == "OK" or (r["env"] == "managed" and r["package"] in dev_pkgs)
+             for r in rows)
     if debug or console is None:
         for r in rows:
-            print(f"[{r['status']}] {r['env']:5s} {r['package']:15s} pinned={r['pinned']:10s} installed={r['installed']}")
+            print(f"[{r['status']}] {r['env']:8s} {r['package']:15s} pinned={r['pinned']:10s} installed={r['installed']}")
     else:
         from rich.table import Table
         table = Table(title="Python libs: pinned vs installed", border_style="blue")
@@ -285,7 +315,11 @@ def print_pylibs(debug: bool = False, console=None) -> bool:
         table.add_column("Status")
         for r in rows:
             color = {"OK": "green", "DRIFT": "yellow"}.get(r["status"], "red")
+            if r["status"] == "MISSING" and r["env"] == "managed" and r["package"] in dev_pkgs:
+                color = "yellow"
             table.add_row(r["env"], r["package"], r["pinned"], r["installed"],
                           f"[{color}]{r['status']}[/{color}]")
         console.print(table)
+        if any(r["env"] == "managed" and r["package"] in dev_pkgs and r["status"] == "MISSING" for r in rows):
+            console.print("[yellow]dev extras (cocotb) missing: `spinalml setup --dev` to install.[/yellow]")
     return ok

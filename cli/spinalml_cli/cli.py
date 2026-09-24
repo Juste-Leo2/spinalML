@@ -22,11 +22,12 @@ def setup(
     debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs"),
     force: bool = typer.Option(False, "-f", "--force", help="Force reinstallation of tools even if already up to date"),
     clean_cache: bool = typer.Option(False, "--clean-cache", help="Clean Coursier & Ivy caches before setup"),
-    dev: bool = typer.Option(False, "--dev", help="Also (re)create the dev Python env (.venv): pytest/cocotb/numpy + LiteX stack")
+    dev: bool = typer.Option(False, "--dev", help="Also install co-simulation extras (cocotb) into the managed Python env")
 ):
     """
     Download and extract all necessary tools (Mill, OSS CAD Suite, uv) to ~/.spinalml_tools,
-    then (re)create the uv-managed Python envs (CLI + portable user, + dev with --dev).
+    then (re)create the uv-managed Python envs (root .venv for the CLI, ~/.spinalml_tools/.venv
+    for every Python flow). Plain setup leaves cocotb out; --dev adds it.
     """
     config = load_config()
     setup_tools(config, debug=debug, force=force, clean_cache=clean_cache, dev=dev)

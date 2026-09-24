@@ -47,7 +47,7 @@ Pour compiler vous-même le binaire autonome avec PyInstaller :
 
 ```bash
 # Depuis la racine du projet spinalML :
-uv pip install -r cli/requirements.txt pyinstaller
+uv pip install -r requirements.txt pyinstaller
 
 # Lancer le script de compilation
 python cli/build_binary.py
@@ -62,7 +62,7 @@ Si vous préférez exécuter le CLI sans compiler de binaire :
 
 1. **Installer les dépendances minimales :**
    ```bash
-   uv pip install -r cli/requirements.txt
+   uv pip install -r requirements.txt
    ```
 2. **Invoquer le CLI via `python cli/main.py` :**
    ```bash

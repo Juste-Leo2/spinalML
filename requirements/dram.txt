@@ -1,6 +1,5 @@
 # LiteX / LiteDRAM code-generation stack (PyPI, exact pins).
-# Installed into the dev (.venv) and portable user (~/.spinalml_tools/pyenv)
-# environments by `spinalml setup --dev` / `spinalml setup`.
+# Installed into the uv-managed env (~/.spinalml_tools/.venv) by `spinalml setup`.
 # migen 0.9.2 matches the version vendored by oss-cad-suite: same bits both sides.
 migen==0.9.2
 litex==2024.12

@@ -50,13 +50,14 @@ Follow the quick setup guide to configure your Python environment and open-sourc
 git clone https://github.com/<your-username>/spinalML.git
 cd spinalML
 
-# 2. Setup virtual environment with uv
-uv venv -p 3.12.1
+# 2. Setup CLI virtual environment with uv (uv auto-provisions Python 3.12)
+uv venv -p 3.12 --clear .venv
 # Windows: .\.venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 uv pip install -r requirements.txt
 
 # 3. Provision the hardware EDA toolchain (Mill, Verilator, Yosys, nextpnr)
-python cli/main.py setup
+#    + uv-managed Python envs (pytest, numpy, LiteX; +cocotb for co-simulation)
+python cli/main.py setup --dev
 ```
 
 ---

@@ -9,13 +9,13 @@ Welcome to the **SpinalML** quick tutorial. This guide explains how to compile, 
 SpinalML automates its entire environment provisioning (Mill, Verilator, Yosys, nextpnr). You only need Python and [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-# Setup Python environment
-uv venv -p 3.12.1
+# Setup CLI Python environment (uv provisions Python 3.12 automatically)
+uv venv -p 3.12 --clear .venv
 # Windows: .\.venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# Provision all hardware tools (Mill, Verilator, etc.)
-python cli/main.py setup
+# Provision all hardware tools (Mill, Verilator, etc.) + managed Python envs
+python cli/main.py setup --dev
 ```
 
 ---

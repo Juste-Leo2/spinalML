@@ -69,12 +69,13 @@ export PATH="$HOME/.cargo/bin:$PATH"
 git clone https://github.com/Juste-Leo2/spinalML.git
 cd spinalML
 
-# 3. Create .venv explicitly locked to Python 3.12
-uv venv --python 3.12.1 --clear .venv
+# 3. Create the CLI .venv (uv provisions Python 3.12 automatically)
+uv venv -p 3.12 --clear .venv
 source .venv/bin/activate
 
-# 4. Install all development dependencies (CLI + pytest + cocotb + numpy)
+# 4. Install the CLI runtime, then let setup manage the rest
 uv pip install -r requirements.txt
+python cli/main.py setup --dev   # tools + pytest/numpy/LiteX/cocotb, all uv-managed
 ```
 
 ---
