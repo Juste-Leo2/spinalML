@@ -5,8 +5,8 @@ max_cycles = 0
 # Empêche la création de fichiers gigantesques ("God Files") qui concentrent trop de responsabilités
 no_god_files = true
 
-# Limite la complexité cyclomatique pour éviter le code "spaghetti" (25 est une bonne limite par défaut)
-max_cc = 35
+# Limite la complexité cyclomatique pour éviter le code "spaghetti" (seuil fixé à 30 pour le projet)
+max_cc = 30
 
 
 
