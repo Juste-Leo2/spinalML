@@ -7,6 +7,7 @@ import time
 import json
 import shutil
 import subprocess
+import typer
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -19,6 +20,7 @@ from rich.text import Text
 
 from .config import CLI_DIR, TOOLS_DIR, get_bin_path, get_project_root
 from .board import load_board_config, resolve_constraints_file, parse_frequency
+from .patches import apply_toolchain_patches
 
 
 console = Console(legacy_windows=False)
@@ -221,126 +223,87 @@ def extract_pnr_resources(pnr_report_path: Path) -> Tuple[Dict[str, int], Option
 
     return res, fmax
 
-def ensure_apycula_patched():
-    """
-    Auto-patches an upstream bug in OSS CAD Suite's apycula/gowin_pack.py where B multiplier
-    attribute indices were missing an offset of 2, causing KeyError on IRBY_IREG0BL_0.
-    """
-    for py_ver in ["python3.11", "python3.10", "python3.12"]:
-        apycula_file = TOOLS_DIR / "oss-cad-suite" / "lib" / py_ver / "site-packages" / "apycula" / "gowin_pack.py"
-        if apycula_file.exists():
-            try:
-                content = apycula_file.read_text(encoding="utf-8")
-                old_target = """            else:
-                if is_even:
-                    attr_vals.append(AttrVal(f'IRBY_IREG{pair_idx}{r}H_{pair_idx * 4 + 1}', "ENABLE"))
-                    attr_vals.append(AttrVal(f'IRNS_IREG{pair_idx}{r}H_{pair_idx * 4 + 1}', "ENABLE"))
-                else:
-                    attr_vals.append(AttrVal(f'IRBY_IREG{pair_idx}{r}L_{pair_idx * 4}', "ENABLE"))
-                    attr_vals.append(AttrVal(f'IRNS_IREG{pair_idx}{r}L_{pair_idx * 4}', "ENABLE"))"""
-                new_replacement = """            else:
-                r_offset = 0 if r == 'A' else 2
-                if is_even:
-                    attr_vals.append(AttrVal(f'IRBY_IREG{pair_idx}{r}H_{pair_idx * 4 + 1 + r_offset}', "ENABLE"))
-                    attr_vals.append(AttrVal(f'IRNS_IREG{pair_idx}{r}H_{pair_idx * 4 + 1 + r_offset}', "ENABLE"))
-                else:
-                    attr_vals.append(AttrVal(f'IRBY_IREG{pair_idx}{r}L_{pair_idx * 4 + r_offset}', "ENABLE"))
-                    attr_vals.append(AttrVal(f'IRNS_IREG{pair_idx}{r}L_{pair_idx * 4 + r_offset}', "ENABLE"))"""
-                if old_target in content:
-                    content = content.replace(old_target, new_replacement, 1)
-                    apycula_file.write_text(content, encoding="utf-8")
-            except Exception:
-                pass
+def _parse_board_cst(cst_text: str) -> Dict[str, Dict[str, str]]:
+    """Parses a board .cst into {board_signal: {"pin": ..., "attrs": ...}}.
 
-def patch_gowin_cin_from_logic(pnr_json: Path) -> int:
-    """Backport of nextpnr commit 6030081a15 ("gowin: fix carry-in adapter
-    table for CIN from logic").
-
-    The head ALU inserted for a carry chain whose CIN comes from logic takes
-    that signal on I0 and leaves CIN unconnected. The buggy table made it
-    output COUT = I0 | CIN, so the injected carry depended on the carry state
-    at the *placed* location (neighbouring active carry chain); 0x000a gives
-    COUT = I0. The latent corruption only shows up for the layouts unlucky
-    enough to chain such a head ALU onto an active carry chain (observed as
-    saturated MNIST logits on the RNE + explicit DSP build). Applied to the
-    routed pnr.json just before gowin_pack. No-op once nextpnr is updated.
-
-    TODO(tech-debt): relocate this toolchain backport (and
-    ensure_apycula_patched) into a dedicated cli/spinalml_cli/patches module
-    so it can be deleted in one place once the bundled tools are up to date.
-    See docs/bugs/2026-09-gowin-rne-dsp-lut-saturation.md §8.
+    Reads IO_LOC "sig" PIN; and re-attaches the signal's IO_PORT attributes
+    (IO_TYPE/PULL_MODE/...) so the adapted file inherits board data, not defaults.
     """
-    bad16 = "0101000001011010"   # RAW_ALU_LUT 0x505a
-    good16 = "0000000000001010"  # RAW_ALU_LUT 0x000a
-    try:
-        with open(pnr_json, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return 0
-    patched = 0
-    for mod in data.get("modules", {}).values():
-        for cell in mod.get("cells", {}).values():
-            if cell.get("type") != "ALU":
-                continue
-            parms = cell.get("parameters", {})
-            if parms.get("CIN_NETTYPE") != "LOGIC":
-                continue
-            raw = parms.get("RAW_ALU_LUT", "")
-            if len(raw) >= 16 and raw[-16:] == bad16:
-                parms["RAW_ALU_LUT"] = raw[:-16] + good16
-                patched += 1
-    if patched:
-        with open(pnr_json, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    return patched
+    pins: Dict[str, Dict[str, str]] = {}
+    for m in re.finditer(r'IO_LOC\s+"([^"]+)"\s+(\S+)\s*;', cst_text):
+        pins.setdefault(m.group(1), {})["pin"] = m.group(2).rstrip(";")
+    for m in re.finditer(r'IO_PORT\s+"([^"]+)"\s+([^;]*);', cst_text):
+        pins.setdefault(m.group(1), {})["attrs"] = m.group(2).strip()
+    return {sig: v for sig, v in pins.items() if "pin" in v}
+
+
+def _alias_key(name: str) -> str:
+    """Convention key: lowercase alphanumerics only (io_resetN -> ioresetn)."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _alias_variants(port: str):
+    """Lookup keys for a top port: full key, then with a leading io- prefix stripped."""
+    k = _alias_key(port)
+    yield k
+    if k.startswith("io") and len(k) > 2:
+        yield k[2:]
 
 
 def adapt_constraints_for_ports(original_cst: Optional[Path], ports: List[str], target_cst: Path):
-    """
-    Creates an adapted Gowin CST file mapping the board's pins to the actual top module port names.
-    Handles variations like clk, reset_n vs io_resetN, uart_rx vs io_uartRx, uart_tx vs io_uartTx.
+    """Generic engine: adapts the BOARD .cst to the top module's actual port names.
+
+    Data (pins, IO_TYPE, pull) comes from the board .cst itself; only name
+    resolution is conventional (exact match first, then alias key: io_-prefix
+    and case/underscore agnostic, e.g. io_uartRx -> uart_rx). No hardcoded pins.
+    - Every top port resolving to a board signal is emitted with the board's pin+attrs.
+    - Top ports with no board signal: loud warning (left unconstrained, as before).
+    - No top port resolving to the board clock: loud error (unbuildable).
     """
     if not original_cst or not original_cst.exists():
         return
 
-    cst_text = original_cst.read_text(encoding="utf-8", errors="ignore")
-    lines = cst_text.splitlines()
+    board_pins = _parse_board_cst(original_cst.read_text(encoding="utf-8", errors="ignore"))
+    if not board_pins:
+        console.print(f"[bold red]Error:[/] no IO_LOC found in board constraints {original_cst}.")
+        raise typer.Exit(code=1)
 
-    # Detect port naming convention used by top module
-    has_io_ports = any(p.startswith("io_") for p in ports)
+    by_alias: Dict[str, str] = {}
+    for sig in board_pins:
+        by_alias.setdefault(_alias_key(sig), sig)
 
-    # Pin dictionary: physical pin -> signal role
-    # Tang Primer 20K standard pins:
-    # clk -> H11, reset_n/io_resetN -> T10, uart_rx/io_uartRx -> T13, uart_tx/io_uartTx -> M11
     adapted_lines = [
         "// Auto-adapted physical constraints for top module ports",
-        "// Generated by SpinalML build engine"
+        "// Generated by SpinalML build engine (data: board .cst, names: top module)",
     ]
+    unmapped: List[str] = []
+    clk_mapped = False
+    for port in ports:
+        sig = port if port in board_pins else None
+        if sig is None:
+            for variant in _alias_variants(port):
+                if variant in by_alias:
+                    sig = by_alias[variant]
+                    break
+        if sig is not None and _alias_key(port) != _alias_key(sig):
+            console.print(f"[dim]CST alias: top port '{port}' -> board signal '{sig}'[/dim]")
+        if sig is None:
+            unmapped.append(port)
+            continue
+        pin = board_pins[sig]["pin"]
+        attrs = board_pins[sig].get("attrs", "")
+        adapted_lines.append(f'IO_LOC "{port}" {pin};')
+        if attrs:
+            adapted_lines.append(f'IO_PORT "{port}" {attrs};')
+        if _alias_key(sig) == "clk":
+            clk_mapped = True
 
-    # Map signals
-    clk_port = "clk" if "clk" in ports else (ports[0] if ports else "clk")
-    reset_port = "io_resetN" if "io_resetN" in ports else ("reset_n" if "reset_n" in ports else None)
-    rx_port = "io_uartRx" if "io_uartRx" in ports else ("uart_rx" if "uart_rx" in ports else None)
-    tx_port = "io_uartTx" if "io_uartTx" in ports else ("uart_tx" if "uart_tx" in ports else None)
-
-    # Clock
-    adapted_lines.append(f'IO_LOC "{clk_port}" H11;')
-    adapted_lines.append(f'IO_PORT "{clk_port}" IO_TYPE=LVCMOS33 PULL_MODE=UP;')
-
-    # Reset
-    if reset_port:
-        adapted_lines.append(f'IO_LOC "{reset_port}" T10;')
-        adapted_lines.append(f'IO_PORT "{reset_port}" IO_TYPE=LVCMOS33 PULL_MODE=UP;')
-
-    # UART RX
-    if rx_port:
-        adapted_lines.append(f'IO_LOC "{rx_port}" T13;')
-        adapted_lines.append(f'IO_PORT "{rx_port}" IO_TYPE=LVCMOS33 PULL_MODE=UP;')
-
-    # UART TX
-    if tx_port:
-        adapted_lines.append(f'IO_LOC "{tx_port}" M11;')
-        adapted_lines.append(f'IO_PORT "{tx_port}" IO_TYPE=LVCMOS33 PULL_MODE=UP;')
+    if unmapped:
+        console.print(f"[bold yellow]Warning:[/] top ports with no board pin, left unconstrained: "
+                      f"{', '.join(unmapped)}")
+    if not clk_mapped:
+        console.print(f"[bold red]Error:[/] no top port resolves to the board clock signal.")
+        raise typer.Exit(code=1)
 
     target_cst.write_text("\n".join(adapted_lines) + "\n", encoding="utf-8")
 
@@ -741,12 +704,7 @@ def _execute_bitstream_packing(
     """Packs bitstream using board pack tool and returns (returncode, bitstream_path, duration)."""
     pack_tool_name = board_cfg.get("build", {}).get("pack_tool", "gowin_pack")
     if pack_tool_name == "gowin_pack":
-        ensure_apycula_patched()
-        n_cin = patch_gowin_cin_from_logic(pnr_json)
-        if n_cin:
-            console.print(
-                f" [yellow]Patched {n_cin} CIN-from-logic head ALU(s) "
-                f"(nextpnr 6030081a15 backport).[/yellow]")
+        apply_toolchain_patches(pnr_json, console=console)
 
     pack_bin = get_bin_path(pack_tool_name)
     bitstream_name = board_cfg.get("build", {}).get("bitstream_name", "top.fs")

@@ -245,8 +245,8 @@ flowchart LR
 ### 🟢 Tourne réellement sur silicium (Tang Primer 20K)
 
 - CNN **MNIST W4A8** entièrement **on-chip (BRAM)**, hôte UART, canvas Gradio.
-- Ressources réelles : **10 219 LUT4 (49,3 %), 25 DSP (52,1 %)**,
-  Fmax estimée **33,93 MHz** (cible 27 MHz, timing MET).
+- Ressources réelles : **10 265 LUT4 (49,5 %), 25 DSP (52,1 %)**,
+  Fmax estimée **36,42 MHz** (cible 27 MHz, timing MET).
 - Latence : **~180 ms** aller-retour UART (~440 ms au premier run, upload poids).
 - Adapter utilisé : `BramAdapter` (image/poids en BRAM) — **pas de DDR3**.
 
