@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import time
-import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -13,28 +12,56 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import CLI_DIR, TOOLS_DIR, get_project_root
+from .config import CLI_DIR, get_project_root
 from .test_runner import setup_tool_env
 
 console = Console(force_terminal=True)
 
+def managed_test_env_pythons() -> List[str]:
+    """Candidate managed interpreters able to run pytest/cocotb (dev, then portable user)."""
+    from .pyenv import dev_env_dir, user_env_dir, venv_python
+    candidates = []
+    for env_dir in (dev_env_dir(), user_env_dir()):
+        py = venv_python(env_dir)
+        if py.exists():
+            candidates.append(str(py))
+    return candidates
+
+
 def find_python_interpreter() -> Optional[str]:
-    """Finds an external Python interpreter capable of running pytest/cocotb."""
+    """Finds an interpreter capable of running pytest/cocotb.
+
+    Source mode: the running interpreter (normally the uv-managed dev .venv).
+    Frozen mode: dev .venv, then the portable user env. Bare PATH names are
+    never used: a silent wrong interpreter is worse than a loud error.
+    """
     if not getattr(sys, "frozen", False):
         return sys.executable
-    root = get_project_root()
-    # Check local .venv
-    venv_win = root / ".venv" / "Scripts" / "python.exe"
-    if venv_win.exists():
-        return str(venv_win)
-    venv_unix = root / ".venv" / "bin" / "python"
-    if venv_unix.exists():
-        return str(venv_unix)
-    # Check system / PATH
-    for candidate in ["python3.12", "python3", "python"]:
-        found = shutil.which(candidate)
-        if found:
-            return found
+    candidates = managed_test_env_pythons()
+    return candidates[0] if candidates else None
+
+
+def preflight_test_interpreter(py_bin: str) -> Optional[str]:
+    """Fails loud if py_bin cannot import the test stack. Returns error text or None."""
+    import subprocess as _sp
+    mods = "pytest"
+    if sys.platform != "win32":
+        mods += ",cocotb"
+    code = (
+        "import importlib.util; "
+        f"missing=[m for m in '{mods}'.split(',') if importlib.util.find_spec(m) is None]; "
+        "print(','.join(missing)); "
+    )
+    try:
+        res = _sp.run([py_bin, "-c", code], capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return f"could not execute {py_bin}: {e}"
+    if res.returncode != 0:
+        return f"{py_bin} is broken: {(res.stderr or '').strip()[-300:]}"
+    missing = res.stdout.strip()
+    if missing:
+        return (f"{py_bin} is missing: {missing}. "
+                "Recreate the envs with 'spinalml setup --dev' (dev) or 'spinalml setup' (portable user).")
     return None
 
 
@@ -147,9 +174,12 @@ def run_all_python_tests(
         rel_test_path = str(test_file.relative_to(project_root))
         py_bin = find_python_interpreter()
         if not py_bin:
-            console.print("[bold red]Error:[/] Could not locate a Python interpreter for pytest/cocotb.\n"
-                          "Python co-simulations require a local environment with pytest & cocotb.\n"
-                          "Install requirements with: pip install -r requirements.txt")
+            console.print("[bold red]Error:[/] Could not locate a managed Python interpreter for pytest/cocotb.\n"
+                          "Run 'spinalml setup --dev' (dev) or 'spinalml setup' (portable user env).")
+            return 1
+        preflight_err = preflight_test_interpreter(py_bin)
+        if preflight_err:
+            console.print(f"[bold red]Error:[/] {preflight_err}")
             return 1
         cmd = [py_bin, "-m", "pytest", rel_test_path]
 

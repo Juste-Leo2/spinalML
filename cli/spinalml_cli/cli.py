@@ -21,13 +21,37 @@ app = typer.Typer(
 def setup(
     debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs"),
     force: bool = typer.Option(False, "-f", "--force", help="Force reinstallation of tools even if already up to date"),
-    clean_cache: bool = typer.Option(False, "--clean-cache", help="Clean Coursier & Ivy caches before setup")
+    clean_cache: bool = typer.Option(False, "--clean-cache", help="Clean Coursier & Ivy caches before setup"),
+    dev: bool = typer.Option(False, "--dev", help="Also (re)create the dev Python env (.venv): pytest/cocotb/numpy + LiteX stack")
 ):
     """
-    Download and extract all necessary tools (Mill, OSS CAD Suite, uv) to ~/.spinalml_tools
+    Download and extract all necessary tools (Mill, OSS CAD Suite, uv) to ~/.spinalml_tools,
+    then (re)create the uv-managed Python envs (CLI + portable user, + dev with --dev).
     """
     config = load_config()
-    setup_tools(config, debug=debug, force=force, clean_cache=clean_cache)
+    setup_tools(config, debug=debug, force=force, clean_cache=clean_cache, dev=dev)
+
+@app.command()
+def doctor():
+    """
+    Check the health of the uv-managed Python envs (interpreter, pins, leaks).
+    """
+    from .pyenv import print_doctor
+    from rich.console import Console
+    ok = print_doctor(console=Console())
+    if not ok:
+        raise typer.Exit(code=1)
+
+@app.command(name="pylibs")
+def pylibs():
+    """
+    Show pinned vs installed Python packages for each managed env.
+    """
+    from .pyenv import print_pylibs
+    from rich.console import Console
+    ok = print_pylibs(console=Console())
+    if not ok:
+        raise typer.Exit(code=1)
 
 @app.command(name="clean-cache")
 def clean_cache(

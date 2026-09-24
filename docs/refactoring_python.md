@@ -80,9 +80,10 @@
      ont aucun usage. Sur Windows, `--dev` dégrade gracieusement (les
      markers excluent cocotb, aucun code spécial).
    - **Env portable utilisateur** (`~/.spinalml_tools/pyenv`, géré par
-     l'installer comme oss-cad-suite/mill) — runtime minimal embarqué
-     pour l'utilisateur final au moment des binaires : exécuter les flows
-     nécessitant Python sans gérer d'env à la main. Jamais touché à la
+     l'installer comme oss-cad-suite/mill) — runtime portable pour
+     l'utilisateur final et l'exe figé : **mêmes pins que dev**
+     (une seule source de vérité, emplacement managé), pour que
+     `test-all-python` se comporte pareil partout. Jamais touché à la
      main, recréé par `setup`.
    - `setup` seul = env CLI (+ env portable si distribué) ; `setup --dev`
      ajoute l'env dev complet. CI : jobs build → `setup`, jobs sim → 
@@ -106,10 +107,14 @@
 7. **Interdit** : symlink `/usr/bin` (sudo, casse l'OS), shims PATH maison
    (pyenv-bis, ne couvre ni les chemins absolus, ni `find_libpython`, ni le
    linker, ni `PYTHONHOME`), toucher au python système.
-8. **`setup --dev`** : env sim complet via **`uv python`** (pas `pyenv` :
-   précompilé en secondes, user-local, déjà éprouvé ici — un 3.11.15
-   managé existe déjà sur la machine). 3.12 par défaut ; bascule 3.11 en
-   une ligne si le spike l'exige (voir §5).
+8. **`setup --dev`** : env sim complet via **`uv venv -p 3.12 --clear`
+   + `uv pip install -r`** (pas `pyenv`, pas de `.python-version` : `-p`
+   explicite partout, versionnée dans le code ; pas `uv pip sync` :
+   il n'installe que le set listé et droppe les transitifs — l'exactitude
+   vient de `--clear`). 3.12 par défaut ;
+   bascule 3.11 en une ligne si le spike l'exige (voir §5).
+   `find_python_interpreter` ne connaît plus aucun nom nu du PATH :
+   dev → user → erreur loud. `setup_tool_env` sanitize `PYTHONHOME`.
 
 ## 3. Plan d'exécution
 

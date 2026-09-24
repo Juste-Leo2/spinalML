@@ -56,8 +56,9 @@ def clean_coursier_cache(console=None, debug: bool = False):
         elif console:
             console.print(f"[dim cyan]{msg}[/dim cyan]")
 
-def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False):
+def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False, dev: bool = False):
     from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_uv_url, get_os_arch, get_active_framework_root
+    from .pyenv import ensure_cli_env, ensure_user_env, ensure_dev_env, print_doctor
     
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     get_active_framework_root()
@@ -75,6 +76,11 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
             install_w64devkit(get_w64devkit_url(config), debug=True, force=force)
         install_mill(get_mill_url(config), debug=True, force=force)
         install_uv(get_uv_url(config), debug=True, force=force)
+        ensure_cli_env(debug=True)
+        ensure_user_env(debug=True)
+        if dev:
+            ensure_dev_env(debug=True)
+        print_doctor(debug=True)
         print("Setup completed successfully!")
     else:
         from rich.console import Console
@@ -86,7 +92,15 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
                 install_w64devkit(get_w64devkit_url(config), debug=False, console=console, force=force)
             install_mill(get_mill_url(config), debug=False, console=console, force=force)
             install_uv(get_uv_url(config), debug=False, console=console, force=force)
-            console.print("[bold green]Tools are verified and up to date![/bold green]")
+            ensure_cli_env(console=console)
+            ensure_user_env(console=console)
+            if dev:
+                ensure_dev_env(console=console)
+            envs_ok = print_doctor(console=console)
+            if envs_ok:
+                console.print("[bold green]Tools are verified and up to date![/bold green]")
+            else:
+                console.print("[bold yellow]Tools installed, but some Python envs need attention (see above).[/bold yellow]")
         except Exception as e:
             console.print(f"[bold red]Error during setup:[/bold red] {e}")
             sys.exit(1)

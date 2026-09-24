@@ -18,8 +18,15 @@ console = Console(force_terminal=True)
 
 
 def setup_tool_env() -> dict:
-    """Prepares environment with verilator and compiler toolchains on PATH."""
+    """Prepares environment with verilator and compiler toolchains on PATH.
+
+    Sanitizes PYTHONHOME: the oss-cad-suite `environment` script sets it to the
+    suite's vendored python, which would hijack stdlib resolution of every
+    subprocess python (the cocotb env bug class). Managed venvs must resolve
+    their own stdlib.
+    """
     env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
     
     oss_bin = TOOLS_DIR / "oss-cad-suite" / "bin"
     oss_lib = TOOLS_DIR / "oss-cad-suite" / "lib"
