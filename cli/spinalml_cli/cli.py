@@ -24,7 +24,7 @@ def setup(
     clean_cache: bool = typer.Option(False, "--clean-cache", help="Clean Coursier & Ivy caches before setup")
 ):
     """
-    Download and extract all necessary tools (Mill, OSS CAD Suite) to ~/.spinalml_tools
+    Download and extract all necessary tools (Mill, OSS CAD Suite, uv) to ~/.spinalml_tools
     """
     config = load_config()
     setup_tools(config, debug=debug, force=force, clean_cache=clean_cache)
@@ -127,6 +127,13 @@ def verilator(ctx: typer.Context):
     Run Verilator
     """
     run_tool("verilator", ctx.args)
+
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def uv(ctx: typer.Context):
+    """
+    Run uv (managed Python package manager)
+    """
+    run_tool("uv", ctx.args)
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def sby(ctx: typer.Context):

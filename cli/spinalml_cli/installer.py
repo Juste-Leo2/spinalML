@@ -57,7 +57,7 @@ def clean_coursier_cache(console=None, debug: bool = False):
             console.print(f"[dim cyan]{msg}[/dim cyan]")
 
 def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False):
-    from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_os_arch, get_active_framework_root
+    from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_uv_url, get_os_arch, get_active_framework_root
     
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     get_active_framework_root()
@@ -74,6 +74,7 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
         if is_win:
             install_w64devkit(get_w64devkit_url(config), debug=True, force=force)
         install_mill(get_mill_url(config), debug=True, force=force)
+        install_uv(get_uv_url(config), debug=True, force=force)
         print("Setup completed successfully!")
     else:
         from rich.console import Console
@@ -84,6 +85,7 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
             if is_win:
                 install_w64devkit(get_w64devkit_url(config), debug=False, console=console, force=force)
             install_mill(get_mill_url(config), debug=False, console=console, force=force)
+            install_uv(get_uv_url(config), debug=False, console=console, force=force)
             console.print("[bold green]Tools are verified and up to date![/bold green]")
         except Exception as e:
             console.print(f"[bold red]Error during setup:[/bold red] {e}")
@@ -91,7 +93,12 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
 
 def download_file(url: str, dest_path: Path, debug: bool = False, console=None):
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    
+    # Some CDNs (e.g. releases.astral.sh) reject urllib's default
+    # "Python-urllib/x.y" User-Agent with 403: send a neutral browser UA.
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) spinalml-cli")]
+    urllib.request.install_opener(opener)
+
     if debug:
         print(f"Downloading {url}...")
         def report(block_num, block_size, total_size):
@@ -199,6 +206,75 @@ def install_mill(url: str, debug: bool, console=None, force: bool = False):
             console.print(f"[yellow]Warning: Failed to initialize Mill automatically: {e}[/yellow]")
 
     manifest["mill"] = url
+    _save_manifest(manifest)
+
+def install_uv(url: str, debug: bool, console=None, force: bool = False):
+    """Installs the pinned uv binary into TOOLS_DIR (uv + uvx side by side)."""
+    import shutil
+    is_win = os.name == "nt"
+    uv_bin = TOOLS_DIR / ("uv.exe" if is_win else "uv")
+    manifest = _load_manifest()
+
+    if uv_bin.exists() and not force:
+        if manifest.get("uv") == url:
+            msg = "uv is up to date (skipping download)."
+            if debug:
+                print(msg)
+            elif console:
+                console.print(f"[green]{msg}[/green]")
+            return
+
+    msg = "Updating uv to new version..." if uv_bin.exists() else "Installing uv..."
+    if debug:
+        print(msg)
+    elif console:
+        console.print(f"[yellow]{msg}[/yellow]")
+
+    # uv ships as .tar.gz (posix) or .zip (windows) containing uv (+ uvx) binaries.
+    archive_path = TOOLS_DIR / ("uv-download.zip" if is_win else "uv-download.tar.gz")
+    extract_dir = TOOLS_DIR / ".uv-extract"
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir, ignore_errors=True)
+    download_file(url, archive_path, debug=debug, console=console)
+    if is_win:
+        extract_zip(archive_path, extract_dir, debug=debug, console=console)
+    else:
+        extract_tgz(archive_path, extract_dir, debug=debug, console=console)
+
+    for name in ("uv", "uvx"):
+        src = next(extract_dir.rglob(f"{name}.exe" if is_win else name), None)
+        if src is None or not src.is_file():
+            continue
+        dest = TOOLS_DIR / (f"{name}.exe" if is_win else name)
+        try:
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(src), str(dest))
+        except Exception:
+            pass
+        if os.name != "nt":
+            try:
+                dest.chmod(0o755)
+            except Exception:
+                pass
+
+    try:
+        archive_path.unlink()
+    except Exception:
+        pass
+    shutil.rmtree(extract_dir, ignore_errors=True)
+
+    if not uv_bin.exists():
+        raise RuntimeError(f"uv installation failed: {uv_bin} not found after extraction.")
+    try:
+        subprocess.run([str(uv_bin), "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        if debug:
+            print(f"Warning: Failed to initialize uv: {e}")
+        elif console:
+            console.print(f"[yellow]Warning: Failed to initialize uv automatically: {e}[/yellow]")
+
+    manifest["uv"] = url
     _save_manifest(manifest)
 
 def extract_zip(zip_path: Path, dest_dir: Path, debug: bool = False, console=None):

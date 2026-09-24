@@ -87,8 +87,9 @@
    - `setup` seul = env CLI (+ env portable si distribué) ; `setup --dev`
      ajoute l'env dev complet. CI : jobs build → `setup`, jobs sim → 
      `setup --dev`.
-2. **`uv 0.12.17` pinné** dans `config.json` (4 plateformes, même pattern que
-   mill) + `install_uv()` + manifest. Tag vérifié existant (18/09/2026).
+2. **`uv 0.12.18` pinné** dans `config.json` (5 plateformes, même pattern
+   que oss-cad-suite) + `install_uv()` + manifest. Tag vérifié existant ;
+   `spinalml uv ...` exposé en accès direct comme verilator/mill.
 3. **`requirements.txt` gardés** + `requirements-litex.txt` nouveau
    (`migen==0.9.2`, `litex==2024.12`, `litedram==2024.12`), PyPI + `==`.
    Pas de vendoring tarball, pas de `--require-hashes` pour l'instant.
