@@ -4,13 +4,12 @@ import subprocess
 import sys
 import time
 import typer
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from pathlib import Path
 
-from .config import load_config, get_bin_path, CLI_DIR, get_project_root, get_active_framework_root
+from .config import load_config, get_bin_path, get_project_root, get_active_framework_root
 from .installer import setup_tools
-
-from .board import load_board_config, parse_frequency, detect_model_parameters, list_available_boards
+from .compile_flow import resolve_rounding as _resolve_rounding
 
 app = typer.Typer(
     help="SpinalML CLI - Wrapper for FPGA Tools",
@@ -66,21 +65,6 @@ def clean_cache(
     console = Console()
     clean_coursier_cache(console=console, debug=debug)
     console.print("[bold green]Coursier & Ivy caches cleaned successfully![/bold green]")
-
-def _resolve_rounding(rounding: Optional[str]) -> Tuple[Optional[str], str]:
-    """Resolve the elaboration rounding flag.
-
-    Returns (SPINALML_ROUNDING value to set or None to keep the pre-set env,
-    display label). None keeps the environment untouched; RoundingConfig
-    itself falls back to RNE when neither flag nor env is set.
-    """
-    trunc_values = ("trunc", "truncate", "floor")
-    is_trunc = str(rounding).strip().lower() in trunc_values if rounding is not None \
-        else os.environ.get("SPINALML_ROUNDING", "").strip().lower() in trunc_values
-    label = "Truncate (legacy bit-exact)" if is_trunc else "RNE (default, unbiased)"
-    if rounding is None:
-        return None, label
-    return ("trunc" if is_trunc else "rne"), label
 
 
 def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int:
@@ -208,225 +192,9 @@ def compile(
     and generate the supplementary hardware chain files (UartRx, UartTx, UartBridge,
     AxiReadMem) into the output directory with FPGA board-specific settings.
     """
-    import shutil
-    import os
-    import glob
-    import re
-    from typer.models import OptionInfo, ArgumentInfo
-
-    def _unwrap(val, default=None):
-        if isinstance(val, (OptionInfo, ArgumentInfo)):
-            return val.default if val.default is not ... else default
-        return val
-
-    out = _unwrap(out, Path("rtl"))
-    chain = _unwrap(chain, True)
-    soc = _unwrap(soc, False)
-    board = _unwrap(board, "tang-primer-20k")
-    clk = _unwrap(clk, None)
-    baud = _unwrap(baud, None)
-    out_count = _unwrap(out_count, None)
-    word_width = _unwrap(word_width, None)
-    bram_words = _unwrap(bram_words, None)
-    no_dsp = _unwrap(no_dsp, False)
-    rounding = _unwrap(rounding, None)
-
-    if not file.exists():
-        typer.echo(f"Error: File {file} does not exist.", err=True)
-        raise typer.Exit(code=1)
-
-    out.mkdir(parents=True, exist_ok=True)
-    target_dir = str(out.resolve()).replace('\\', '/')
-
-    # 1. Resolve board configuration & model introspection
-    try:
-        board_cfg = load_board_config(board)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
-
-    # Configure DSP target environment for SpinalHDL compilation
-    vendor = board_cfg.get("vendor", "Generic")
-    os.environ["SPINALML_TARGET"] = vendor
-    if no_dsp:
-        os.environ["SPINALML_NO_DSP"] = "1"
-    elif "SPINALML_NO_DSP" in os.environ:
-        del os.environ["SPINALML_NO_DSP"]
-
-    # Rounding policy for elaboration (mirrors RoundingConfig.current):
-    # explicit flag wins, otherwise a pre-set SPINALML_ROUNDING is kept
-    # (RoundingConfig itself falls back to RNE when unset).
-    rounding_value, rounding_label = _resolve_rounding(rounding)
-    if rounding_value is not None:
-        os.environ["SPINALML_ROUNDING"] = rounding_value
-
-    model_params = detect_model_parameters(file)
-    final_clk = parse_frequency(clk) if clk else board_cfg["clk_freq"]
-    final_baud = baud if baud is not None else board_cfg["baud_rate"]
-    final_out_count = out_count if out_count is not None else model_params.get("out_count", 10)
-    final_word_width = word_width if word_width is not None else model_params.get("word_width", 64)
-    final_bram_words = bram_words if bram_words is not None else board_cfg.get("bram_words", 4096)
-
-    dsp_status = "Disabled (LUTs only)" if no_dsp else f"Enabled ({vendor} DSP mapping)"
-    typer.echo(f"Target Board   : {board_cfg['name']} ({board_cfg.get('fpga', 'FPGA')})")
-    typer.echo(f"DSP Policy     : {dsp_status}")
-    typer.echo(f"Rounding       : {rounding_label}")
-    typer.echo(f"Hardware Clock : {final_clk/1e6:.2f} MHz | UART: {final_baud} baud (CLK_PER_BIT = {final_clk // final_baud})")
-    typer.echo(f"Model Protocol : {final_out_count} output bytes | {final_word_width}-bit AXI | {final_bram_words} words BRAM")
-
-    content = file.read_text(encoding="utf-8")
-    pkg_match = re.search(r'^\s*package\s+([\w\.]+)', content, re.MULTILINE)
-    pkg = pkg_match.group(1) if pkg_match else ""
-    app_match = re.search(r'^\s*object\s+(\w+)\s+extends\s+App', content, re.MULTILINE)
-
-    framework_root = get_active_framework_root()
-    workspace_src = framework_root / "spinalML" / "src" / "cli_temp"
-    if workspace_src.exists():
-        shutil.rmtree(workspace_src)
-    workspace_src.mkdir(parents=True, exist_ok=True)
-
-    # Check if file is already in spinalML/src
-    spinalml_src = framework_root / "spinalML" / "src"
-    try:
-        is_internal = file.resolve().is_relative_to(spinalml_src.resolve())
-    except AttributeError:
-        is_internal = str(file.resolve()).startswith(str(spinalml_src.resolve()))
-
-
-    if not is_internal:
-        shutil.copy(file, workspace_src / file.name)
-        typer.echo(f"Copied external file {file.name} to temporary workspace.")
-
-    full_main = ""
-    auto_generated = False
-
-    comp_match = re.search(r'(?:case\s+)?class\s+(\w+).*?(?:extends\s+Component|extends\s+Accelerator)', content, re.MULTILINE | re.DOTALL)
-    is_accelerator = bool(comp_match and (("extends Accelerator" in content) or ("extends Accelerator" in comp_match.group(0))))
-
-    # If --soc is requested and an Accelerator is present, or if no App entrypoint exists, use AutoRunner
-    use_autorunner = (soc and is_accelerator) or not app_match
-
-    if not use_autorunner and app_match:
-        main_class = app_match.group(1)
-        full_main = f"{pkg}.{main_class}" if pkg else main_class
-    else:
-        if not comp_match:
-            typer.echo(f"Error: {file.name} does not contain 'object <Name> extends App' nor a Component.", err=True)
-            typer.echo("Please add an App entry point to generate Verilog.", err=True)
-            shutil.rmtree(workspace_src)
-            raise typer.Exit(code=1)
-
-        comp_name = comp_match.group(1)
-        import_stmt = f"import {pkg}.{comp_name}" if pkg else ""
-
-        soc_snippet = ""
-        if soc and is_accelerator:
-            soc_snippet = f"""
-  println(s"[AutoRunner] Generating complete turnkey UartSoC top-level in '{target_dir}'...")
-  val cfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
-  spinalConfig.generateVerilog(new spinalML.io.UartSoC(
-    acceleratorFactory = () => new {comp_name}(),
-    clkFreq = BigInt({final_clk}),
-    baudRate = BigInt({final_baud}),
-    axiConfig = cfg,
-    memoryWords = {final_bram_words},
-    outCount = {final_out_count}
-  ))
-"""
-        elif soc and not is_accelerator:
-            typer.echo(f"[Notice] --soc requested, but {comp_name} does not extend Accelerator. Skipping UartSoC top-level.")
-
-        chain_snippet = ""
-        if chain:
-            chain_snippet = f"""
-  println(s"[AutoRunner] Generating supplementary UART chain Verilog in '{target_dir}'...")
-  val chainCfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
-  spinalConfig.generateVerilog(new spinalML.io.UartRx(BigInt("{final_clk}"), BigInt("{final_baud}")))
-  spinalConfig.generateVerilog(new spinalML.io.UartTx(BigInt("{final_clk}"), BigInt("{final_baud}")))
-  spinalConfig.generateVerilog(new spinalML.io.UartBridge(outCount = {final_out_count}, wordWidth = chainCfg.dataWidth, csrAddrWidth = 8, version = 0x01))
-  spinalConfig.generateVerilog(new spinalML.io.AxiReadMem(chainCfg, memoryWords = {final_bram_words}, imgBase = 0x10000, weightBase = 0x20000))
-"""
-
-        auto_runner_code = f"""
-package spinalml_auto
-import spinal.core._
-{import_stmt}
-
-object AutoRunner extends App {{
-  val spinalConfig = SpinalConfig(
-    targetDirectory = "{target_dir}",
-    headerWithDate = true,
-    rtlHeader = "/* spinalML | Copyright (c) 2026 Léonard Adamo (Juste-Leo2) | SPDX-License-Identifier: MIT */"
-  )
-  spinalConfig.generateVerilog(new {comp_name}())
-{soc_snippet}
-{chain_snippet}
-}}
-"""
-        (workspace_src / "AutoRunner.scala").write_text(auto_runner_code, encoding="utf-8")
-        full_main = "spinalml_auto.AutoRunner"
-        auto_generated = True
-        typer.echo(f"Auto-generating runner for component {comp_name}...")
-
-    project_root = get_project_root()
-    start_time = time.time() - 2
-
-
-    typer.echo(f"Running Mill spinalML.runMain {full_main}...")
-    ret_code = run_tool("mill", ["--no-server", "spinalML.runMain", full_main], exit_on_error=False)
-
-    if workspace_src.exists():
-        shutil.rmtree(workspace_src)
-
-    if ret_code != 0:
-        if auto_generated:
-            typer.echo("\n" + "="*60, err=True)
-            typer.echo("Failed to auto-instantiate the component.", err=True)
-            typer.echo("If your component requires mandatory arguments (like Axi4Config),", err=True)
-            typer.echo("please add an `object YourGenerator extends App` block in your file.", err=True)
-            typer.echo("="*60 + "\n", err=True)
-        raise typer.Exit(code=ret_code)
-
-    def move_new_root_artifacts():
-        for f_path in (glob.glob(str(project_root / "*.v")) + glob.glob(str(project_root / "*.bin"))):
-            p = Path(f_path)
-            if p.name in ["top.v", "uart_rx.v", "uart_tx.v"]:
-                continue
-            try:
-                if os.path.getmtime(f_path) >= start_time:
-                    dest = out / p.name
-                    if dest.resolve() != p.resolve():
-                        shutil.move(f_path, dest)
-                        typer.echo(f"Saved {p.name} -> {out}")
-            except OSError:
-                pass
-
-    # Move any new .v or .bin files generated at root to destination
-    move_new_root_artifacts()
-
-    # Generate supplementary UART chain files if requested and not already in AutoRunner
-    if chain and not auto_generated:
-        typer.echo(f"\nGenerating supplementary UART chain Verilog in {out}...")
-        chain_args = [
-            "--no-server",
-            "spinalML.runMain", "spinalML.io.UartChainGen",
-            "--out", target_dir,
-            "--clk", str(final_clk),
-            "--baud", str(final_baud),
-            "--out-count", str(final_out_count),
-            "--word-width", str(final_word_width),
-            "--memory-words", str(final_bram_words)
-        ]
-        run_tool("mill", chain_args, exit_on_error=False)
-        move_new_root_artifacts()
-
-    generated_v = sorted(out.glob("*.v"))
-    generated_bin = sorted(out.glob("*.bin"))
-    typer.echo(f"\nCompilation complete. Hardware files available in '{out}':")
-    for v in generated_v:
-        typer.echo(f"  [Verilog] {v.name}")
-    for b in generated_bin:
-        typer.echo(f"  [Memory]  {b.name}")
+    from .compile_flow import run_compile
+    run_compile(file, out, chain, soc, board, clk, baud, out_count,
+                word_width, bram_words, no_dsp, rounding, run_tool)
 
 
 def _run_single_test_file(
