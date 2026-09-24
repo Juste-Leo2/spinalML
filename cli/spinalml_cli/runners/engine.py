@@ -25,6 +25,9 @@ from rich.panel import Panel
 console = Console(force_terminal=True)
 
 PASS, SKIP, FAIL = "pass", "skip", "fail"
+ABORT, TIMEOUT, ERROR = "abort", "timeout", "error"
+
+RETRY_DELAY_S = 2.0
 
 
 class AbortItem(Exception):
@@ -66,6 +69,7 @@ class RunContext:
     verbose: bool
     ci_sleep: float
     extra: Dict[str, Any]
+    max_retries: int = 0
 
 
 class RunnerHooks:
@@ -155,7 +159,7 @@ def _print_verbose_panel(title: str, body: str) -> None:
 
 
 def _print_summary(spec: RunnerSpec, total: int, passed: list, failed: list,
-                   total_duration: float, project_root: Path) -> int:
+                   total_duration: float, project_root: Path, flaky: Optional[list] = None) -> int:
     table = Table(title=spec.summary_title, border_style=spec.panel_color)
     table.add_column("Metric", style="bold")
     table.add_column("Value")
@@ -164,6 +168,8 @@ def _print_summary(spec: RunnerSpec, total: int, passed: list, failed: list,
     table.add_row(spec.exec_label, str(len(passed) + len(failed)))
     table.add_row("Passed", f"[bold green]{len(passed)}[/]")
     table.add_row("Failed", f"[bold red]{len(failed)}[/]" if failed else "0")
+    if flaky:
+        table.add_row("Flaky (passed on retry)", f"[bold yellow]{len(flaky)}[/]")
     table.add_row("Total Time", f"{total_duration:.1f}s ({total_duration / 60:.1f} min)")
 
     console.print()
@@ -194,6 +200,85 @@ def check_tool_or_report(hooks: RunnerHooks, ctx: RunContext) -> bool:
     return False
 
 
+def _run_attempt(spec: RunnerSpec, hooks: RunnerHooks, item: str, ctx: RunContext,
+                 cmd: List[str], env: dict, timeout: Optional[float],
+                 attempt: int, attempts: int) -> Tuple[str, float, Optional[Path]]:
+    """Runs ONE attempt: subprocess + classify + log + print.
+
+    Returns (outcome, duration, fail_log_or_None). Only FAIL is retried by the
+    caller; TIMEOUT/ERROR are final, ABORT returns 130 immediately.
+    """
+    def attempt_log(kind: str) -> Path:
+        base = hooks.log_name(item, kind, ctx)
+        if attempts > 1:
+            stem, dot, ext = base.rpartition(".")
+            base = f"{stem}.attempt{attempt}.{ext}" if dot else f"{base}.attempt{attempt}"
+        return ctx.log_dir / base
+
+    start = time.time()
+    try:
+        res = subprocess.run(
+            cmd,
+            cwd=str(ctx.project_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            **({"timeout": timeout} if timeout is not None else {})
+        )
+        duration = time.time() - start
+        outcome = hooks.classify(res, item, ctx)
+
+        if outcome == PASS:
+            suffix = f", attempt {attempt}/{attempts}" if (attempts > 1 and attempt > 1) else ""
+            console.print(f"       -> [bold green]PASS[/] ({duration:5.2f}s{suffix})")
+            sys.stdout.flush()
+            return PASS, duration, None
+        if outcome == SKIP:
+            console.print(f"       -> [dim yellow]SKIP[/] ({duration:5.2f}s){hooks.skip_suffix(item, ctx)}")
+            sys.stdout.flush()
+            return SKIP, duration, None
+
+        log_file = attempt_log("fail")
+        _write_fail_log(log_file, hooks.log_header(item, "fail", ctx),
+                        duration, cmd, res)
+        console.print(f"       -> [bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(ctx.project_root)}[/]")
+        hint = hooks.failure_hint((res.stderr or "") + (res.stdout or ""))
+        if hint:
+            console.print(hint)
+        sys.stdout.flush()
+        if ctx.verbose:
+            _print_verbose_panel(hooks.detail_title(item, "fail", ctx),
+                                 res.stderr.strip() or res.stdout.strip() or "No output captured.")
+        return FAIL, duration, log_file
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start
+        log_file = attempt_log("timeout")
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"{hooks.log_header(item, 'timeout', ctx)}\n")
+        console.print(hooks.timeout_line(item, timeout, duration))
+        sys.stdout.flush()
+        if ctx.verbose:
+            _print_verbose_panel(hooks.detail_title(item, "timeout", ctx),
+                                 hooks.timeout_panel_body(item, timeout))
+        return TIMEOUT, duration, log_file
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]Aborted by user.[/]")
+        sys.stdout.flush()
+        return ABORT, 0.0, None
+    except Exception as e:
+        duration = time.time() - start
+        console.print(f"       -> [bold red]ERROR[/] ({duration:5.2f}s): {e}")
+        sys.stdout.flush()
+        if ctx.verbose:
+            _print_verbose_panel(hooks.detail_title(item, "exception", ctx), str(e))
+        content = hooks.exception_log_content(item, e, cmd, ctx)
+        log_file = attempt_log("exception")
+        if content is not None:
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(content)
+        return ERROR, duration, log_file
+
+
 def run_sequential(spec: RunnerSpec, hooks: RunnerHooks, items: List[str],
                    ctx: RunContext, dry_run: bool = False) -> int:
     """Executes the shared sequential loop. Returns 0 (ok), 1 (failures) or 130 (abort)."""
@@ -220,6 +305,7 @@ def run_sequential(spec: RunnerSpec, hooks: RunnerHooks, items: List[str],
 
     passed: List[Tuple[str, float]] = []
     failed: List[Tuple[str, float, Path]] = []
+    flaky: List[str] = []
 
     total_start_time = time.time()
 
@@ -228,7 +314,6 @@ def run_sequential(spec: RunnerSpec, hooks: RunnerHooks, items: List[str],
         console.print(f"{progress_str} {spec.run_verb} [bold {spec.run_verb_color}]{item}[/]...")
         sys.stdout.flush()
 
-        item_start = time.time()
         try:
             cmd = hooks.build_cmd(item, ctx)
         except AbortItem as e:
@@ -236,79 +321,41 @@ def run_sequential(spec: RunnerSpec, hooks: RunnerHooks, items: List[str],
             return 1
         timeout = hooks.run_timeout(item, ctx)
 
-        try:
-            res = subprocess.run(
-                cmd,
-                cwd=str(ctx.project_root),
-                env=env,
-                capture_output=True,
-                text=True,
-                **({"timeout": timeout} if timeout is not None else {})
-            )
-            duration = time.time() - item_start
-            outcome = hooks.classify(res, item, ctx)
-
+        attempts = 1 + max(0, ctx.max_retries)
+        outcome: Optional[str] = None
+        for attempt in range(1, attempts + 1):
+            outcome, duration, log_file = _run_attempt(
+                spec, hooks, item, ctx, cmd, env, timeout, attempt, attempts)
+            if outcome == ABORT:
+                return 130
             if outcome == PASS:
-                console.print(f"       -> [bold green]PASS[/] ({duration:5.2f}s)")
-                sys.stdout.flush()
                 passed.append((item, duration))
-            elif outcome == SKIP:
-                console.print(f"       -> [dim yellow]SKIP[/] ({duration:5.2f}s){hooks.skip_suffix(item, ctx)}")
-                sys.stdout.flush()
-            else:
-                log_file = ctx.log_dir / hooks.log_name(item, "fail", ctx)
-                _write_fail_log(log_file, hooks.log_header(item, "fail", ctx),
-                                duration, cmd, res)
-                console.print(f"       -> [bold red]FAIL[/] ({duration:5.2f}s) -> [dim]{log_file.relative_to(ctx.project_root)}[/]")
-                hint = hooks.failure_hint((res.stderr or "") + (res.stdout or ""))
-                if hint:
-                    console.print(hint)
-                sys.stdout.flush()
-                if ctx.verbose:
-                    _print_verbose_panel(hooks.detail_title(item, "fail", ctx),
-                                         res.stderr.strip() or res.stdout.strip() or "No output captured.")
+                if attempt > 1:
+                    flaky.append(item)
+                break
+            if outcome == SKIP:
+                break
+            if outcome in (TIMEOUT, ERROR):
+                # TIMEOUT/ERROR never retry (FAIL-only policy).
+                assert log_file is not None
                 failed.append((item, duration, log_file))
+                break
+            # FAIL: retry while attempts remain.
+            assert log_file is not None
+            if attempt == attempts:
+                failed.append((item, duration, log_file))
+                break
+            console.print(f"       [yellow]Retrying ({attempt + 1}/{attempts}) in {RETRY_DELAY_S:.0f}s...[/]")
+            sys.stdout.flush()
+            time.sleep(RETRY_DELAY_S)
 
-                if ctx.fail_fast:
-                    console.print("\n[bold red]Stopping early due to --fail-fast.[/]")
-                    sys.stdout.flush()
-                    break
-        except subprocess.TimeoutExpired:
-            duration = time.time() - item_start
-            log_file = ctx.log_dir / hooks.log_name(item, "timeout", ctx)
-            with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"{hooks.log_header(item, 'timeout', ctx)}\n")
-            console.print(hooks.timeout_line(item, timeout, duration))
+        if outcome in (FAIL, TIMEOUT, ERROR) and ctx.fail_fast:
+            console.print("\n[bold red]Stopping early due to --fail-fast.[/]")
             sys.stdout.flush()
-            if ctx.verbose:
-                _print_verbose_panel(hooks.detail_title(item, "timeout", ctx),
-                                     hooks.timeout_panel_body(item, timeout))
-            failed.append((item, duration, log_file))
-            if ctx.fail_fast:
-                sys.stdout.flush()
-                break
-        except KeyboardInterrupt:
-            console.print("\n[bold yellow]Aborted by user.[/]")
-            sys.stdout.flush()
-            return 130
-        except Exception as e:
-            duration = time.time() - item_start
-            console.print(f"       -> [bold red]ERROR[/] ({duration:5.2f}s): {e}")
-            sys.stdout.flush()
-            if ctx.verbose:
-                _print_verbose_panel(hooks.detail_title(item, "exception", ctx), str(e))
-            content = hooks.exception_log_content(item, e, cmd, ctx)
-            log_file = ctx.log_dir / hooks.log_name(item, "exception", ctx)
-            if content is not None:
-                with open(log_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-            failed.append((item, duration, log_file))
-            if ctx.fail_fast:
-                sys.stdout.flush()
-                break
+            break
 
         if ctx.ci_sleep > 0 and idx < total:
             time.sleep(ctx.ci_sleep)
 
     total_duration = time.time() - total_start_time
-    return _print_summary(spec, total, passed, failed, total_duration, ctx.project_root)
+    return _print_summary(spec, total, passed, failed, total_duration, ctx.project_root, flaky)

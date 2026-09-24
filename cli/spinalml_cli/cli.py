@@ -202,6 +202,34 @@ def _run_single_test_file(
     stress: bool = False,
     stress_level: str = "heavy",
     stress_seed: int = 1,
+    retries: int = 0,
+) -> int:
+    """Runs one universal test file, retrying failures (Verilator flakes).
+
+    Default retries=0 (interactive use must fail fast); CI passes --retry 1.
+    """
+    from .runners.engine import RETRY_DELAY_S
+    attempts = 1 + max(0, retries)
+    rc = 1
+    for attempt in range(1, attempts + 1):
+        rc = _run_single_test_file_once(
+            target_file, stress=stress, stress_level=stress_level, stress_seed=stress_seed)
+        if rc == 0:
+            if attempt > 1:
+                typer.echo(f"Passed on attempt {attempt}/{attempts}.")
+            return 0
+        if attempt < attempts:
+            typer.echo(f"[Retry] {target_file.name} failed (attempt {attempt}/{attempts}), "
+                       f"retrying in {RETRY_DELAY_S:.0f}s...")
+            time.sleep(RETRY_DELAY_S)
+    return rc
+
+
+def _run_single_test_file_once(
+    target_file: Path,
+    stress: bool = False,
+    stress_level: str = "heavy",
+    stress_seed: int = 1,
 ) -> int:
     import re
     import shutil
@@ -446,6 +474,7 @@ def test(
     stress: bool = typer.Option(False, "--stress", help="Run behind the DRAM chaos interposer (timing pressure only, bit-exact oracle unchanged)"),
     stress_level: str = typer.Option("heavy", "--stress-level", help="Chaos intensity when --stress is set: light or heavy"),
     stress_seed: int = typer.Option(1, "--stress-seed", help="Deterministic chaos seed when --stress is set"),
+    retry: int = typer.Option(0, "--retry", help="Retries per file on failure, for Verilator flakes (default: 0; CI uses 1)"),
 ):
     """
     Run hardware simulation tests (bit-exact, streaming, tiling, memory verification).
@@ -467,7 +496,7 @@ def test(
             typer.echo(f"\n========================================================")
             typer.echo(f"[{idx}/{len(scala_files)}] Running: {f.name}")
             typer.echo(f"========================================================")
-            rc = _run_single_test_file(f, stress=stress, stress_level=stress_level, stress_seed=stress_seed)
+            rc = _run_single_test_file(f, stress=stress, stress_level=stress_level, stress_seed=stress_seed, retries=retry)
             if rc != 0:
                 failed.append(f.name)
             if ci_sleep > 0 and idx < len(scala_files):
@@ -481,7 +510,7 @@ def test(
             typer.echo(f"SUCCESS: All {len(scala_files)} test(s) passed successfully!")
             return
 
-    rc = _run_single_test_file(file, stress=stress, stress_level=stress_level, stress_seed=stress_seed)
+    rc = _run_single_test_file(file, stress=stress, stress_level=stress_level, stress_seed=stress_seed, retries=retry)
     if rc != 0:
         raise typer.Exit(code=rc)
 
@@ -493,13 +522,14 @@ def test_all(
     log_dir: Optional[Path] = typer.Option(None, "--log-dir", help="Directory to store failure logs (default: out/test_reports)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="List discovered test suites without running them"),
     ci_sleep: float = typer.Option(0.0, "--ci", help="Pause in seconds between test sequences (0 = disabled; use e.g. --ci 3 on slow-SD/self-hosted runners)"),
+    retry: int = typer.Option(1, "--retry", help="Retries per suite on failure, for Verilator flakes (default: 1)"),
 ):
     """
     Run all ScalaTest suites sequentially (1-by-1) to avoid Verilator/G++ RAM exhaustion.
     Captures failure traces into individual log files under out/test_reports/.
     """
     from .test_runner import run_all_tests
-    code = run_all_tests(filter_pattern=filter, fail_fast=fail_fast, log_dir=log_dir, dry_run=dry_run, verbose=verbose, ci_sleep=ci_sleep)
+    code = run_all_tests(filter_pattern=filter, fail_fast=fail_fast, log_dir=log_dir, dry_run=dry_run, verbose=verbose, ci_sleep=ci_sleep, retries=retry)
     if code != 0:
         raise typer.Exit(code=code)
 
@@ -512,13 +542,14 @@ def test_all_formal(
     dry_run: bool = typer.Option(False, "--dry-run", help="List discovered formal suites without running them"),
     timeout: int = typer.Option(900, "-t", "--timeout", help="Timeout per formal suite in seconds (default: 900)"),
     ci_sleep: float = typer.Option(0.0, "--ci", help="Pause in seconds between test sequences (0 = disabled; use e.g. --ci 3 on slow-SD/self-hosted runners)"),
+    retry: int = typer.Option(1, "--retry", help="Retries per suite on failure, for Verilator flakes (default: 1)"),
 ):
     """
     Run all SymbiYosys formal verification suites sequentially (1-by-1).
     Discovers all *Formal.scala specs under symbolicTest/ and executes them via SMT-BMC.
     """
     from .formal_runner import run_all_formal_tests
-    code = run_all_formal_tests(filter_pattern=filter, fail_fast=fail_fast, log_dir=log_dir, dry_run=dry_run, timeout=timeout, verbose=verbose, ci_sleep=ci_sleep)
+    code = run_all_formal_tests(filter_pattern=filter, fail_fast=fail_fast, log_dir=log_dir, dry_run=dry_run, timeout=timeout, verbose=verbose, ci_sleep=ci_sleep, retries=retry)
     if code != 0:
         raise typer.Exit(code=code)
 

@@ -112,7 +112,8 @@ def run_all_formal_tests(
     dry_run: bool = False,
     timeout: int = 900,
     verbose: bool = False,
-    ci_sleep: float = 0.0
+    ci_sleep: float = 0.0,
+    retries: int = 1
 ) -> int:
     project_root = get_active_framework_root()
     formal_src = project_root / "spinalML" / "test" / "src" / "spinalML" / "symbolicTest"
@@ -140,7 +141,8 @@ def run_all_formal_tests(
         panel_color="cyan",
     )
     ctx = RunContext(project_root=project_root, log_dir=log_dir,
-                     fail_fast=fail_fast, verbose=verbose, ci_sleep=ci_sleep, extra={})
+                     fail_fast=fail_fast, verbose=verbose, ci_sleep=ci_sleep,
+                     extra={}, max_retries=retries)
     hooks = _FormalHooks(str(get_bin_path("mill")), timeout)
     if not check_tool_or_report(hooks, ctx):
         return 1
