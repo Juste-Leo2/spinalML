@@ -65,7 +65,18 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
-- **4d `layers`/`memory`** : à définir.
+## Dérivation `nn` core RTL (zone 4d, validée)
+
+- **D1 contrats d'élaboration** : requires/knobs/footprints/cursors en
+  clair ; pointeurs `docs/` → essentiel inliné.
+- **D2 phases unwrap** : `S0/S1/S2x`, `M2/M3`, `Phase-N` retirés ;
+  `NN-01` → sticky ; `NN-02` gardé (noms de tests) ; leçons (K64-P8,
+  rerun, reArm, gearbox) gardées en clair.
+- **D3 anglais partout** : le français restant traduit (commentaires +
+  messages).
+- **D4 structure** : bannières ASCII → titres nus numérotés ; step-markers
+  (`1. Instantiate…`) dehors ; miroirs inter-blocs (`mirror of…`)
+  gardés comme navigation.
 - **4e `harness`/`examples`/`dtypes`** : à définir.
 - **4f Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
 - **4g Python `scripts/` + `tests/python`** : à définir.

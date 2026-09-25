@@ -5,12 +5,11 @@ package spinalML.nn
 import spinalML.memory.MemoryKind
 
 /**
- * Logical memory descriptor for the high-level API (Phase-2 DDR plumbing,
- * docs/ddr_impl.md).
+ * Logical memory descriptor for the high-level API.
  *
  * Layer-2 logical view (region bases + optional capacity), deliberately
  * separated from the Layer-3 physical board data (boards JSON memory
- * block, Phase 3). The datapath (`Sequential`) only ever sees byte offsets
+ * block). The datapath (`Sequential`) only ever sees byte offsets
  * from these bases; the `MemoryAdapter` implementation behind them is
  * selected via `MemoryKind` (see `MemoryAdapter.factory`).
  *
@@ -23,7 +22,7 @@ case class MemorySpec(
   kind: MemoryKind = MemoryKind.OnChip,
   imgBase: Long = 0x10000L,
   weightBase: Long = 0x20000L,
-  /** Spill region base (accumulator spill, Phase 4). None = no spill. */
+  /** Spill region base (accumulator spill). None = no spill. */
   spillBase: Option[Long] = None,
   /** Spill region size in bytes (M*N partials footprint). None = unknown. */
   spillBytes: Option[Long] = None,
@@ -49,7 +48,7 @@ case class MemorySpec(
       require(total <= cap,
         s"MemorySpec: model footprint ${total}B (image ${imageBytes}B + weights ${weightBytes}B + out ${outBytes}B + spill ${spill}B) " +
         s"exceeds capacity ${cap}B — enable activation tiling (tileHeight), accumulator spill, " +
-        s"layer folding, or quantized weights (see docs/wave6_ddr_scaling_plan.md)")
+        s"layer folding, or quantized weights")
     }
 }
 

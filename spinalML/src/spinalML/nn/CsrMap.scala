@@ -3,15 +3,14 @@
 package spinalML.nn
 
 /**
- * Frozen AXI-Lite CSR address map of `Accelerator` (Phase-2 DDR plumbing,
- * docs/ddr_impl.md).
+ * Frozen AXI-Lite CSR address map of `Accelerator`.
  *
  * Single source of truth for the control register addresses so host drivers,
  * test benches and the RTL can never drift apart. Values are identical to the
  * historical literals previously scattered in `Accelerator` — this object only
  * names them.
  *
- * Reserved (not yet wired, Phase 4/5): `SpillBase`, `OutStride`, `MemStatus`.
+ * Reserved (not yet wired): `SpillBase`, `OutStride`, `MemStatus`.
  */
 object CsrMap {
   /** 0x00: Control — write 1 to trigger one inference. */
@@ -38,10 +37,10 @@ object CsrMap {
   val DmaStatus: Int = 0x28
   /** 0x30: Runtime dequantization scale (Cast layers with runtimeScale). */
   val DequantScale: Int = 0x30
-  /** 0x34: Spill region base address (accumulator spill, Phase 4). */
+  /** 0x34: Spill region base address (accumulator spill). */
   val SpillBase: Int = 0x34
 
-  // ---- Reserved for the stride/status plane (Phase 4/5) ------------------
+  // Reserved for the stride/status plane.
   /** 0x38 (RESERVED): output stride between consecutive frames. */
   val OutStride: Int = 0x38
   /** 0x3C (RESERVED): memory status (fit/fence state). */
