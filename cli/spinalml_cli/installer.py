@@ -58,7 +58,7 @@ def clean_coursier_cache(console=None, debug: bool = False):
 
 def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_cache: bool = False, dev: bool = False):
     from .config import get_oss_cad_suite_url, get_mill_url, get_w64devkit_url, get_uv_url, get_os_arch, get_active_framework_root
-    from .pyenv import ensure_cli_env, ensure_managed_env, print_doctor
+    from .pyenv import ensure_managed_env, print_doctor
     
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     get_active_framework_root()
@@ -76,7 +76,6 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
             install_w64devkit(get_w64devkit_url(config), debug=True, force=force)
         install_mill(get_mill_url(config), debug=True, force=force)
         install_uv(get_uv_url(config), debug=True, force=force)
-        ensure_cli_env(debug=True)
         ensure_managed_env(with_dev=dev, debug=True)
         print_doctor(debug=True)
         print("Setup completed successfully!")
@@ -90,7 +89,6 @@ def setup_tools(config: dict, debug: bool = False, force: bool = False, clean_ca
                 install_w64devkit(get_w64devkit_url(config), debug=False, console=console, force=force)
             install_mill(get_mill_url(config), debug=False, console=console, force=force)
             install_uv(get_uv_url(config), debug=False, console=console, force=force)
-            ensure_cli_env(console=console)
             ensure_managed_env(with_dev=dev, console=console)
             envs_ok = print_doctor(console=console)
             if envs_ok:

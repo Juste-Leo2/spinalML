@@ -7,8 +7,8 @@
 
 | Env | Path | Content | Created by |
 | --- | ---- | ------- | ---------- |
-| CLI | `<root>/.venv` | `/requirements.txt` (typer, requests, rich) | `setup` (always) |
-| managed | `~/.spinalml_tools/.venv` | base + dram, + dev extras with `--dev` | `setup` / `setup --dev` |
+| CLI | `<root>/.venv` | `/requirements.txt` (typer, requests, rich) | Dev bootstrap (`uv venv` + `uv pip install`) |
+| managed | `~/.spinalml_tools/.venv` | base + dram (LiteDRAM), + dev extras with `--dev` | `setup` / `setup --dev` |
 
 Requirement sets (`requirements/`):
 
@@ -32,10 +32,10 @@ use `spinalml test-all-python`. This is on purpose.
 ```bash
 # Bootstrap from a fresh clone (uv auto-provisions Python 3.12, explicit -p, no magic file)
 uv venv -p 3.12 --clear .venv
-source .venv/bin/activate
+source .venv/bin/activate            # or .venv\Scripts\activate on Windows
 uv pip install -r requirements.txt   # CLI only
 
-python cli/main.py setup             # tools + CLI env + managed env (base+dram)
+python cli/main.py setup             # tools + managed env (base + dram / LiteDRAM ready)
 python cli/main.py setup --dev       # + cocotb (co-simulation)
 
 python cli/main.py doctor            # health: interpreter, pins, leaks
@@ -43,11 +43,12 @@ python cli/main.py pylibs            # pinned vs installed per env
 python cli/main.py uv --version      # managed uv (0.12.18 pinné)
 ```
 
-`setup` is **stateless**: plain `setup` always reinstalls the managed env
+`setup` is **stateless for the managed env**: plain `setup` always reinstalls the managed env
 WITHOUT dev extras (it `--clear`s, cocotb included). There is no sticky flag:
 pass `--dev` every time you need co-sim. CI therefore runs `setup --dev`
 uniformly in every job — a plain `setup` interleaved between jobs sharing one
-runner would wipe cocotb for the next job.
+runner would wipe cocotb for the next job. `setup` does NOT `--clear` the root `.venv`,
+avoiding executable locking errors on Windows and ensuring clean separation.
 
 ## 3. Adding a dependency
 
@@ -61,9 +62,11 @@ runner would wipe cocotb for the next job.
 - cocotb is excluded on native Windows by markers (`sys_platform != 'win32'`,
   kept as-is): `--dev` degrades gracefully there, no special code. Co-sim runs
   on Linux / WSL (see the `test-all-python` notice).
-- The LiteX stack is pure Python: same risk class as typer, installs everywhere.
-- The PyInstaller exe is CLI-only (typer/rich/requests). Heavy sets live in
-  the managed env, never in the exe — that is what keeps the binary small.
+- The LiteX stack (`migen`, `litex`, `litedram`) is pure Python: same risk class as typer, installs everywhere.
+- The PyInstaller exe is CLI-only (typer/rich/requests). Heavy sets (LiteDRAM, pytest) live in
+  the managed env (`~/.spinalml_tools/.venv`), never in the exe — that is what keeps the binary small,
+  avoids embedding complex dependencies, and ensures the end-user only needs the standalone binary
+  and the single managed environment created by `spinalml setup`.
 
 ## 5. Hygiene rules (never break these)
 

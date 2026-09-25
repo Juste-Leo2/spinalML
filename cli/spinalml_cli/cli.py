@@ -25,8 +25,8 @@ def setup(
 ):
     """
     Download and extract all necessary tools (Mill, OSS CAD Suite, uv) to ~/.spinalml_tools,
-    then (re)create the uv-managed Python envs (root .venv for the CLI, ~/.spinalml_tools/.venv
-    for every Python flow). Plain setup leaves cocotb out; --dev adds it.
+    then (re)create the uv-managed Python env (~/.spinalml_tools/.venv for tests and LiteDRAM).
+    Plain setup leaves cocotb out; --dev adds it.
     """
     config = load_config()
     setup_tools(config, debug=debug, force=force, clean_cache=clean_cache, dev=dev)

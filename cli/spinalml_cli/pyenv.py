@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .config import TOOLS_DIR, get_bin_path, get_project_root
+from .config import TOOLS_DIR, get_bin_path, get_project_root, IS_FROZEN
 
 UV_PYTHON = "3.12"
 
@@ -117,7 +117,26 @@ def ensure_env(env_dir: Path, req_files: List[Path], label: str, kind: str,
 
 
 def ensure_cli_env(debug: bool = False, console=None) -> Path:
-    return ensure_env(cli_env_dir(), cli_requirements(), "CLI", "cli", debug=debug, console=console)
+    """Ensures the root .venv (CLI runtime) exists and is satisfied.
+
+    If running from inside this environment (e.g. on Windows), avoids --clear
+    to prevent OS permission errors on open/locked executables.
+    """
+    env_dir = cli_env_dir()
+    is_running_in_env = False
+    try:
+        is_running_in_env = Path(sys.executable).resolve().is_relative_to(env_dir.resolve())
+    except Exception:
+        pass
+    if is_running_in_env:
+        py = venv_python(env_dir)
+        uv = _uv_bin()
+        cmd = [uv, "pip", "install", "--python", str(py)]
+        for r in cli_requirements():
+            cmd += ["-r", str(r)]
+        _run(cmd, "CLI env install", debug=debug, console=console)
+        return py
+    return ensure_env(env_dir, cli_requirements(), "CLI", "cli", debug=debug, console=console)
 
 
 def ensure_managed_env(with_dev: bool = False, debug: bool = False, console=None) -> Path:
@@ -174,10 +193,11 @@ def has_dev_extras(python: Path) -> bool:
 
 def doctor_data() -> List[Dict[str, str]]:
     """Per-env health rows for `spinalml doctor` / end-of-setup report."""
-    rows = [
-        ("CLI", cli_env_dir(), "cli"),
-        ("managed", managed_env_dir(), "managed"),
-    ]
+    rows = []
+    if not IS_FROZEN:
+        rows.append(("CLI", cli_env_dir(), "cli"))
+    rows.append(("managed", managed_env_dir(), "managed"))
+
     out = []
     for name, path, kind in rows:
         ok, detail = check_env(venv_python(path), kind)
@@ -190,8 +210,11 @@ def doctor_data() -> List[Dict[str, str]]:
                     "status": "installed" if dev else "missing",
                     "detail": "setup --dev installs it; plain setup removes it"})
     exe = Path(sys.executable)
-    managed = [cli_env_dir(), managed_env_dir()]
-    home = "managed" if any(exe.is_relative_to(m) for m in managed if m.exists()) else "EXTERNAL"
+    if IS_FROZEN:
+        home = "frozen"
+    else:
+        managed = [cli_env_dir(), managed_env_dir()]
+        home = "managed" if any(exe.is_relative_to(m) for m in managed if m.exists()) else "EXTERNAL"
     out.append({"env": "cli-process", "path": str(exe),
                 "status": home, "detail": "interpreter running this CLI"})
     return out
@@ -200,7 +223,7 @@ def doctor_data() -> List[Dict[str, str]]:
 def print_doctor(debug: bool = False, console=None) -> bool:
     """Prints the env health table. Returns True iff all managed envs are OK."""
     rows = doctor_data()
-    ok = all(r["status"] in ("OK", "installed", "managed", "EXTERNAL")
+    ok = all(r["status"] in ("OK", "installed", "managed", "frozen", "EXTERNAL")
              for r in rows if r["env"] not in ("cli-process", "dev-extras"))
     if debug or console is None:
         for r in rows:
@@ -270,9 +293,11 @@ def installed_version(python: Path, package: str) -> Optional[str]:
 
 def pylibs_data() -> List[Dict[str, str]]:
     """Per-env rows: pinned vs installed versions for `spinalml pylibs`."""
-    envs = [("CLI", cli_env_dir(), cli_requirements()),
-            ("managed", managed_env_dir(),
-             managed_requirements() + dev_requirements())]
+    envs = []
+    if not IS_FROZEN and (get_project_root() / "requirements.txt").exists():
+        envs.append(("CLI", cli_env_dir(), cli_requirements()))
+    envs.append(("managed", managed_env_dir(),
+                 managed_requirements() + dev_requirements()))
     rows = []
     for name, path, reqs in envs:
         py = venv_python(path)
