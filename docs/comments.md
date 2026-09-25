@@ -63,8 +63,6 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
   gardés (PWL, algebraic, SPLIT/AGGREGATE) ; step-markers paraphrases
   dehors.
 
-## Dérivations à venir (définies à la lecture de chaque zone)
-
 ## Dérivation `nn` core RTL (zone 4d, validée)
 
 - **D1 contrats d'élaboration** : requires/knobs/footprints/cursors en
@@ -77,6 +75,22 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 - **D4 structure** : bannières ASCII → titres nus numérotés ; step-markers
   (`1. Instantiate…`) dehors ; miroirs inter-blocs (`mirror of…`)
   gardés comme navigation.
-- **4e `harness`/`examples`/`dtypes`** : à définir.
-- **4f Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
-- **4g Python `scripts/` + `tests/python`** : à définir.
+## Dérivation `layers`/`memory` RTL (zone 4e, validée)
+
+- **E1 contrats de flux** : shapes/lanes/ordres/fences en 1 ligne ;
+  formules et invariants (beat-align, sticky, RAW) gardés intacts.
+- **E2 sessions unwrap** : `P1/P2/S1/S2`, `M1.7`, `M2`, `Phase-N`,
+  `Option B` retirés ; `BUG-DDR-04/07` gardés (noms de tests) ;
+  pointeurs `docs/` → essentiel inliné.
+- **E3 structure** : bannières ASCII → titres nus (sections numérotées
+  gardées) ; step-markers paraphrases dehors ; labels d'algo par branche
+  gardés.
+- **E4 port docs** : rôles non-évidents gardés (lanes=1, accType,
+  reArm), paraphrases (`Input Sequence`, `Kernel Weights`…) dehors.
+
+## Dérivations à venir (définies à la lecture de chaque zone)
+
+- **4f `src` restant** (`attention`/`dtypes`/`utils`/`activations`/…) : à définir.
+- **4g tests Scala restants** (`test/ops`, `test/layers`, `harness`, …) : à définir.
+- **4h Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
+- **4i Python `scripts/` + `tests/python`** : à définir.

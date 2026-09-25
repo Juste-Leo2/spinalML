@@ -25,12 +25,12 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
   temporal: Int = 0,
   inLanes: Int = 1,
   convOutLanes: Int = 1,
-  // P1 compute-side spill (docs/ddr_spill_ops.md): K-pass slice engine over
-  // the flattened K*K*inChannels axis. Same contract as LinearLayer S1: pass
-  // 0 seeds zeros, passes > 0 seed from spillIn, non-final passes drain M*N
-  // partials to spillOut, the final pass drives io.y with the real bias once.
-  // The A-window sits on the im2col cols stream (beats per cols row); the
-  // pass loop (re-fire, slice addresses, pass counting) lives in Sequential.
+  // K-pass slice engine over the flattened K*K*inChannels axis. Same
+  // contract as LinearLayer: pass 0 seeds zeros, passes > 0 seed from
+  // spillIn, non-final passes drain M*N partials to spillOut, the final
+  // pass drives io.y with the real bias once. The A-window sits on the
+  // im2col cols stream (beats per cols row); the pass loop (re-fire,
+  // slice addresses, pass counting) lives in Sequential.
   spill: Boolean = false,
   spillKSlice: Int = -1,
   // Trailing pad elements closing the seed region's last AXI beat (see
@@ -53,15 +53,15 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
     s"Conv2DLayer spill=true requires the sequential-N matmul (parallelN=false)")
 
   val io = new Bundle {
-    val x = slave(Tensor(dataType, Seq(H, W_in, inChannels), lanes = inLanes)) // Input Image [H, W, C]
-    val w = slave(Tensor(dataType, Seq(K * K * inChannels, outChannels), lanes = outLanes)) // Kernel Weights
-    val b = slave(Tensor(accType, Seq(1, outChannels), lanes = 1)) // Bias
-    val y = master(Tensor(accType, Seq(H_out, W_out, outChannels), lanes = convOutLanes)) // Output Image
+    val x = slave(Tensor(dataType, Seq(H, W_in, inChannels), lanes = inLanes))
+    val w = slave(Tensor(dataType, Seq(K * K * inChannels, outChannels), lanes = outLanes))
+    val b = slave(Tensor(accType, Seq(1, outChannels), lanes = 1))
+    val y = master(Tensor(accType, Seq(H_out, W_out, outChannels), lanes = convOutLanes))
     // Command-boundary re-arm for the internal weight buffer (see MatmulOp)
     val reArm = in Bool()
     // Command-boundary re-arm for the bias cache (see BiasAddOp)
     val biasReArm = in Bool()
-    // P1 spill ports (spill=true only). Same level contract as MatmulOp:
+    // Spill ports (spill=true only). Same level contract as MatmulOp:
     // the Sequential pass controller holds passFirst/passLast/passIdx stable
     // per pass (single source of truth — never counted locally).
     val spillIn = if (spill) Some(slave(Tensor(accType, Seq(totalWindows, outChannels), lanes = 1))) else None
@@ -72,18 +72,17 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
     val passIdx = if (spill) Some(in UInt((log2Up(windowSize / spillKSlice) max 1) bits)) else None
   }
 
-  // 1. Im2Col: Convert 2D image into sliding windows
-  // Output shape: [totalWindows, K*K*inChannels], lanes = outLanes.
-  // Self-restarting per frame (stateDone clears counters): every A re-stream
-  // (DDR re-fire or tap replay) reproduces the identical cols sweep, so no
-  // halo state ever leaks across passes.
+  // Im2Col windows ([totalWindows, K*K*inChannels], lanes = outLanes),
+  // self-restarting per frame (stateDone clears counters): every A
+  // re-stream reproduces the identical cols sweep, so no halo state
+  // ever leaks across passes.
   val cols = im2col(io.x, K, outLanes)
 
-  // P1 A-window on the cols stream (mirror of the Sequential Linear window):
+  // A-window on the cols stream (mirror of the Sequential Linear window):
   // pass p consumes beats [p*Ks,(p+1)*Ks) of each cols row (beat-aligned by
   // Ks%outLanes==0). Non-window beats are accepted-and-dropped so upstream
   // (im2col) never stalls; passIdx is prelude-stable during flow.
-  // SLICE GEOMETRY (S1 proven): the engine is shaped [M,Ks]x[Ks,N] per pass.
+  // SLICE GEOMETRY: the engine is shaped [M,Ks]x[Ks,N] per pass.
   val rowBeatsA = if (spill) windowSize / outLanes else 1
   val winBeatsA = if (spill) spillKSlice / outLanes else 1
   val aBeatInRow = if (spill) Some(Reg(UInt((log2Up(rowBeatsA) max 1) bits)) init(0)) else None
@@ -104,7 +103,7 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
     }
     gated
   } else cols
-  // Slice views (stream aliases, S1 geometry): windowed cols [M,Ks],
+  // Slice views (stream aliases): windowed cols [M,Ks],
   // fetched W slice [Ks,N]. Beat counts match the flows exactly.
   val matmulA = if (spill) {
     val s = Tensor(dataType, Seq(totalWindows, spillKSlice), outLanes)
@@ -117,13 +116,14 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
     s
   } else io.w
 
-  // 2. Matrix Multiplication: cols * W (reArm re-arms the internal B buffer,
-  //    which carries this layer's weights; temporal bounds the rows in flight)
+  // Matmul cols*W ([totalWindows, K*K*inChannels] x [K*K*inChannels,
+  // outChannels] -> [totalWindows, outChannels]; reArm re-arms the internal
+  // B buffer, temporal bounds rows in flight).
   val matmulResult = matmul(matmulA, matmulW, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
     spill = spill, passFirst = io.passFirst, passLast = io.passLast,
     spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
 
-  // 3. Add Bias — S1 bias-zero mux (mirror of LinearLayer): BiasAddOp always
+  // Add bias via the bias-zero mux (mirror of LinearLayer): BiasAddOp always
   // consumes exactly N beats per pass, but on non-final passes the beats come
   // from an on-chip zero source; the real bias is added once, final pass only.
   val bForAdd: Tensor[TAcc] = if (spill) {
@@ -150,7 +150,6 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
   }
   val biasAdded = bias_add(matmulResult, bForAdd, reArm = Some(io.biasReArm))
 
-  // 4. Reshape to 3D [H_out, W_out, outChannels]
   val reshaped = reshape(biasAdded, Seq(H_out, W_out, outChannels))
   if (convOutLanes == reshaped.lanes) {
     io.y <> reshaped

@@ -26,7 +26,6 @@ case class BatchNorm1D[T <: Data](
     val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
   
-  // Registers to hold the static parameters (Scale and Shift)
   val gammaReg = Reg(Vec(dataType, channels))
   val betaReg = Reg(Vec(dataType, channels))
   

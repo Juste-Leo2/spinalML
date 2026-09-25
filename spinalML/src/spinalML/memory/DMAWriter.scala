@@ -46,9 +46,7 @@ case class DMAWriter[T <: Data](
     val done      = out(Bool())
   }
 
-  // =========================================================================
   // 1. Adapter: Pack input Tensor lanes to physical AXI bus width
-  // =========================================================================
   val totalElements = shape.product
   val elemWidth = dataType.getBitsWidth
   val totalInBeats = (totalElements + inLanes - 1) / inLanes
@@ -149,9 +147,7 @@ case class DMAWriter[T <: Data](
     wDataValid := hasData
   }
 
-  // =========================================================================
   // 2. Control Registers & Counters
-  // =========================================================================
   // 17 bits so that length = 0xFFFF (+1 beat = 65536) does not overflow to zero
   val remaining   = Reg(UInt(17 bits)).init(0)
   val burstRemain = Reg(UInt(log2Up(maxBurstBeats + 1) bits)).init(0)
@@ -172,9 +168,7 @@ case class DMAWriter[T <: Data](
   val beatsToBoundary = (bytesToBoundary >> log2Up(bytesPerBeat)).resize(16 bits)
   val burstLen        = remaining.min(U(maxBurstBeats, 17 bits)).min(beatsToBoundary.max(1).resize(17 bits))
 
-  // =========================================================================
   // 3. AW (Address Write) Channel
-  // =========================================================================
   // Strictly serialized: issue the next burst only once the previous one's W data has fully drained
   io.axiMaster.aw.valid  := (remaining =/= 0) && (burstRemain === 0)
   io.axiMaster.aw.addr   := addrReg
@@ -195,9 +189,7 @@ case class DMAWriter[T <: Data](
     burstRemain := burstLen.resized
   }
 
-  // =========================================================================
   // 4. W (Write Data) Channel
-  // =========================================================================
   val wFire = io.axiMaster.w.fire
   io.axiMaster.w.valid := wDataValid && (burstRemain =/= 0)
   io.axiMaster.w.data  := wDataBits
@@ -223,9 +215,7 @@ case class DMAWriter[T <: Data](
     burstRemain := burstRemain - 1
   }
 
-  // =========================================================================
   // 5. B (Write Response) Channel
-  // =========================================================================
   io.axiMaster.b.ready := True
 
   val bFire = io.axiMaster.b.fire
@@ -242,9 +232,7 @@ case class DMAWriter[T <: Data](
     pendingB := pendingB - 1
   }
 
-  // =========================================================================
   // 6. Status & Done Signals
-  // =========================================================================
   io.busy := !idle
 
   val donePulse = RegInit(False)

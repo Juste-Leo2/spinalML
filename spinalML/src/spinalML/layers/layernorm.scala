@@ -46,7 +46,6 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   
   require(isPow2(channels), "Channels must be a power of 2 for division by shift")
   
-  // Helper Math Functions
   def add(a: T, b: T): T = (a, b) match {
     case (vx: SInt, va: SInt) => (vx + va).resized.asInstanceOf[T]
     case (vx: UInt, va: UInt) => (vx + va).resized.asInstanceOf[T]
@@ -99,8 +98,6 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
     carryStream: Stream[C],
     addFn: (T, T) => T
   ): (Stream[T], Stream[C]) = {
-    
-    // Combine input and carry into a single stream
     case class StageBundle(len: Int) extends Bundle {
       val sums = Vec(dataType(), len)
       val carry = cloneOf(carryStream.payload)
@@ -149,13 +146,10 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   // Fork pipelinedX because buildPipelinedTree expects two separate streams
   val (pipelinedX1, pipelinedX2) = StreamFork2(pipelinedX)
   
-  // 1. Calculate Mean (mu)
   val (sumStream, carryXStream) = buildPipelinedTree(pipelinedX1, pipelinedX2, add)
   
   val muStream = sumStream.translateWith(divN(sumStream.payload, channels))
   
-  // 2. Calculate Variance (sigma^2)
-  // First, calculate (x - mu) for each channel
   case class DiffBundle() extends Bundle {
     val diffs = Vec(dataType(), channels)
     val origDiffs = Vec(dataType(), channels)
@@ -183,12 +177,11 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   val (varSumStream, carryDiffsStream) = buildPipelinedTree(diffsOnly, origDiffsOnly, add)
   val varStream = varSumStream.translateWith(divN(varSumStream.payload, channels))
   
-  // 3. Rsqrt(sigma^2 + eps)
   val rsqrtComp = spinalML.ops.RsqrtOp(dataType, Seq(1), lanes = 1)
   
   val epsVal: T = (dataType() match {
     case f: FloatML => 
-      // LAY-04: 1e-5 must stay representable, otherwise a zero variance (or a
+      // 1e-5 must stay representable, otherwise a zero variance (or a
       // variance whose diff^2 underflowed) reaches the rsqrt LUT at input 0 and
       // the guard saturates the inverse standard deviation. If the encoded
       // epsilon underflows to 0, fall back to the smallest positive normal
@@ -217,7 +210,6 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   rsqrtComp.io.a.stream << varVecStream
   val invStdDevStream = rsqrtComp.io.c.stream
   
-  // 4. Final Normalization & ScaleAdd
   // y_i = (x_i - mu) * invStdDev * gamma_i + beta_i
   val outPayload = Vec(dataType, channels)
   
@@ -227,7 +219,7 @@ case class LayerNorm1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: 
   carryDiffsStream.ready := io.y.stream.ready && invStdDevStream.valid
   
   for (i <- 0 until channels) {
-    val diff = carryDiffsStream.payload(i) // (x - mu)
+    val diff = carryDiffsStream.payload(i)
     val invStdDev = invStdDevStream.payload(0)
     val gamma = gammaReg(i)
     val beta = betaReg(i)
