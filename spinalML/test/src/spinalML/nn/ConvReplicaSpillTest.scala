@@ -16,7 +16,7 @@ class ConvReplicaSpillTest extends AnyFunSuite {
   test("P1-5 e2e I8 conv spill P=2 bit-exact vs ModelReplica") {
     ReplicaSpillE2E.runReplicaCase(
       Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 4)),
-      Seq(6, 6, 2), isInt = true, label = "CONV-I8-P2", debug = true)
+      Seq(6, 6, 2), isInt = true, label = "CONV-I8-P2")
   }
 
   test("P1-5 e2e BF16 conv spill P=2 bit-exact vs ModelReplica") {
@@ -28,18 +28,18 @@ class ConvReplicaSpillTest extends AnyFunSuite {
   test("P1-5 e2e I8 conv spill P=1 single-pass regression vs ModelReplica") {
     ReplicaSpillE2E.runReplicaCase(
       Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2, spillKSlice = 8)),
-      Seq(6, 6, 2), isInt = true, label = "CONV-I8-P1", debug = true)
+      Seq(6, 6, 2), isInt = true, label = "CONV-I8-P1")
   }
 
-  test("TMP dense conv (no spill) via the same driver") {
+  test("P1-5 e2e I8 dense conv (no spill) regression via the same driver") {
     ReplicaSpillE2E.runReplicaCase(
       Seq(Conv2D(inChannels = 2, outChannels = 2, kernelSize = 2)),
-      Seq(6, 6, 2), isInt = true, label = "CONV-DENSE", debug = true, temporal = 0)
+      Seq(6, 6, 2), isInt = true, label = "CONV-DENSE", temporal = 0)
   }
 
-  test("TMP dense conv inC=1 via the same driver") {
+  test("P1-5 e2e I8 dense conv inC=1 (no spill) regression via the same driver") {
     ReplicaSpillE2E.runReplicaCase(
       Seq(Conv2D(inChannels = 1, outChannels = 2, kernelSize = 2)),
-      Seq(6, 6, 1), isInt = true, label = "CONV-DENSE-C1", debug = true, temporal = 0)
+      Seq(6, 6, 1), isInt = true, label = "CONV-DENSE-C1", temporal = 0)
   }
 }

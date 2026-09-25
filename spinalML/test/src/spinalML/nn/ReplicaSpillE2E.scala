@@ -9,6 +9,7 @@ import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig}
 import spinalML.dtypes.{BF16, I8}
 import spinalML.harness.{MemoryHarness, UniversalTestHarness}
 import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
+import spinalML.utils.SimLog
 
 /**
  * Shared replica-oracle e2e driver for spilling GEMM layers (P1: Linear and
@@ -36,7 +37,6 @@ object ReplicaSpillE2E {
     isInt: Boolean,
     label: String,
     runs: Int = 1,
-    debug: Boolean = false,
     temporal: Int = 1
   ): Unit = {
     var packedWords: Seq[BigInt] = null
@@ -164,7 +164,7 @@ object ReplicaSpillE2E {
           s"pi=${ctrl.io.passIdx.toInt} rw=${ctrl.io.refetchW.toBoolean} " +
           s"br=${ctrl.io.biasReArm.toBoolean} ra=${ctrl.io.restartA.toBoolean} " +
           s"ov=${dut.io.outStream.stream.valid.toBoolean}"
-        if (s != lastCtl) { println(s"DBG ctl [$tag cyc=$cyc]: $s"); lastCtl = s }
+        if (s != lastCtl) { SimLog.trace("SPILL")(s"ctl [$tag cyc=$cyc]: $s"); lastCtl = s }
       }
       for (run <- 1 to runs) {
         if (runs > 1) runTag = s"$label-run$run"
@@ -176,13 +176,13 @@ object ReplicaSpillE2E {
         while (collected.length < outCount && cycles < timeout) {
           if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
             arBeats += dut.io.axiMaster.ar.payload.len.toInt + 1
-            if (debug) println(s"DBG bus [$runTag cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
+            SimLog.trace("SPILL")(s"bus [$runTag cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
           }
           if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean) {
             awBeats += dut.io.axiMaster.aw.payload.len.toInt + 1
-            if (debug) println(s"DBG bus [$runTag cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
+            SimLog.trace("SPILL")(s"bus [$runTag cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
           }
-          if (debug && cycles < 2000) traceCtl(cycles, runTag)
+          if (SimLog.isTrace && cycles < 2000) traceCtl(cycles, runTag)
           if (dut.io.outStream.stream.valid.toBoolean) {
             for (l <- 0 until dut.io.outStream.lanes if collected.length < outCount) {
               if (isInt) collected += dut.io.outStream.stream.payload(l).asInstanceOf[SInt].toInt.toDouble

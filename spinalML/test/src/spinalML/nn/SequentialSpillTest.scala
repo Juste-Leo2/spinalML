@@ -9,6 +9,7 @@ import spinal.lib.bus.amba4.axi.Axi4Config
 import spinal.lib.bus.amba4.axi.sim.{AxiMemorySim, AxiMemorySimConfig}
 import spinalML.dtypes.I8
 import spinalML.harness.MemoryHarness
+import spinalML.utils.SimLog
 
 /**
  * S2c end-to-end: a spilling Linear (K-pass GEMM) inside a real Sequential +
@@ -208,7 +209,7 @@ class SequentialSpillTest extends AnyFunSuite {
         val s = s"pf=${ctrl.io.passFirst.toBoolean} pl=${ctrl.io.passLast.toBoolean} " +
           s"pi=${ctrl.io.passIdx.toInt} rw=${ctrl.io.refetchW.toBoolean} " +
           s"br=${ctrl.io.biasReArm.toBoolean} ra=${ctrl.io.restartA.toBoolean}"
-        if (s != lastCtl) { println(s"S2c ctl [$runTag cyc=$cycles]: $s"); lastCtl = s }
+        if (s != lastCtl) { SimLog.trace("SPILL")(s"ctl [$runTag cyc=$cycles]: $s"); lastCtl = s }
       }
 
       // Collect up to 8 beats
@@ -231,22 +232,24 @@ class SequentialSpillTest extends AnyFunSuite {
       while (collected.length < 8 && cycles < timeout) {
         if (dut.io.outStream.stream.valid.toBoolean)
           collected += dut.io.outStream.stream.payload(0).asInstanceOf[SInt].toInt
-        if (label != "P=1") traceCtl()
-        val wab = (winLoSig.toInt, aBeatSig.toInt)
-        if (wab != lastWin) {
-          println(s"S2c winmon [$runTag cyc=$cycles]: winLo=${wab._1} aBeat=${wab._2} pi=${ctrl.io.passIdx.toInt}")
-          lastWin = wab
+        if (label != "P=1" && SimLog.isTrace) traceCtl()
+        if (SimLog.isTrace) {
+          val wab = (winLoSig.toInt, aBeatSig.toInt)
+          if (wab != lastWin) {
+            SimLog.trace("SPILL")(s"winmon [$runTag cyc=$cycles]: winLo=${wab._1} aBeat=${wab._2} pi=${ctrl.io.passIdx.toInt}")
+            lastWin = wab
+          }
         }
-        if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
-          println(s"S2c busmon [$runTag cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
+        if (SimLog.isTrace && dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
+          SimLog.trace("SPILL")(s"busmon [$runTag cyc=$cycles]: AR addr=0x${dut.io.axiMaster.ar.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.ar.payload.len.toInt + 1}")
         }
-        if (dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean) {
-          println(s"S2c busmon [$runTag cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
+        if (SimLog.isTrace && dut.io.axiMaster.aw.valid.toBoolean && dut.io.axiMaster.aw.ready.toBoolean) {
+          SimLog.trace("SPILL")(s"busmon [$runTag cyc=$cycles]: AW addr=0x${dut.io.axiMaster.aw.payload.addr.toBigInt.toString(16)} len=${dut.io.axiMaster.aw.payload.len.toInt + 1}")
         }
         tick(); cycles += 1
-        if (cycles % 4 == 0) {
+        if (SimLog.isTrace && cycles % 4 == 0) {
           val mon = memSim.memory.readBigInt(spillBase, 4)
-          if (mon != lastMon) { println(s"S2c spillmon [$runTag cyc=$cycles]: region=0x${mon.toString(16)}"); lastMon = mon }
+          if (mon != lastMon) { SimLog.trace("SPILL")(s"spillmon [$runTag cyc=$cycles]: region=0x${mon.toString(16)}"); lastMon = mon }
         }
       }
       println(s"S2c e2e debug [$runTag]: all-y=${collected.toSeq}")
