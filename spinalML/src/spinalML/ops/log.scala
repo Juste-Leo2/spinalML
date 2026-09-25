@@ -14,8 +14,8 @@ case class LogOp[T <: Data](
   shape: Seq[Int],
   lanes: Int,
   base: Double = Math.E,
-  // Option B (switch-aware): ROM/LUT constant rounding follows the
-  // elaboration mode (RNE vs legacy). Composed ops use the default (env).
+  // Switch-aware ROM/LUT constant rounding follows the elaboration mode
+  // (RNE vs legacy). Composed ops use the default (env).
   rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
   val bitWidth = dataType.getBitsWidth
@@ -54,7 +54,7 @@ case class LogOp[T <: Data](
     val bias = fType.bias
 
     // ln(2)/ln(b) in Q0.16 (e.g. base=e: 45426, base=10: 19728).
-    // Option B switch for coherence (invariant for e/10: neither product
+    // Switch-aware for coherence (invariant for e/10: neither product
     // is an exact .5 tie, but an arbitrary future base could tie).
     val log2ToBase = (if (rounding == RoundingMode.Rne) MathLUTs.roundRNE(Math.log(2.0) / Math.log(base) * 65536.0)
                       else Math.round(Math.log(2.0) / Math.log(base) * 65536.0)).toInt

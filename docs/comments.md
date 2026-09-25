@@ -51,10 +51,20 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 - **N5 bug IDs** : `NN-02`, `BUG-DDR-*`, `LAY-02` gardés (noms de
   tests/messages), explications gardées.
 
+## Dérivation `arithmetic`/`ops` RTL (zone 4c, validée)
+
+- **C1 contrats HW** : shapes/lanes/latences/reset et ordres (row-major,
+  `[K,K,C]`, Q-formats) en 1 ligne là où le code ne le dit pas.
+- **C2 sessions unwrap** : `OPS-02/04/05/07/09/10`, `Option B`, `DTYPE-06`,
+  `bisection M1.7` retirés ; règles et gardes expliqués en clair, gardés.
+- **C3 anglais partout** : commentaires + messages runtime traduits
+  (`cumsum`/`add`/`sub`/`cast` étaient en français).
+- **C4 structure** : bannières ASCII dehors ; labels d'algo par branche
+  gardés (PWL, algebraic, SPLIT/AGGREGATE) ; step-markers paraphrases
+  dehors.
+
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
-- **4c `arithmetic`/`ops` RTL** : à définir (pressenti : largeurs /
-  latence / reset en 1 ligne par branche).
 - **4d `layers`/`memory`** : à définir.
 - **4e `harness`/`examples`/`dtypes`** : à définir.
 - **4f Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).

@@ -13,7 +13,7 @@ import spinalML.memory.StreamDoubleBuffer
  * A is [M, K], B is [K, N].
  * Output C is [M, N].
  *
- * Streaming contract (OPS-07 / OPS-09): both inputs arrive in per-line padded
+ * Streaming contract: both inputs arrive in per-line padded
  * groups of exactly chunksK = ceil(K / lanes) full beats — per ROW for A,
  * per COLUMN (column-major) for B. The tail lanes of a partial group are
  * don't-care: the compute datapath masks them to zero (`validLane`), so
@@ -38,8 +38,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   // complete, so the table shrinks to min(temporal, M) x N slots — the sum
   // order (and therefore bit-exactness) is unchanged; only storage shrinks.
   temporal: Int = 0,
-  // S1 compute-side spill (docs/ddr_final_impl.md): K-pass slice engine. The
-  // op is deliberately slice-agnostic — each pass looks like one self-
+  // K-pass slice engine. The op is deliberately slice-agnostic — each pass looks like one self-
   // contained GEMM over the slice geometry (A [M, Ks], B [Ks, N]) chained by
   // the spill streams: pass 0 seeds zeros, passes > 0 seed from spillIn,
   // non-final passes drain M*N partials to spillOut, the final pass drains
@@ -88,8 +87,8 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     // it, a stale tileReady lets the next command start on the previous
     // command's data. See StreamDoubleBuffer.io.reArm.
     val reArm = in Bool()
-    // S1 spill ports (spill=true only): M*N full-width partials, row-major,
-    // lanes=1 — the same beat order as io.c. Level contract: the S2 pass
+    // Spill ports (spill=true only): M*N full-width partials, row-major,
+    // lanes=1 — the same beat order as io.c. Level contract: the pass
     // controller holds passFirst/passLast stable from pass-fire to passDone.
     val spillIn = if (spill) Some(slave(Tensor(accType, Seq(M, N), lanes = 1))) else None
     val spillOut = if (spill) Some(master(Tensor(accType, Seq(M, N), lanes = 1))) else None
@@ -99,9 +98,6 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     val passDone = if (spill) Some(out Bool()) else None
   }
   
-  // ==========================================
-  // LOGARITHMIC ADDER TREE
-  // ==========================================
   def buildAdderTree(inputs: Seq[TAcc], enable: Bool): TAcc = {
     if (inputs.length == 1) return inputs(0)
     
@@ -123,7 +119,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     buildAdderTree(nextStage, nextEnable)
   }
 
-  // Common accumulators (M rows, N cols)
+  // Whole MxN partial table, registered and index-muxed.
   val accumulators = Vec(Reg(accType), M * N)
   accumulators.foreach(acc => acc.init(acc.getZero))
   
@@ -137,16 +133,13 @@ case class MatmulOp[T <: Data, TAcc <: Data](
   io.a.stream.ready := False
   io.c.stream.valid := False
   io.c.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
-  // S1 spill-port defaults (no-ops when spill=false: the Options are empty).
+  // Spill-port defaults (no-ops when spill=false: the Options are empty).
   io.spillIn.foreach(_.stream.ready := False)
   io.spillOut.foreach(_.stream.valid := False)
   io.spillOut.foreach(_.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits)))
   io.passDone.foreach(_ := False)
 
   if (parallelN) {
-    // ==========================================
-    // PARALLEL N ARCHITECTURE
-    // ==========================================
     // B is buffered in N parallel StreamDoubleBuffers, each storing 1 column (K elements)
     val buffersB = Seq.fill(N)(StreamDoubleBuffer(dataType, paddedK, lanes))
     buffersB.foreach(_.io.reArm := io.reArm)
@@ -184,7 +177,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       stage2_a_masked(i) := Mux(RegNextWhen(validLane, stage1_fire), stage2_a(i), stage2_a(i).getZero)
     }
 
-    // N parallel multiplier arrays using universal DspMul (latency = 1)
+    // N parallel multiplier arrays (DspMul latency = 1)
     val multRegs = Seq.fill(N)(Vec(accType, lanes))
     for (n <- 0 until N) {
       for (i <- 0 until lanes) {
@@ -272,9 +265,6 @@ case class MatmulOp[T <: Data, TAcc <: Data](
     }
     
   } else {
-    // ==========================================
-    // SEQUENTIAL N ARCHITECTURE
-    // ==========================================
     // B is buffered in 1 StreamDoubleBuffer holding all N columns (size = paddedK * N)
     val bufferB = StreamDoubleBuffer(dataType, paddedK * N, lanes)
     bufferB.io.reArm := io.reArm
@@ -350,7 +340,7 @@ case class MatmulOp[T <: Data, TAcc <: Data](
       accTable(flatIdx) := nextAcc
     }
     
-    // S1 spill slice-engine FSM: the windowed-drain FSM above, plus per-row
+    // Spill slice-engine FSM: the windowed-drain FSM above, plus per-row
     // seeding (non-first passes) and a drain-target mux on exit (spill
     // region vs layer output). Seeding is row-interleaved — each row is
     // seeded just before its LoadA — because the window holds at most
@@ -713,7 +703,7 @@ object matmul {
     reArm: Option[Bool] = None,
     temporal: Int = 0,
     dspConfig: spinalML.dsp.DspConfig = spinalML.dsp.DspConfig.default,
-    // S1 spill threading (all None = legacy one-shot GEMM): the caller owns
+    // Spill threading (all None = legacy one-shot GEMM): the caller owns
     // the pass loop and provides the spill streams per pass.
     spill: Boolean = false,
     passFirst: Option[Bool] = None,
@@ -756,12 +746,11 @@ object matmul {
       spillSink.foreach(s => s.stream << matmulComp.io.spillOut.get.stream)
     }
     
-    // Connect the continuous batched streams directly to the 2D MatmulOp.
-    // MatmulOp natively loops back to stateWaitTile after each 2D matrix, allowing zero-overhead batching.
+    // MatmulOp loops back to stateWaitTile after each 2D matrix, allowing
+    // zero-overhead batching.
     matmulComp.io.a.stream << a.stream
     matmulComp.io.b.stream << b.stream
     
-    // Reconstruct a Tensor with the proper 3D/4D shape
     val outTensor = Tensor(accType, outShape, 1)
     outTensor.stream << matmulComp.io.c.stream
     outTensor

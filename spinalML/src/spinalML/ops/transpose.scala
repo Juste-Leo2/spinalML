@@ -7,8 +7,7 @@ import spinal.lib._
 import spinal.lib.fsm._
 import spinalML.tensors.Tensor
 
-// Transpose 2D tensor [M, N] to [N, M]
-// Assumes input stream provides elements row by row
+/** 2D transpose [M,N] -> [N,M]; row-major input, lanes = 1 only. */
 case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: Int) extends Component {
   require(M > 0 && N > 0, "Dimensions must be > 0")
   require((M * N) % lanes == 0, "Total elements must be multiple of lanes")
@@ -85,10 +84,9 @@ case class TransposeOp[T <: Data](dataType: HardType[T], M: Int, N: Int, lanes: 
       }
     }
     
-    val stateWaitEmpty: State = new State {
-      whenIsActive {
-         // Wait for the pipeline to empty before returning to write
-         when(!outValid || io.c.stream.ready) {
+     val stateWaitEmpty: State = new State {
+       whenIsActive {
+          when(!outValid || io.c.stream.ready) {
             goto(stateWrite)
          }
       }

@@ -7,12 +7,12 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 
 /**
- * CumSumOp: Somme cumulée (Cumulative Sum) le long de la dimension extérieure (L).
- * Idéal pour Mamba2, State Space Models et Linear Attention.
- * Input shape: [L, C] (ex: [SeqLen, Dim])
+ * CumSumOp: cumulative sum along the outer (L) dimension.
+ * Ideal for Mamba2, State Space Models and Linear Attention.
+ * Input shape: [L, C] (e.g. [SeqLen, Dim])
  */
 case class CumSumOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
-  require(shape.length >= 2, "CumSumOp supporte actuellement les tenseurs d'au moins 2D [..., L, C]")
+  require(shape.length >= 2, "CumSumOp currently supports tensors of at least 2D [..., L, C]")
   
   val rank = shape.length
   val L = shape(rank - 2)
@@ -25,7 +25,7 @@ case class CumSumOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: In
     val out = master(Tensor(dataType, shape, lanes))
   }
 
-  // Compteurs pour suivre la position dans le flux
+  // Position counters tracking the stream location
   val chunkCounter = Counter(chunks)
   val lCounter = Counter(L)
   
@@ -39,9 +39,9 @@ case class CumSumOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: In
   
   val isFirstL = lCounter.value === 0
 
-  // La somme cumulée a besoin de l'accumulateur de la ligne précédente (L-1).
-  // Puisque les données arrivent en streaming, l'élément (L-1, c) est passé exactement 
-  // `chunks` cycles plus tôt ! On utilise un Shift Register (qui se synthétise en SRL très efficace).
+  // The cumsum needs the previous-row (L-1) accumulator. Since data
+  // streams in, element (L-1, c) passed exactly `chunks` cycles earlier!
+  // A shift register is used (synthesizes to efficient SRL).
   
   val sumResult = Vec(dataType, lanes)
   val prevValDelayed = Delay(sumResult, cycleCount = chunks, when = fire, init = sumResult.getZero)
@@ -53,11 +53,11 @@ case class CumSumOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: In
       case (a: SInt, b: SInt) => (a + b).resized.asInstanceOf[T]
       case (a: UInt, b: UInt) => (a + b).resized.asInstanceOf[T]
       case (a: spinalML.dtypes.FloatML, b: spinalML.dtypes.FloatML) => spinalML.utils.Float.add(a, b).asInstanceOf[T]
-      case _ => throw new Exception("Type non supporté pour CumSum")
+      case _ => throw new Exception("Unsupported data type for CumSum")
     })
   }
 
-  // On pipeline la sortie pour absorber le chemin combinatoire de l'additionneur
+  // Pipeline the output to absorb the adder's combinational path
   io.out.stream << io.in.stream.translateWith(sumResult).m2sPipe()
 }
 

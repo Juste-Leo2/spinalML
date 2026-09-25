@@ -37,7 +37,6 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
   val loadCounter = Counter(N)
   val aCounter = Counter(cycles)
   
-  // Default values
   io.a.stream.ready := False
   io.b.stream.ready := False
   io.c.stream.valid := False
@@ -66,10 +65,8 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
         io.a.stream.ready := io.c.stream.ready
         io.c.stream.valid := io.a.stream.valid
         
-        // Calculate the starting column index for this chunk
         val startCol = (aCounter.value * lanes) % N
         
-        // Broadcast addition
         for (i <- 0 until lanes) {
           val colIdx = (startCol + i) % N
           val biasVal = biasMem(colIdx.resized)

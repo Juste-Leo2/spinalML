@@ -26,13 +26,10 @@ case class Seq2ColOp[T <: Data](dataType: HardType[T], L: Int, C: Int, K: Int, o
   
   val inTensor = if (inLanes != 1) repack(io.a, 1) else io.a
   
-  // Shift register holding the flattened window.
-  // We shift it such that the oldest elements are at the beginning (index 0)
-  // and the newest elements are at the end (index windowSize - 1).
+  // Shift register, oldest elements at index 0, newest at the end.
   val shiftReg = Vec(Reg(dataType), windowSize)
   shiftReg.foreach(r => r.init(r.getZero.asInstanceOf[T]))
   
-  // Temporary buffer to hold a single temporal step (C channels)
   val tempVec = Vec(Reg(dataType), C)
   tempVec.foreach(r => r.init(r.getZero.asInstanceOf[T]))
   
@@ -44,7 +41,6 @@ case class Seq2ColOp[T <: Data](dataType: HardType[T], L: Int, C: Int, K: Int, o
   inTensor.stream.ready := False
   io.c.stream.valid := False
   
-  // Map output payload directly from shift register based on current chunk
   for(i <- 0 until outLanes) {
     val flatIndex = (outChunkCount.value * outLanes) + i
     io.c.stream.payload(i) := shiftReg(flatIndex.resized)
@@ -59,11 +55,9 @@ case class Seq2ColOp[T <: Data](dataType: HardType[T], L: Int, C: Int, K: Int, o
           channelCount.increment()
           
           when(channelCount.willOverflowIfInc) {
-            // Shift the register by C positions
             for (i <- 0 until windowSize - C) {
               shiftReg(i) := shiftReg(i + C)
             }
-            // Insert newest temporal step at the end
             for (c <- 0 until C - 1) {
               shiftReg(windowSize - C + c) := tempVec(c)
             }

@@ -6,7 +6,6 @@ import spinal.core._
 import spinal.lib._
 import spinalML.tensors.Tensor
 
-// Hardware Gearbox component to convert stream widths
 case class RepackOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, newLanes: Int,
                                withFlush: Boolean = false) extends Component {
   val io = new Bundle {
@@ -19,8 +18,8 @@ case class RepackOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: In
   }
 
   if (!withFlush) {
-    // ---- Legacy SpinalHDL width adapter: battle-tested pacing everywhere
-    //      the stream is guaranteed group-aligned (e.g. image rows). ----
+    // Legacy SpinalHDL width adapter: battle-tested where the stream is
+    // guaranteed group-aligned (e.g. image rows).
     val bitStreamIn = io.a.stream.translateWith(io.a.stream.payload.asBits)
     val bitStreamOut = Stream(Bits(newLanes * widthOf(dataType) bits))
     StreamWidthAdapter(bitStreamIn, bitStreamOut)
@@ -31,7 +30,6 @@ case class RepackOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: In
     io.isEmpty := True
 
   } else {
-    // ---- Flushable structured gearbox ----
     val inW = lanes * widthOf(dataType)
     val outW = newLanes * widthOf(dataType)
 
@@ -90,17 +88,15 @@ object repack {
    * This does not modify the logical ML shape of the tensor.
    *
    * withFlush = true (structured gearbox) attaches a hard `ready := !full`
-   * to the caller's upstream. ATTACHMENT RULE (bisection M1.7,
-   * docs/open-mysteries.md): never hang this directly onto a shared fan-out
-   * branch without a local elastic stage — use a depth>=2 FIFO or a pipe pair
-   * at the attach point. Safe usages today: inside DMAReaders behind the
+   * to the caller's upstream. ATTACHMENT RULE: never hang this directly
+   * onto a shared fan-out branch without a local elastic stage — use a
+   * depth>=2 FIFO or a pipe pair at the attach point. Safe usages today: inside DMAReaders behind the
    * empty-gated cmd.ready (weight/bias path). Known-unsafe: the Linear-input
    * repack in nn/Sequential.scala (see guard comment there).
    */
   def apply[T <: Data](a: Tensor[T], newLanes: Int, reArm: Option[Bool] = None,
                        created: scala.collection.mutable.ArrayBuffer[RepackOp[_]] = null,
                        withFlush: Boolean = false): Tensor[T] = {
-    // If the lanes are already correct, return the tensor directly
     if (a.lanes == newLanes) return a
 
     def mk(old: Tensor[T], nl: Int): Tensor[T] = {

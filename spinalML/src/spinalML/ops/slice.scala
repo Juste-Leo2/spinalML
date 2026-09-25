@@ -12,7 +12,7 @@ case class SliceAxis0Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
   val L_out = end - start
   require(start >= 0 && end <= L_in && start < end, s"Invalid slice range [$start:$end] for length $L_in")
 
-  // OPS-04 contract: start/end are axis-0 cell indices; one cell =
+  // Beat-counting contract: start/end are axis-0 cell indices; one cell =
   // beatsPerRow beats on the wire (same beat-counting as ConcatenateAxis0Op).
   // 1D legacy: shape.head counts beats directly. Rows must be beat-aligned.
   val beatsPerRow: Int =
@@ -50,20 +50,17 @@ case class SliceAxis0Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes
   }
   
   when(counter.value < startU) {
-    // Drop
     io.a.stream.ready := True
     when(io.a.stream.valid) {
       counter.increment()
     }
   } elsewhen(inRange) {
-    // Forward
     io.c.stream.valid := io.a.stream.valid
     io.a.stream.ready := io.c.stream.ready
     when(io.a.stream.valid && io.c.stream.ready) {
       counter.increment()
     }
   } otherwise {
-    // Drop the rest
     io.a.stream.ready := True
     when(io.a.stream.valid) {
       counter.increment()

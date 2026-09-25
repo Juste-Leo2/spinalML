@@ -13,7 +13,6 @@ case class SubOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val c = master(Tensor(dataType, shape, lanes))
   }
   
-  // SpinalHDL StreamJoin automatically handles the valid/ready handshake between a and b
   val syncStream = StreamJoin.arg(io.a.stream, io.b.stream)
   
   val payloadResult = Vec(dataType, lanes)
@@ -28,7 +27,7 @@ case class SubOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
         invertedB.sign := !valB.sign
         payloadResult(i).assignFrom(spinalML.utils.Float.add(valA, invertedB).asInstanceOf[T])
       }
-      case _ => throw new Exception("Type de donnée non supporté pour l'opération sub")
+      case _ => throw new Exception("Unsupported data type for Sub")
     }
   }
   
@@ -37,8 +36,8 @@ case class SubOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
 
 object sub {
   def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {
-    require(a.shape == b.shape, "Les Tensors doivent avoir la même forme (shape)")
-    require(a.lanes == b.lanes, "Les Tensors d'entrée doivent avoir la même largeur (lanes)")
+    require(a.shape == b.shape, "Tensors must have the same shape")
+    require(a.lanes == b.lanes, "Input tensors must have the same lanes")
     
     val subComp = SubOp(a.dataType, a.shape, a.lanes)
     subComp.io.a <> a

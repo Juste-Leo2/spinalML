@@ -13,7 +13,6 @@ case class AddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
     val c = master(Tensor(dataType, shape, lanes))
   }
   
-  // SpinalHDL StreamJoin automatically handles the valid/ready handshake between a and b
   val syncStream = StreamJoin.arg(io.a.stream, io.b.stream)
   
   val payloadResult = Vec(dataType, lanes)
@@ -22,7 +21,7 @@ case class AddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
       case (valA: SInt, valB: SInt) => payloadResult(i).assignFrom((valA + valB).asInstanceOf[T])
       case (valA: UInt, valB: UInt) => payloadResult(i).assignFrom((valA + valB).asInstanceOf[T])
       case (valA: spinalML.dtypes.FloatML, valB: spinalML.dtypes.FloatML) => payloadResult(i).assignFrom(spinalML.utils.Float.add(valA, valB).asInstanceOf[T])
-      case _ => throw new Exception("Type de donnée non supporté pour l'opération add")
+      case _ => throw new Exception("Unsupported data type for Add")
     }
   }
   
@@ -31,8 +30,8 @@ case class AddOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
 
 object add {
   def apply[T <: Data](a: Tensor[T], b: Tensor[T]): Tensor[T] = {
-    require(a.shape == b.shape, "Les Tensors doivent avoir la même forme (shape)")
-    require(a.lanes == b.lanes, "Les Tensors d'entrée doivent avoir la même largeur (lanes)")
+    require(a.shape == b.shape, "Tensors must have the same shape")
+    require(a.lanes == b.lanes, "Input tensors must have the same lanes")
     
     val addComp = AddOp(a.dataType, a.shape, a.lanes)
     addComp.io.a <> a
