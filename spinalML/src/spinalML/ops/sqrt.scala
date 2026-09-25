@@ -10,9 +10,9 @@ import spinalML.utils.{MathLUTs, UnaryLUTOp}
 import spinalML.{RoundingConfig, RoundingMode}
 
 case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false,
-                             // Option B (switch-aware): ROM/LUT constant rounding
-                             // follows the elaboration mode (RNE vs legacy).
-                             // Composed ops instantiate with the default (env).
+                              // Switch-aware ROM/LUT constant rounding follows
+                              // the elaboration mode (RNE vs legacy).
+                              // Composed ops instantiate with the default (env).
                              rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
@@ -20,7 +20,7 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
     val c = master(Tensor(dataType, shape, lanes))
   }
 
-  // OPS-02: negative inputs saturate to +0 (no NaN in the fabric). The LUT
+  // Negative inputs saturate to +0 (no NaN in the fabric). The LUT
   // and PWL ROMs encode this directly (no segment ever mixes signs, so every
   // negative entry evaluates to exactly 0); the algebraic path muxes below.
   val mathFn = (x: Double) => if (x < 0.0) 0.0 else Math.sqrt(x)
@@ -56,7 +56,7 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
         val y = Math.sqrt(x) // y is in [1.0, 2.0)
         
         var m_out_frac = y - 1.0
-        // Option B switch: half-even (RNE) vs legacy half-up; the carry
+        // Half-even (RNE) vs legacy half-up; the carry
         // below is kept in both modes (ties can round up to 2^mantBits).
         var m_out_int = (if (rounding == RoundingMode.Rne) MathLUTs.roundRNE(m_out_frac * (1 << mantBits))
                          else Math.round(m_out_frac * (1 << mantBits))).toInt
@@ -90,7 +90,7 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
       val readVal = sqrtLuts(i).readSync(lutIndex, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)
-      // OPS-02: a sqrt output is never negative (non-negative inputs yield
+      // A sqrt output is never negative (non-negative inputs yield
       // non-negative results). A negative input — including -0, since the
       // fabric has no signed zero — saturates to +0 via expIsNeg below.
       outX.sign := False
@@ -133,7 +133,7 @@ case class SqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
     io.c.stream.payload := outPayload
     
   } else {
-    // PWL Approximation
+    // PWL Approximation for Int > 8 bits
     val indexBits = 8
     val numSegments = 1 << indexBits
     

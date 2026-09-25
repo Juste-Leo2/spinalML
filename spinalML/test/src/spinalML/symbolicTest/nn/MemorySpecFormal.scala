@@ -8,8 +8,7 @@ import spinalML.memory.MemoryKind
 import spinalML.nn.{CsrMap, MemorySpec}
 
 /**
- * Formal pinning of the Phase-1/2 DDR plumbing contracts
- * (docs/ddr_impl.md).
+ * Formal pinning of the DDR plumbing contracts.
  *
  * `CsrMap` and `MemorySpec` are pure-Scala elaboration-time structures, so
  * there is no temporal behavior to prove here. This spec still belongs in the
@@ -25,7 +24,7 @@ import spinalML.nn.{CsrMap, MemorySpec}
  *  5. Legacy compat: `MemorySpec` defaults still equal the historical
  *     adapter bases (BramAdapter/UartSoC `imgBase = 0x10000`,
  *     `weightBase = 0x20000`), so the default descriptor elaborates exactly
- *     like the pre-Phase-2 RTL.
+ *     like the legacy RTL.
  *
  * Properties 1-2 are proven universally over an anyseq selector covering all
  * thirteen wired addresses; 3-5 are solver-discharged constant equalities plus

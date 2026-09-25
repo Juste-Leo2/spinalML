@@ -39,7 +39,6 @@ case class DMAWriterTestWrapper(maxBurstBeats: Int = 4) extends Component {
   io.axiMaster.w  << writer.io.axiMaster.w
   writer.io.axiMaster.b << io.axiMaster.b
 
-  // Read channels tied off
   io.axiMaster.ar.valid := False
   io.axiMaster.ar.payload.assignDontCare()
   io.axiMaster.r.ready := False
@@ -75,7 +74,6 @@ case class DMAWriterPartialTestWrapper() extends Component {
   io.axiMaster.w  << writer.io.axiMaster.w
   writer.io.axiMaster.b << io.axiMaster.b
 
-  // Read channels tied off
   io.axiMaster.ar.valid := False
   io.axiMaster.ar.payload.assignDontCare()
   io.axiMaster.r.ready := False
@@ -111,7 +109,6 @@ case class DMAWriterSubByteTestWrapper() extends Component {
   io.axiMaster.w  << writer.io.axiMaster.w
   writer.io.axiMaster.b << io.axiMaster.b
 
-  // Read channels tied off
   io.axiMaster.ar.valid := False
   io.axiMaster.ar.payload.assignDontCare()
   io.axiMaster.r.ready := False

@@ -10,7 +10,7 @@ import spinalML.activations.SigmoidTestComp
 
 // Sigmoid is a composition of validated primitives (float) or a quantized LUT
 // (int8). We only check flow control (no data drop) like SoftmaxFormal.
-// Wave 5 step C re-adds the I8 suite removed with OPS-03.
+// The I8 suite below re-covers the quantized-LUT path.
 
 class SigmoidFormal_I8 extends Component {
   val dut = FormalDut(SigmoidTestComp(I8()))

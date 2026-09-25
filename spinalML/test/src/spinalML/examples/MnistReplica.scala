@@ -18,10 +18,10 @@ import spinalML.{RoundingConfig, RoundingMode}
  *    its mantissa field — this is how subnormal-ENCODED DDR constants
  *    (weights/bias bytes) behave once they reach the datapath;
  *  - rounding is round-to-nearest-even everywhere (mul, add);
- *  - overflow saturates to 448 for E4M3 (no infinity, DTYPE-07) and to the
+ *  - overflow saturates to 448 for E4M3 (no infinity) and to the
  *    infinity encoding (exponent all ones) otherwise;
  *  - `fromSInt` rounds the mantissa to nearest-even under [[Rne]] and
- *    truncates under [[Truncate]] (elaboration switch, DTYPE-06), mirroring
+ *    truncates under [[Truncate]] (elaboration switch), mirroring
  *    the RTL. The default follows `RoundingConfig.current`, exactly like
  *    every `rounding` parameter of the RTL.
  */
@@ -31,8 +31,8 @@ object HWFloat {
 
   val PZERO = F(false, 0, 0)
 
-  /** NaN detection/payload mirroring spinalML.utils.Float (Wave 5,
-    * propagation-only). Sign rule: first NaN operand's sign. */
+  /** NaN detection/payload mirroring spinalML.utils.Float
+    * (propagation-only). Sign rule: first NaN operand's sign. */
   private def isE4M3H(expBits: Int, mantBits: Int): Boolean =
     spinalML.utils.Float.isE4M3(expBits, mantBits)
 
@@ -47,7 +47,7 @@ object HWFloat {
   def nanProp(a: F, b: F, expBits: Int, mantBits: Int): F =
     nanOf(if (isNaN(a, expBits, mantBits)) a.s else b.s, expBits, mantBits)
 
-  /** Saturation encoding/predicate mirroring spinalML.utils.Float (DTYPE-07). */
+  /** Saturation encoding/predicate mirroring spinalML.utils.Float. */
   private def satFields(expBits: Int, mantBits: Int): (Int, Int) =
     spinalML.utils.Float.satEncoding(expBits, mantBits)
 
@@ -171,7 +171,7 @@ object HWFloat {
   }
 
   def fmax(a: F, b: F, expBits: Int, mantBits: Int): F =
-    // Wave 5: mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN
+    // Mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN
     // (bare triples carry no format, so the guard lives here, not in gt).
     if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits)) b
     else if (gt(a, b)) a else b
@@ -180,8 +180,8 @@ object HWFloat {
    * Port of `spinalML.utils.Float.fromSInt`: mantissa conversion with
    * round-to-nearest-even under [[Rne]] (guard + sticky on the dropped
    * window, increment with carry into the exponent) and legacy truncation
-   * under [[Truncate]] (DTYPE-06). Saturation keeps the input sign and uses
-   * the RTL encoding (DTYPE-07: E4M3 -> 448, others -> inf).
+   * under [[Truncate]]. Saturation keeps the input sign and uses
+   * the RTL encoding (E4M3 -> 448, others -> inf).
    */
   def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int,
                rounding: RoundingMode = RoundingConfig.current): F = {
@@ -217,7 +217,7 @@ object HWFloat {
   /**
    * Verbatim port of `spinalML.utils.Float.doubleToFields`: banker's
    * rounding on the mantissa, overflow -> saturation encoding (448 for
-   * E4M3, infinity otherwise, DTYPE-07), underflow -> zero (no subnormals).
+   * E4M3, infinity otherwise), underflow -> zero (no subnormals).
    */
   def fromDouble(value: Double, expBits: Int, mantBits: Int): F = {
     val bias = (1 << (expBits - 1)) - 1
@@ -331,7 +331,7 @@ object MnistReplica {
 
   /** Shared tail: logits[o] = (+0 + tree(act . w[o])) + b[o], RN-rounded.
     *
-    * M2: the hardware matmul splits the K axis into chunks of `wLanes`
+    * The hardware matmul splits the K axis into chunks of `wLanes`
     * lanes, accumulating `fadd(acc, tree(chunk))` per chunk in order — a
     * full-width single tree when wLanes == K (legacy, byte-identical). */
   def linearLayer(acts: Seq[F], w: Seq[Seq[F]], b: Seq[F], expBits: Int, mantBits: Int,

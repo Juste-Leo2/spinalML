@@ -16,15 +16,13 @@ object Float {
   def isE4M3(expBits: Int, mantBits: Int): Boolean = expBits == 4 && mantBits == 3
 
   /**
-   * Saturation encoding for float overflow (Wave 4 DTYPE-07, compile-time).
+   * Saturation encoding for float overflow (compile-time).
    *
    * E4M3 saturates to its max finite value 448 (exponent field 15, mantissa
    * 6), per the `float8_e4m3fn` convention (no infinity). Every other format
    * saturates to canonical infinity (exponent all-ones, mantissa zero).
-   *
-   * NaN (`e4m3fn` mantissa 7 at field 15, decoded 480 by the goldens) is
-   * never emitted here: full NaN propagation is Wave 5
-   * (see `docs/rounding_policy.md` §5).
+   * NaN (E4M3 mantissa 7 at field 15) is never emitted here: full NaN
+   * propagation lives in the arithmetic below.
    */
   def satEncoding(expBits: Int, mantBits: Int): (Int, Int) = {
     if (isE4M3(expBits, mantBits)) (15, 6)
@@ -32,7 +30,7 @@ object Float {
   }
 
   /**
-   * Saturation predicate for float overflow (Wave 4 DTYPE-07, elaborated).
+   * Saturation predicate for float overflow (elaborated).
    *
    * Returns True when the computed exponent/mantissa pair is at or past the
    * last finite value. E4M3 keeps finite values on the field 15
@@ -50,7 +48,7 @@ object Float {
   }
 
   /**
-   * NaN detection (Wave 5, propagation-only).
+   * NaN detection (propagation-only).
    *
    * E4M3 (`fn`) reserves a single NaN slot (exponent field 15, mantissa
    * all-ones); every other format treats any all-ones exponent with nonzero
@@ -65,7 +63,7 @@ object Float {
   }
 
   /**
-   * Canonical NaN output encoding (Wave 5, propagation-only).
+   * Canonical NaN output encoding (propagation-only).
    *
    * E4M3: the single slot (15, 7). Other formats: (all-ones exponent,
    * mantissa 1). Never emitted spontaneously — saturation keeps producing
@@ -79,7 +77,6 @@ object Float {
 
   /**
    * Hardware combinatorial circuit to multiply two FloatML types.
-   * This logic will be synthesized into DSP blocks and LUTs.
    */
   def mul(a: FloatML, b: FloatML): FloatML = {
     require(a.expBits == b.expBits && a.mantBits == b.mantBits, "Floats must be of same format to multiply")
@@ -136,7 +133,7 @@ object Float {
       mantOvM.asUInt.intoSInt.resized                 // rounding carry adjusts the exponent
 
     // 5. Overflow / Underflow Checks and Final Assignment
-    // Wave 5: a NaN operand propagates (canonical encoding, first-NaN
+    // A NaN operand propagates (canonical encoding, first-NaN
     // sign); saturation never emits NaN spontaneously (448/inf).
     val aNaNM = isNaN(expBits, mantBits, a.exponent, a.mantissa)
     val bNaNM = isNaN(expBits, mantBits, b.exponent, b.mantissa)
@@ -191,7 +188,7 @@ object Float {
     val b_zero = b.exponent === 0
     
     val res = Bool()
-    // Wave 5: any comparison with NaN is False (IEEE); max() therefore
+    // Any comparison with NaN is False (IEEE); max() therefore
     // returns the non-NaN operand, like fmax.
     val aNaNG = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
     val bNaNG = isNaN(b.expBits, b.mantBits, b.exponent, b.mantissa)
@@ -287,7 +284,7 @@ object Float {
     val sumIsZero = mantSumExt === 0
     val (satExpA, satMantA) = satEncoding(expBits, mantBits)
 
-    // Wave 5: a NaN operand propagates (canonical encoding, first-NaN
+    // A NaN operand propagates (canonical encoding, first-NaN
     // sign); saturation never emits NaN spontaneously (448/inf).
     val aNaNA = isNaN(expBits, mantBits, a.exponent, a.mantissa)
     val bNaNA = isNaN(expBits, mantBits, b.exponent, b.mantissa)
@@ -395,8 +392,8 @@ object Float {
   /**
    * Hardware circuit to convert an SInt into a FloatML.
    *
-   * DTYPE-06: the mantissa window rounds to nearest-even (guard + sticky on
-   * the dropped bits, increment with carry into the exponent) under [[Rne]];
+   * The mantissa window rounds to nearest-even (guard + sticky on the
+   * dropped bits, increment with carry into the exponent) under [[Rne]];
    * [[Truncate]] keeps the legacy truncation bit-exact. Elaboration-only
    * switch: the RNE increment is not built in truncate mode (0 LUT).
    */
@@ -428,7 +425,7 @@ object Float {
     val W_padded = W + paddingBits
     val mantissa = paddedVal(W_padded - 2 downto W_padded - 1 - mantBits)
 
-    // DTYPE-06 rounding: the window above truncates `dropBits` low bits
+    // The window above truncates `dropBits` low bits
     // (window bottom = bit dropBits, guard = bit dropBits-1, sticky = OR of
     // the rest). RNE rounds up on guard && (sticky || tie-to-even); the
     // increment can overflow the mantissa and carry into the exponent
@@ -467,13 +464,10 @@ object Float {
   /**
    * Hardware circuit to convert a FloatML into an SInt (OPS-10).
    *
-   * Value = significand x 2^e (e = unbiased exponent). The binary point is
-   * shifted by (e - mantBits): left shifts are exact, right shifts drop
-   * fraction bits rounded to nearest-even (guard + sticky, tie-to-even)
-   * under [[Rne]] or truncated under [[Truncate]] (elaboration-only switch,
-   * RNE logic not built in truncate mode). The rounded magnitude saturates
-   * to the SInt range (round-then-saturate: e.g. 127.5 -> 127 on I8);
-   * -0 and exponent-zero flush to +0. The exact -2^(W-1) is preserved.
+   * Value = significand x 2^e (e = unbiased exponent). Right shifts drop
+   * fraction bits rounded to nearest-even under [[Rne]] or truncated under
+   * [[Truncate]]; the rounded magnitude saturates to the SInt range
+   * (round-then-saturate: e.g. 127.5 -> 127 on I8). -0 flushes to +0.
    */
   def toSInt(a: FloatML, outWidth: Int,
              rounding: RoundingMode = RoundingConfig.current): SInt = {
@@ -583,7 +577,7 @@ object Float {
     c.mantissa := (a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits)
 
     val expSInt = a.exponent.intoSInt.resize(outExpBits + 2 bits) + biasDelta
-    // Wave 5: NaN inputs propagate to the output format's canonical NaN
+    // NaN inputs propagate to the output format's canonical NaN
     // (this also covers same-format widening, where the saturation branch
     // below would otherwise collapse NaN to inf).
     val inNaNW = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
@@ -605,13 +599,10 @@ object Float {
 
   /**
    * Runtime round-to-nearest-even of a FloatML into a narrower format
-   * (expBits not necessarily smaller, mantBits can shrink). Mirrors the
-   * golden model's dtype.from_float rounding: mantissa overflow carries
-   * into the exponent, underflow yields zero, overflow saturates to the
-   * saturation encoding (448 for E4M3, inf-encoding otherwise).
-   *
-   * OPS-10: switch-aware (elaboration-only). [[Truncate]] drops the
-   * increment and keeps the legacy window bit-exact.
+   * (OPS-10, switch-aware: [[Truncate]] drops the increment and keeps the
+   * legacy window bit-exact). Mirrors the golden model's dtype.from_float
+   * rounding: mantissa overflow carries into the exponent, underflow yields
+   * zero, overflow saturates (448 for E4M3, inf-encoding otherwise).
    */
   def roundTo(a: FloatML, outExpBits: Int, outMantBits: Int,
               rounding: RoundingMode = RoundingConfig.current): FloatML = {
@@ -624,7 +615,7 @@ object Float {
 
     val aZero = a.exponent === 0 && a.mantissa === 0
 
-    // Wave 5: NaN inputs propagate to the output format's canonical NaN
+    // NaN inputs propagate to the output format's canonical NaN
     // (sign preserved), on both the narrowing and widening paths below.
     val inNaNR = isNaN(a.expBits, a.mantBits, a.exponent, a.mantissa)
     val (nanExpR, nanMantR) = nanEncoding(outExpBits, outMantBits)
@@ -671,8 +662,8 @@ object Float {
         // mantissa while conditionally rewriting it, which Spinal flags as a
         // combinational loop whenever the output is E4M3 (its saturates()
         // branch reads the mantissa; other formats only read the exponent).
-        // Latent until Wave 5: no caller ever widened INTO E4M3 before
-        // (same-format casts are passthrough, widenings target BF16/FP32).
+        // No caller ever widened INTO E4M3 before (same-format casts are
+        // passthrough, widenings target BF16/FP32), so this stayed latent.
         val mantW = ((a.mantissa << (outMantBits - a.mantBits)).resize(outMantBits))
         c.mantissa := mantW
         val expSInt = a.exponent.intoSInt.resize(expSIntWidth bits) + biasDelta

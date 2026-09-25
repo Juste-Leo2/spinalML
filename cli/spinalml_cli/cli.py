@@ -106,8 +106,6 @@ def run_tool(tool_name: str, args: List[str], exit_on_error: bool = True) -> int
     combined_path = os.pathsep.join(new_paths) + os.pathsep + existing_path
     os.environ["PATH"] = combined_path
     os.environ["Path"] = combined_path
-    
-    # Run the command
     try:
         work_dir = str(get_active_framework_root() if tool_name == "mill" else get_project_root())
         result = subprocess.run(cmd, cwd=work_dir)
@@ -289,7 +287,7 @@ def _run_single_test_file_once(
             if stress and stress_level not in ("light", "heavy"):
                 typer.echo(f"Error: --stress-level must be light or heavy (got {stress_level}).", err=True)
                 raise typer.Exit(code=2)
-            # T2: under --stress the sim top is a ChaosDut wrapper (DUT +
+            # Under --stress the sim top is a ChaosDut wrapper (DUT +
             # DramChaosInterposer + exposed ports); the oracle code below runs
             # unchanged against wrapper.dut, and runStress shares run's engine.
             wrapper_code = ""

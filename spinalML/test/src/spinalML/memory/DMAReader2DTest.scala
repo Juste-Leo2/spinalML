@@ -83,7 +83,6 @@ class DMAReader2DTest extends AnyFunSuite {
     }.doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize inputs
       dut.io.cmd.valid #= false
       dut.io.cmd.baseAddress #= 0
       dut.io.cmd.stride #= 0

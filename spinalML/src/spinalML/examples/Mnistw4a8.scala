@@ -23,9 +23,9 @@ import spinalML.dtypes._
 case class Mnistw4a8(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 4),
   override val tileHeight: Int = -1,
-  // M2: overridable spec — tests inject Linear weightLanes via copy().
+  // Overridable spec — tests inject Linear weightLanes via copy().
   override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnistw4a8.defaultModelSpec,
-  // M3: windowed matmul discharge — the synthesized W4A8 target uses 16
+  // Windowed matmul discharge — the synthesized W4A8 target uses 16
   // rows-in-flight (the Conv accumulation is the LUT wall); 0 or a larger
   // value overrides. Kept separate from the BF16/Mnist top (legacy 0).
   override val temporal: Int = 16
@@ -49,7 +49,7 @@ object Mnistw4a8 {
     MaxPool2D(poolSize = 2, stride = 2),   // still in the int domain (I16)
     Cast(FP8_E4M3(), scales = Seq(Mnistw4a8Weights.convScale)), // dequant boundary
     Flatten(),
-    // M2: explicit K-chunk width — 4 lanes keeps the matmul minimal for the
+    // Explicit K-chunk width — 4 lanes keeps the matmul minimal for the
     // LUT budget (72 chunks of 4); the oracle reproduces the same chunk fold.
     Linear(inFeatures = 288, outFeatures = 10,
       customWeightType = Some(FP8_E4M3()), weightLanes = 4)

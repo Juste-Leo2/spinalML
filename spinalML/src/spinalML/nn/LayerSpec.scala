@@ -13,10 +13,8 @@ trait LayerSpec {
   def outType(default: HardType[Data]): HardType[Data] = default
   def weightType(default: HardType[Data]): HardType[Data] = default
   
-  // Predicts the output shape given an input shape
   def getOutShape(inShape: Seq[Int]): Seq[Int]
   
-  // Computes the number of elements required for weights and biases
   def getWeightShape(): Seq[Int]
   def getBiasShape(): Seq[Int]
 }
@@ -43,8 +41,7 @@ trait SpillableGEMM extends LayerSpec {
  * which Sequential sign-extends to the activation width so the integer
  * matmul consumes them. Mixed precision on Conv2D is therefore supported
  * only in the integer domain — unlike Linear, there is no float-dequant
- * path (float activations require float weights). See
- * docs/bugs/2026-08-w4a8-session.md.
+ * path (float activations require float weights).
  */
 case class Conv2D(
   inChannels: Int, 
@@ -52,17 +49,17 @@ case class Conv2D(
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
-  // K-axis chunk width of the matmul weight beats (M2 pattern, mirrors
+  // K-axis chunk width of the matmul weight beats (mirrors
   // Linear.weightLanes): the weight memory layout is unchanged (one
   // flattened K*K*inChannels row per output channel); only the per-beat lane
   // count and the matmul's internal K chunking change.
   // -1 (default) = kernelSize*kernelSize, the legacy full row-group width.
   // Any other value must divide K*K*inChannels (dense beats == column
-  // groups, no zero-padding — see the OPS-07 note in Sequential).
+  // groups, no zero-padding).
   weightLanes: Int = -1,
   lanes: Int = 1,
-  // P1 compute-side spill (docs/ddr_spill_ops.md): K-slice width streamed per
-  // pass over the flattened K*K*inChannels axis (same gabarit as Linear).
+  // K-slice width streamed per pass over the flattened K*K*inChannels axis
+  // (same gabarit as Linear).
   // -1 (default) = no spill, legacy one-shot convolution.
   spillKSlice: Int = -1
 ) extends SpillableGEMM {
@@ -87,7 +84,6 @@ case class Conv2D(
     val w = inShape(1)
     val hOut = h - kernelSize + 1
     val wOut = w - kernelSize + 1
-    // Preserving spatial topology: (H_out, W_out, C_out)
     Seq(hOut, wOut, outChannels)
   }
   
@@ -97,8 +93,8 @@ case class Conv2D(
 
 case class ReLU() extends LayerSpec {
   override def getOutShape(inShape: Seq[Int]): Seq[Int] = inShape
-  override def getWeightShape(): Seq[Int] = Seq(0) // No weights
-  override def getBiasShape(): Seq[Int] = Seq(0)   // No bias
+  override def getWeightShape(): Seq[Int] = Seq(0)
+  override def getBiasShape(): Seq[Int] = Seq(0)
 }
 
 case class Linear(
@@ -107,15 +103,15 @@ case class Linear(
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
   weightScales: Seq[Double] = Seq(1.0),
-  // K-axis chunk width of the matmul weight/activation beats (M2): the
+  // K-axis chunk width of the matmul weight/activation beats: the
   // weight memory layout is unchanged (linear [inFeatures x outFeatures]);
   // only the per-beat lane count and the matmul's internal K chunking
   // change. -1 (default) = inFeatures, the legacy full-width beats.
   weightLanes: Int = -1,
   lanes: Int = 1,
-  // S0 compute-side spill (docs/ddr_final_impl.md): K-slice width streamed per
-  // pass (P = inFeatures / spillKSlice passes, M*N full-width partials in DDR
-  // between passes). -1 (default) = no spill, legacy one-shot GEMM.
+  // K-slice width streamed per pass (P = inFeatures / spillKSlice passes,
+  // M*N full-width partials in DDR between passes). -1 (default) = no
+  // spill, legacy one-shot GEMM.
   spillKSlice: Int = -1
 ) extends SpillableGEMM {
   require(weightLanes == -1 || (weightLanes > 0 && inFeatures % weightLanes == 0),
@@ -148,12 +144,12 @@ case class Conv1D(
   kernelSize: Int,
   customType: Option[HardType[Data]] = None,
   customWeightType: Option[HardType[Data]] = None,
-  // Same M2 pattern as Conv2D: -1 (default) = kernelSize*inChannels, the
+  // Same pattern as Conv2D: -1 (default) = kernelSize*inChannels, the
   // legacy width; otherwise must divide K*inChannels (no padding).
   weightLanes: Int = -1,
   lanes: Int = 1,
-  // P2 compute-side spill (docs/ddr_spill_ops.md): K-slice width streamed per
-  // pass over the flattened K*inChannels axis (same gabarit as Conv2D P1).
+  // K-slice width streamed per pass over the flattened K*inChannels axis
+  // (same gabarit as Conv2D).
   // -1 (default) = no spill, legacy one-shot convolution.
   spillKSlice: Int = -1
 ) extends SpillableGEMM {

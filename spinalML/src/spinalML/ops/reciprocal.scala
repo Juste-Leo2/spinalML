@@ -10,8 +10,8 @@ import spinalML.utils.{MathLUTs, UnaryLUTOp}
 import spinalML.{RoundingConfig, RoundingMode}
 
 case class ReciprocalOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false,
-                                   // Option B (switch-aware): ROM/LUT constant rounding
-                                   // follows the elaboration mode (RNE vs legacy).
+                                   // Switch-aware ROM/LUT constant rounding follows
+                                   // the elaboration mode (RNE vs legacy).
                                    // Composed ops instantiate with the default (env).
                                    rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth

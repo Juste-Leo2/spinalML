@@ -31,9 +31,7 @@ class SramAsicAdapter(
   val sramCore = Mem(Bits(axiConfig.dataWidth bits), memoryWords)
   val sramDout = Bits(axiConfig.dataWidth bits)
 
-  // ------------------------------------------------------------------
   // Virtual -> physical index mapping
-  // ------------------------------------------------------------------
   def mapIndex(addr: UInt): UInt = {
     val isWeight = addr >= weightBase
     // Addresses below imgBase must not underflow `addr - imgBase` into a huge
@@ -51,9 +49,7 @@ class SramAsicAdapter(
   // byte yields byte-wide memory symbols (which pack into full-width SRAM
   // macros) instead of one single-bit RAM per data bit.
 
-  // ------------------------------------------------------------------
   // AXI4 read response machine
-  // ------------------------------------------------------------------
   val raddrR   = Reg(UInt(32 bits)) init 0
   val rlenR    = Reg(UInt(8 bits)) init 0
   val ridR     = Reg(UInt(axiConfig.idWidth bits)) init 0
@@ -94,10 +90,8 @@ class SramAsicAdapter(
   io.axi.r.payload.last := rlastR
   io.axi.r.payload.resp := B"00"
 
-  // ------------------------------------------------------------------
   // AXI4 write slave (accelerator write-back, e.g. DMAWriter): single
   // outstanding burst, AW accepted first, byte-strobed W beats, one B.
-  // ------------------------------------------------------------------
   val beatCountW = log2Up((1 << axiConfig.lenWidth) + 1)
   val awPending  = RegInit(False)
   val bValidR    = RegInit(False)

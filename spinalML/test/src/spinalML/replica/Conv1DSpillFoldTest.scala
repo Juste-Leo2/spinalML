@@ -9,14 +9,10 @@ import spinalML.dtypes.{BF16, I8}
 import spinalML.nn.{Conv1D, LayerSpec}
 
 /**
- * P2-4 — pass-folded replica for spilling Conv1D layers.
- *
- * Same S2 numeric contract as Conv2D (docs/ddr_spill_ops.md): same logical
- * model => same oracle logits whether the convolution spills or not
- * (full-width partials, single final bias, Ks % effLanes == 0), over the
- * flattened K*inChannels axis. No hardware elaborated beyond the dummy
- * layout context. The HW seq2col window order is (k, c) step-major from the
- * start (no P1-style order fix needed) — the fold only adds pass chunking.
+ * P2-4 — pass-folded replica for spilling Conv1D layers. Same numeric
+ * contract as Conv2D, over the flattened K*inChannels axis. The HW seq2col
+ * window order is (k, c) step-major from the start (no order fix needed) —
+ * the fold only adds pass chunking. No hardware beyond the dummy context.
  */
 class Conv1DSpillFoldTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)

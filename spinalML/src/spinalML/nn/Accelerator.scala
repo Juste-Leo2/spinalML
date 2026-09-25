@@ -19,45 +19,43 @@ import spinalML.Target
  *   and writing back output tensors via DMAWriter.
  * - AXI4-Lite Slave (Control): For the CPU to configure registers and start the inference.
  *
- * @param target Hardware target carried through to `Sequential`
- *               (Phase-1 DDR plumbing, docs/ddr_impl.md). Default Simulation
- *               preserves current CI behavior; pass `Target.FPGA(...)` or
- *               `Target.ASIC(...)` to elaborate for silicon.
- */
+  * @param target Hardware target carried through to `Sequential`.
+  *               Default Simulation preserves current CI behavior; pass
+  *               `Target.FPGA(...)` or `Target.ASIC(...)` to elaborate
+  *               for silicon.
+  */
 class Accelerator[T <: Data](
   val dataType: HardType[T],
   val inputShape: Seq[Int],
   val modelSpec: Seq[spinalML.nn.LayerSpec],
   val axiConfig: Axi4Config,
-  // Phase-2a weight residency: instantiates the run-mode CSR block (0x10
+  // Weight residency: instantiates the run-mode CSR block (0x10
   // MODE / 0x14 RELOAD) and the underlying control plane in Sequential.
   val weightResidencyCSR: Boolean = true,
-  // Phase-3 activation tiling: image rows per vertical band (see Sequential).
+  // Activation tiling: image rows per vertical band (see Sequential).
   // <= 0 keeps the legacy full-image behaviour.
   val tileHeight: Int = -1,
-  // M3: rows-in-flight bound for the reduction ops (see Sequential.temporal).
+  // Rows-in-flight bound for the reduction ops (see Sequential.temporal).
   // 0 = legacy full MxN accumulator table; > 0 = windowed row drain.
   val temporal: Int = 0,
   val inLanes: Int = 1,
   val target: Target = Target.Simulation,
-  // Phase-2 DDR plumbing (docs/ddr_impl.md): logical memory descriptor.
-  // Default = legacy map (on-chip, historical bases, no fit check), so every
-  // existing model elaborates exactly as before.
+  // Logical memory descriptor. Default = legacy map (on-chip, historical
+  // bases, no fit check), so every existing model elaborates exactly
+  // as before.
   val memory: MemorySpec = MemorySpec.default
 ) extends Component {
 
   val axiLiteConfig = AxiLite4Config(addressWidth = 8, dataWidth = 32)
 
-  // Cast interne invisible pour l'utilisateur
+  // Internal cast erasing the element type.
   val globalDataType = dataType.asInstanceOf[HardType[Data]]
 
-  // 1. Instantiate the neural network datapath first to infer its output shape
   val model = Sequential(globalDataType, inputShape, modelSpec, axiConfig,
     weightResidency = weightResidencyCSR, tileHeight = tileHeight, temporal = temporal, inLanes = inLanes,
     target = target)
 
-  // Instantiate DMAWriter for optional DDR write-back of final output tensor
-  // S2b: on spilling models this writer shares the AXI write path with the
+  // On spilling models this writer shares the AXI write path with the
   // spill drain writer through a 2:1 arbiter below — both leaves drop one ID
   // bit for the route bit (mirror of the read-side routeBits in Sequential).
   val spillActive = modelSpec.exists { case s: SpillableGEMM if s.spilling => true; case _ => false }
@@ -91,7 +89,6 @@ class Accelerator[T <: Data](
     val done = out(Bool())
   }
 
-  // 4. Create the AXI4-Lite Control Registers
   val ctrlFactory = new AxiLite4SlaveFactory(io.ctrlBus)
 
   // Register 0x20: Output Base Address (for DMAWriter write-back)
@@ -121,13 +118,12 @@ class Accelerator[T <: Data](
   val dequantScaleReg = ctrlFactory.createReadAndWrite(Bits(32 bits), CsrMap.DequantScale, 0) init(B(initialScaleBits, 32 bits))
   model.io.dequantScale.foreach(_ := dequantScaleReg)
 
-  // 2. Map the AXI4 Master
   // Read channels: connected to Sequential model
   io.axiMaster.ar << model.io.axiMaster.ar
   model.io.axiMaster.r << io.axiMaster.r
 
   // Write channels: the final-output dmaWriter, plus the spill drain writer
-  // on spilling models. S2b: a 2:1 arbiter, never a mux-on-hope — the output
+  // on spilling models. A 2:1 arbiter, never a mux-on-hope — the output
   // writer may already hold an early address phase (commanded at START) while
   // spill traffic is live; both are strictly ordered by fences, arbitration
   // only serializes the AXI bursts. Legacy models keep the direct wiring
@@ -183,7 +179,6 @@ class Accelerator[T <: Data](
       }
   }
 
-  // 3. Map the final output stream
   when(writeToDdr) {
     dmaWriter.io.inStream.stream.valid := model.io.outStream.stream.valid
     dmaWriter.io.inStream.stream.payload := model.io.outStream.stream.payload
@@ -215,9 +210,9 @@ class Accelerator[T <: Data](
   
   val outBytesAcc = totalOutBeats * (axiConfig.dataWidth / 8)
   val outBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
-  // S2a spill cursor (docs/ddr_final_impl.md): the S2b pass controller walks
-  // the spill region with this offset on top of the CSR 0x34 base, exactly
-  // like imgBaseOffset/outBaseOffset walk the image/output bases. Reset on
+  // Spill cursor: the pass controller walks the spill region with this
+  // offset on top of the CSR 0x34 base, exactly like imgBaseOffset /
+  // outBaseOffset walk the image/output bases. Reset on
   // every host write to 0x34 (same-cycle win over frameDone advance, mirror
   // of the 0x08/0x20 sites below).
   val spillBaseOffset = Reg(UInt(axiConfig.addressWidth bits)) init(0)
@@ -256,16 +251,14 @@ class Accelerator[T <: Data](
   val weightsAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.WeightBase, 0) init(0)
   model.io.weightsBaseAddress := weightsAddrReg
 
-  // Register 0x34: Spill Base Address (accumulator spill region, Phase 4).
-  // Programmed by the host exactly like the image/weight bases and defaulting
+  // Register 0x34: Spill Base Address. Programmed by the host exactly like the image/weight bases and defaulting
   // to the MemorySpec descriptor; the K-pass spill controller (compute side)
   // walks it with its own cursor, reset on every host write like the image
   // and output cursors below.
   val spillAddrReg = ctrlFactory.createReadAndWrite(UInt(axiConfig.addressWidth bits), CsrMap.SpillBase, 0) init(
     BigInt(memory.spillBase.getOrElse(0L)))
 
-  // ------------------------------------------------------------------
-  // Continuous run control (Phase 3, S1)
+  // Continuous run control.
   //
   // A one-shot START (write 0x00) still runs exactly one inference: this
   // register is purely opt-in for the streaming contract.
@@ -289,14 +282,14 @@ class Accelerator[T <: Data](
   val runActive = runReg(0) // sampled at top level (see comment above)
   val imageBytesAcc = (globalDataType().getBitsWidth / 8) * inputShape.product
 
-  // Phase-2 DDR plumbing: elaboration-time footprint check against the
-  // declared capacity (no-op for the legacy default with capacityBytes=None).
-  // Frame cursors (imgBaseOffset/outBaseOffset) stay runtime registers —
-  // Phase 4 generalizes them with the spill cursor (CSR 0x34 live above).
-  // S0 compute-side spill (docs/ddr_final_impl.md): the elaboration-computed
-  // footprint is the fit-check truth (MemorySpec.spillBytes stays a driver
-  // hint until the S2 cursor sizes the region). A spilling model without a
-  // spill descriptor base fails fast here, not on silicon.
+  // Elaboration-time footprint check against the declared capacity
+  // (no-op for the legacy default with capacityBytes=None).
+  // Frame cursors (imgBaseOffset/outBaseOffset) stay runtime registers;
+  // the spill cursor (CSR 0x34 live above) joins them.
+  // The elaboration-computed footprint is the fit-check truth
+  // (MemorySpec.spillBytes stays a driver hint until the runtime cursor
+  // sizes the region). A spilling model without a spill descriptor base
+  // fails fast here, not on silicon.
   val spillBytesFit = model.totalSpillBytes.toLong
   require(spillBytesFit == 0 || memory.spillBase.isDefined,
     s"Accelerator: model spills ${spillBytesFit}B but memory.spillBase is empty — " +
@@ -314,7 +307,6 @@ class Accelerator[T <: Data](
     tileCntReg := tileCntReg + 1
     doneSticky := True
     when(runActive) {
-      // Auto-advance: re-fire START and slide the image cursor forward.
       startPending := True
       imgBaseOffset := imgBaseOffset + imageBytesAcc
       when(writeToDdr) {
@@ -350,11 +342,10 @@ class Accelerator[T <: Data](
   ctrlFactory.read(tileCntReg, CsrMap.TileCnt, 0)
 
   model.io.imgBaseAddress := imgAddrReg + imgBaseOffset
-  // S2a: the spill region access point (CSR 0x34 base + runtime cursor).
+  // The spill region access point (CSR 0x34 base + runtime cursor).
   model.io.spillBaseAddress := spillAddrReg + spillBaseOffset
 
-  // ------------------------------------------------------------------
-  // Weight-residency run-mode control plane (Phase 2a + 2b prefetch)
+  // Weight-residency run-mode control plane.
   //
   // Register 0x10 MODE:
   //   bit0 = WEIGHT_RESIDENT — weight/bias regions are fetched from DDR on
@@ -370,7 +361,7 @@ class Accelerator[T <: Data](
   // Register 0x14 RELOAD: any write pulses a one-shot request so the next
   //   boundary (START, or eager fire when prefetching) re-fetches all
   //   weight/bias regions from the CURRENT 0x0C base.
-  // Assumption (documented in docs): the host paces RELOAD requests at most
+  // Assumption: the host paces RELOAD requests at most
   // one outstanding per region — BUSY/export may be added later if needed.
   if (weightResidencyCSR) {
     val runModeReg = ctrlFactory.createReadAndWrite(UInt(8 bits), CsrMap.Mode, 0) init(0)

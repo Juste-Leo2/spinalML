@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
-# Python/Cocotb SoC-level co-simulation of the Accelerator top (Phase 4 of the
-# Python coverage plan). Two generated tops are exercised:
+# Python/Cocotb SoC-level co-simulation of the Accelerator top. Two generated tops
+# are exercised:
 #
 #   - AcceleratorPassthroughTestComp : Flatten() only (identity), so the oracle
 #     is the input image itself. Covers the AXI-Lite control plane (START,

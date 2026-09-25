@@ -26,7 +26,7 @@ object Comprehensive1DCNNTest {
     val imgBase = 0x1000
     val weightBase = 0x2000
     
-    // Fill memory with dummy data (e.g., 1s everywhere)
+    // Dummy data (1s everywhere)
     for (i <- 0 until 100) {
       memorySim.memory.writeBigInt(imgBase + i * 8, BigInt("0001000100010001", 16), 8)
       memorySim.memory.writeBigInt(weightBase + i * 8, BigInt("0001000100010001", 16), 8)
@@ -66,8 +66,6 @@ object Comprehensive1DCNNTest {
     while (validCount < 1 && timeout < 20000) { 
       if (dut.io.outStream.stream.valid.toBoolean && dut.io.outStream.stream.ready.toBoolean) {
         validCount += 1
-        // Usually lanes = 1 at output of Sequential for now unless modified.
-        // We will just read the output and log it.
         println(f"Comprehensive1DCNN Output received!")
       }
       dut.clockDomain.waitSampling()

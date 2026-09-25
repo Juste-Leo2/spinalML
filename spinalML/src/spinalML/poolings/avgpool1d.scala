@@ -35,7 +35,6 @@ case class AvgPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
   io.a.stream.ready := False
   io.c.stream.valid := False
   
-  // Combinatorial average computation (Adder-Tree then shift)
   def buildAdderTree(nodes: Seq[Data]): Data = {
     if (nodes.length == 1) return nodes.head
     val nextLevel = nodes.grouped(2).map {

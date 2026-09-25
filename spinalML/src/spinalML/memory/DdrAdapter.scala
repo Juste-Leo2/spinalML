@@ -24,16 +24,13 @@ class DdrAdapter(
     val ddrMaster = master(Axi4(axiConfig))
   }
 
-  // ------------------------------------------------------------------
   // Shared AXI4 write path: the host single-beat write (wrEnable) and the
   // accelerator burst (DMAWriter write-back) are mutually exclusive on the
   // external DDR master. The host has priority once its write is latched;
   // an accelerator burst owns the bus from its accepted AW until its B
   // response.
-  // ------------------------------------------------------------------
   val beatCountW = log2Up((1 << axiConfig.lenWidth) + 1)
 
-  // Host transaction state
   val hostActive = RegInit(False)
   val hostAwDone = RegInit(False)
   val hostWDone  = RegInit(False)
@@ -41,7 +38,6 @@ class DdrAdapter(
   val wrDataReg  = Reg(Bits(axiConfig.dataWidth bits)) init(0)
   val wrStrbReg  = Reg(Bits(axiConfig.dataWidth / 8 bits)) init(0)
 
-  // Accelerator transaction state
   val accAwPending  = RegInit(False)
   val accStreaming  = RegInit(False)
   val accWaitB      = RegInit(False)
@@ -52,7 +48,6 @@ class DdrAdapter(
   val accBusy   = accAwPending || accStreaming || accWaitB
   val writeBusy = hostActive || accBusy
 
-  // Read transaction tracking
   val readInFlight = Reg(UInt(8 bits)) init(0)
   val arFire    = extIo.ddrMaster.ar.fire
   val rLastFire = extIo.ddrMaster.r.fire && extIo.ddrMaster.r.payload.last
@@ -64,7 +59,6 @@ class DdrAdapter(
   }
   val readBusy = (readInFlight =/= 0)
 
-  // ------------------------------------------------------------------
   // AXI Read/write fencing (BUG-DDR-04 barrier, policy per FenceConfig)
   //
   // Strict mode (default): any in-flight write stalls every forwarded read
@@ -72,7 +66,6 @@ class DdrAdapter(
   // Region-aware mode: a request stalls only if its byte range overlaps the
   // in-flight opposite-direction range(s), so weight prefetch can overlap a
   // spill/out write-back (and vice versa) across disjoint DDR regions.
-  // ------------------------------------------------------------------
   val beatBytes = axiConfig.dataWidth / 8
   // Extended width: burst end (addr + beats*beatBytes) always fits, so the
   // overlap comparison below can never wrap before comparing.
@@ -104,7 +97,6 @@ class DdrAdapter(
     rdTrackEnd = Reg(UInt(extW bits)) init(0)
   }
 
-  // Request ranges on the accelerator/host ports (extended width).
   val arAddrExt = io.axi.ar.payload.addr.resize(extW bits)
   val arEndExt = burstEnd(io.axi.ar.payload.addr, io.axi.ar.payload.len)
   val awAddrExt = io.axi.aw.payload.addr.resize(extW bits)
@@ -178,7 +170,6 @@ class DdrAdapter(
     }
   }
 
-  // AW mux
   extIo.ddrMaster.aw.valid := Mux(busHost, !hostAwDone, accAwPending)
   extIo.ddrMaster.aw.payload.addr := Mux(busHost, wrAddrReg, accAddrR)
   extIo.ddrMaster.aw.payload.len := Mux(busHost, U(0, axiConfig.lenWidth bits),

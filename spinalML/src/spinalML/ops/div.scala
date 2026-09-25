@@ -110,11 +110,9 @@ case class DivOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) 
   }
 
   private def floatDatapath(): Unit = {
-    // 1. Synchronize inputs
     val syncStream = StreamJoin.arg(io.a.stream, io.b.stream)
     val (syncStreamForB, syncStreamForA) = StreamFork2(syncStream)
 
-    // 2. Calculate Reciprocal of B
     val invBComp = ReciprocalOp(dataType, shape, lanes)
     invBComp.io.a.stream << syncStreamForB.translateWith(io.b.stream.payload)
 

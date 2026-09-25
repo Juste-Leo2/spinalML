@@ -13,7 +13,6 @@ import HWArithmetic._
  */
 object LayerReplicas {
 
-  // --- 2D Convolution ---
   def conv2D(
     input: Array[Array[Array[F]]], // [C_in][H][W]
     weights: Seq[Seq[F]],         // [C_out][K * K * C_in]
@@ -23,17 +22,17 @@ object LayerReplicas {
     kernelSize: Int,
     expBits: Int,
     mantBits: Int,
-    // M2/Phase-4 K-axis chunk width mirroring the HW matmul fold
+    // K-axis chunk width mirroring the HW matmul fold
     // (Conv2D.weightLanes): chunks accumulate sequentially via fadd, exactly
     // like Linear. <= 0 (default) = single chunk over the whole window, the
     // historical behavior. Must divide K*K*inChannels when > 0.
     lanes: Int = -1,
-    // P1 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
-    // over the flattened window axis. <= 0 (default) = single pass, the
-    // historical behavior, instruction by instruction. > 0 = passes fold
-    // outermost (seeded from the running acc, bias once at the end), exactly
-    // like the multi-pass engine. Must divide the window, and be a multiple
-    // of lanes when > 0 (mirrors the LayerSpec spillKSlice requires).
+    // Spill contract: K-slice width streamed per HW pass over the flattened
+    // window axis. <= 0 (default) = single pass, the historical behavior.
+    // > 0 = passes fold outermost (seeded from the running acc, bias once
+    // at the end), exactly like the multi-pass engine. Must divide the
+    // window, and be a multiple of lanes when > 0 (mirrors the LayerSpec
+    // spillKSlice requires).
     spillKSlice: Int = -1
   ): Array[Array[Array[F]]] = {
     val h = input(0).length
@@ -79,7 +78,6 @@ object LayerReplicas {
     out
   }
 
-  // --- 1D Convolution ---
   def conv1D(
     input: Array[Array[F]], // [L_in][C_in]
     weights: Seq[Seq[F]],   // [C_out][K * C_in]
@@ -89,13 +87,9 @@ object LayerReplicas {
     kernelSize: Int,
     expBits: Int,
     mantBits: Int,
-    // Same M2 chunk contract as conv2D (mirrors Conv1D.weightLanes).
+    // Same chunk contract as conv2D (mirrors Conv1D.weightLanes).
     lanes: Int = -1,
-    // P2 spill (docs/ddr_spill_ops.md): K-slice width streamed per HW pass
-    // over the flattened K*inChannels axis. <= 0 (default) = single pass,
-    // the historical behavior. > 0 = passes fold outermost (seeded from the
-    // running acc, bias once at the end), exactly like conv2D. Must divide
-    // the window, and be a multiple of lanes when > 0.
+    // Same pass-fold contract as conv2D, over the flattened K*inChannels axis.
     spillKSlice: Int = -1
   ): Array[Array[F]] = {
     val l = input.length
@@ -107,7 +101,7 @@ object LayerReplicas {
       var wIdx = 0
       // Window order matches the HW seq2col shift register (step-major:
       // kernel step, channel fastest) so flat index wIdx is the DDR offset
-      // the engine reads. (No P1-style order bug here: (k,c) from the start.)
+      // the engine reads. (No order fix needed here: (k,c) from the start.)
       for (k <- 0 until kernelSize; cIn <- 0 until inChannels) {
         val inVal = input(pos + k)(cIn)
         val wVal = weights(cOut)(wIdx)
@@ -139,7 +133,6 @@ object LayerReplicas {
     out
   }
 
-  // --- Activations ---
   def relu(input: Array[Array[Array[F]]]): Array[Array[Array[F]]] = {
     val c = input.length; val h = input(0).length; val w = input(0)(0).length
     val out = Array.ofDim[F](c, h, w)
@@ -163,7 +156,6 @@ object LayerReplicas {
     }
   }
 
-  // --- Poolings ---
   def maxPool2D(input: Array[Array[Array[F]]], poolSize: Int, stride: Int, expBits: Int, mantBits: Int): Array[Array[Array[F]]] = {
     val c = input.length; val h = input(0).length; val w = input(0)(0).length
     val hOut = (h - poolSize) / stride + 1
@@ -212,7 +204,7 @@ object LayerReplicas {
     out
   }
 
-  // --- Flatten (features-last [H, W, C]) ---
+  /** Features-last [H, W, C] order. */
   def flatten(input: Array[Array[Array[F]]]): Seq[F] = {
     val c = input.length; val h = input(0).length; val w = input(0)(0).length
     val out = ArrayBuffer[F]()
@@ -222,7 +214,6 @@ object LayerReplicas {
     out.toSeq
   }
 
-  // --- Linear / Dense Layer ---
   def linear(
     input: Seq[F],
     weights: Seq[Seq[F]], // [outFeatures][inFeatures]
@@ -230,12 +221,8 @@ object LayerReplicas {
     expBits: Int,
     mantBits: Int,
     weightLanes: Int,
-    // S2 spill contract (docs/ddr_final_impl.md): K-slice width streamed per
-    // HW pass. <= 0 (default) = single pass over the whole row, the
-    // historical behavior, instruction by instruction. > 0 = passes fold
-    // outermost (seeded from the running acc, bias once at the end), exactly
-    // like the multi-pass GEMM. Must divide inFeatures, and be a multiple of
-    // weightLanes when > 0 (mirrors the LayerSpec spillKSlice requires).
+    // Same pass-fold contract as conv2D, over the row axis: must divide
+    // inFeatures, and be a multiple of weightLanes when > 0.
     spillKSlice: Int = -1
   ): Seq[F] = {
     val inFeatures = weights.head.length
@@ -279,7 +266,6 @@ object LayerReplicas {
     out.toSeq
   }
 
-  // --- Normalizations ---
   def batchNorm1D(input: Seq[F], gamma: Seq[F], beta: Seq[F], expBits: Int, mantBits: Int, features: Int = -1): Seq[F] = {
     val feat = if (features > 0) features else gamma.length
     require(feat > 0 && gamma.length % feat == 0 && beta.length % feat == 0,
@@ -290,7 +276,6 @@ object LayerReplicas {
     }
   }
 
-  // --- Cast / Dequantization ---
   def cast(input: Seq[F], scale: Double, inExp: Int, inMant: Int, outExp: Int, outMant: Int): Seq[F] = {
     val scaleF = fromDouble(scale, outExp, outMant)
     input.map { v =>
@@ -300,7 +285,6 @@ object LayerReplicas {
     }
   }
 
-  // --- DAG Merge Operations ---
   def add(a: Seq[F], b: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
     require(a.length == b.length, "Add inputs must have the same length")
     a.indices.map(i => fadd(a(i), b(i), expBits, mantBits))
@@ -308,7 +292,6 @@ object LayerReplicas {
 
   def concat(a: Seq[F], b: Seq[F]): Seq[F] = a ++ b
 
-  // --- Integer Domain Operations ---
   def conv2DInt(
     input: Array[Array[Array[Long]]], // [C_in][H][W]
     weights: Seq[Seq[Long]],          // [C_out][K * K * C_in]
@@ -391,7 +374,6 @@ object LayerReplicas {
     }
   }
 
-  // --- 1D Average Pooling ---
   def avgPool1D(input: Array[Array[F]], poolSize: Int, stride: Int, expBits: Int, mantBits: Int): Array[Array[F]] = {
     val l = input.length; val c = input(0).length
     val lOut = (l - poolSize) / stride + 1
@@ -442,7 +424,6 @@ object LayerReplicas {
     out
   }
 
-  // --- Non-linear Activations (Sigmoid / Tanh) ---
   def sigmoid(input: Seq[F], expBits: Int, mantBits: Int): Seq[F] = {
     val bitWidth = expBits + mantBits + 1
     if (bitWidth <= 8) {
@@ -511,7 +492,6 @@ object LayerReplicas {
     }
   }
 
-  // --- Softmax (mirror of Softmax1D) ---
   /** Software mirror of Softmax1D for narrow floats (bitWidth <= 8, e.g. FP8):
     * max (dtype) -> sub (dtype) -> exp LUT -> exact int block-float sum (fixed
     * reference exponent) -> normalize RNE -> reciprocal LUT -> final mul. */
@@ -593,7 +573,6 @@ object LayerReplicas {
     exps.map(e => fmul(e, recipF, expBits, mantBits))
   }
 
-  // --- Layer Normalization 1D ---
   def layerNorm1D(
     input: Seq[F],
     channels: Int,
@@ -623,7 +602,7 @@ object LayerReplicas {
       val sumSq = tree(sqDiffs, expBits, mantBits)
       val variance = divN(sumSq)
 
-      // LAY-04: same epsilon policy as the RTL. Encoded 1e-5 when
+      // Same epsilon policy as the RTL. Encoded 1e-5 when
       // representable (BF16), otherwise the smallest positive normal
       // (E4M3 2^-6, E2M1 1.0) — without it, a zero (or underflowed) variance
       // reaches rsqrt at input 0 and saturates the inverse standard deviation.
@@ -647,7 +626,6 @@ object LayerReplicas {
     out.toSeq
   }
 
-  // --- Requantize ---
   /**
    * Mirror of RequantizeOp: shift (RNE by default, trunc legacy) then
    * saturation. RNE on an arithmetic shift rounds guard/sticky ties to even;

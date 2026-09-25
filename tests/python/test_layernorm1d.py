@@ -91,7 +91,7 @@ def prepare_ln_data(channels, seqLen, max_val, is_integer):
     return X, gamma, beta
 
 
-# ----------------- COCOTB TESTS -----------------
+# COCOTB TESTS
 @cocotb.test()
 async def cocotb_layernorm1d_i8(dut):
     collect = {"out": [], "true": []}
@@ -133,7 +133,7 @@ async def cocotb_layernorm1d_bf16(dut):
     dut._log.info(log_msg)
 
 
-# ----------------- PYTEST RUNNERS -----------------
+# PYTEST RUNNERS
 def run_layernorm1d_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.layers.LayerNormTest", dtype_filter, "LayerNormTestComp")
     build_dir = f"sim_build/layernorm_layernormtestcomp_{dtype_filter.lower()}"

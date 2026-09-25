@@ -28,11 +28,9 @@ case class Axi4StreamToTensor[T <: Data](
     val tensor = master(Tensor(dataType, shape, lanes))
   }
   
-  // Handshake connection
   io.tensor.stream.valid := io.axis.valid
   io.axis.ready := io.tensor.stream.ready
-  
-  // Data translation (cast AXI Bits to Tensor data)
+
   val slicedData = io.axis.data(tensorChunkWidth - 1 downto 0)
   
   for(i <- 0 until lanes) {
@@ -65,10 +63,8 @@ case class TensorToAxi4Stream[T <: Data](
   io.axis.valid := io.tensor.stream.valid
   io.tensor.stream.ready := io.axis.ready
   
-  // Pack tensor lanes into Bits
   val packedBits = io.tensor.stream.payload.asBits
-  
-  // Pad if AXI bus is wider
+
   val paddedData = if (axiDataWidth > tensorChunkWidth) {
     packedBits.resize(axiDataWidth bits)
   } else {
@@ -76,9 +72,8 @@ case class TensorToAxi4Stream[T <: Data](
   }
   
   io.axis.data := paddedData
-  
-  // Generate 'last' signal based on tensor shape
-  // For a tensor stream, 'last' should pulse when the final chunk of the tensor is transmitted.
+
+  // 'last' pulses when the final chunk of the tensor is transmitted.
   val totalElements = shape.product
   val totalChunks = totalElements / lanes
   

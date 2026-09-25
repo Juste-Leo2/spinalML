@@ -353,7 +353,7 @@ class LayerNormTest extends AnyFunSuite {
         }
       }
 
-      // 0.5 = 2^-1 (exp field 6), 0.5625 = 1.125 * 2^-1 (exp 6, mant 1)
+      // 5 = 2^-1 (exp field 6), 0.5625 = 1.125 * 2^-1 (exp 6, mant 1)
       val row = Seq((6, 0), (6, 1), (6, 0), (6, 0))
       for (b <- 0 until 16) {
         for (i <- 0 until 4) setFloat(dut.x.stream.payload(i), row(i)._1, row(i)._2)

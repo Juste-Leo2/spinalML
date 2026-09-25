@@ -87,7 +87,7 @@ def prepare_bn_data(channels, seqLen, max_val, is_integer):
     return X, gamma, beta
 
 
-# ----------------- COCOTB TESTS -----------------
+# COCOTB TESTS
 @cocotb.test()
 async def cocotb_batchnorm1d_i8(dut):
     collect = {"out": [], "true": []}
@@ -138,7 +138,7 @@ async def cocotb_batchnorm1d_bf16(dut):
     dut._log.info(log_msg)
 
 
-# ----------------- PYTEST RUNNERS -----------------
+# PYTEST RUNNERS
 def run_batchnorm1d_sim(dtype_filter, testcase_name, request=None, build_suffix=""):
     v_file = run_mill("spinalML.layers.BatchNormTest", dtype_filter, "BatchNormTestComp")
     build_dir = f"sim_build/batchnorm_batchnormtestcomp_{dtype_filter.lower()}{build_suffix}"

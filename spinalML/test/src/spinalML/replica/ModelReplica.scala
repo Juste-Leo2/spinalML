@@ -11,9 +11,6 @@ import handlers._
 /**
  * Universal interpreter of Seq[LayerSpec] computing the bit-exact software oracle
  * and printing intermediate activation previews (first 3 and last 3 elements, min/max).
- *
- * Refactored into modular layer handlers to preserve low cyclomatic complexity (cc < 15)
- * and enforce strict architectural separation of concerns.
  */
 object ModelReplica {
 
@@ -90,7 +87,6 @@ object ModelReplica {
 
     println(f"Input Tensor        : shape ${inputShape.mkString("x")}%-12s | first3=${formatPreview(inFirst3)} ... last3=${formatPreview(inLast3)} | min=$inMin%6.3f, max=$inMax%6.3f")
 
-    // Node storage for DAG execution
     val nodeOutputs = ArrayBuffer[ReplicaTensor]()
     val traces = ArrayBuffer[LayerExecutionTrace]()
 

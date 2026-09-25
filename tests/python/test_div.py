@@ -11,8 +11,8 @@ from utils.tb_utils import run_mill, copy_roms
 from utils.cocotb_helpers import run_binary_test
 
 # Integer division follows ONNX `Div`: exact truncation toward zero, same
-# dtype, saturating on div-by-zero / INT_MIN/-1 (never wrapping). Wave 5
-# step A covers <=8-bit (combinational), step B the serial >8-bit divider.
+# dtype, saturating on div-by-zero / INT_MIN/-1 (never wrapping). <=8-bit
+# is combinational, the serial divider covers >8-bit.
 
 def int_div_bits(dtype, a, b):
     va = int(dtype.to_float(dtype.from_float(a)))

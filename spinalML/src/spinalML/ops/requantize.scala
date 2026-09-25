@@ -98,7 +98,6 @@ case class RequantizeOp[TIn <: Data, TOut <: Data](
     val c = master(Tensor(dataTypeOut, shape, lanes))
   }
 
-  // Pass through the stream control signals
   io.c.stream.arbitrationFrom(io.a.stream)
 
   for (i <- 0 until lanes) {

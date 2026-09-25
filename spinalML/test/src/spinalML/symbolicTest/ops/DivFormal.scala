@@ -10,9 +10,9 @@ import spinalML.ops.DivTestComp
 import spinalML.utils.MathLUTs
 
 /**
- * Exact integer division proof (Wave 5, replaces the pre-rewrite reciprocal
- * ROM + multiply proof). Instead of a golden divider, this checks the
- * defining characterization of truncating division:
+ * Exact integer division proof (replaces the old reciprocal-ROM + multiply
+ * proof). Instead of a golden divider, this checks the defining
+ * characterization of truncating division:
  *   q = trunc(a / b) <=> r = a - q*b satisfies |r| < |b| and
  *   sign(r) in {0, sign(a)}, with the engine's saturation policy on the two
  *   unreachable-by-math cases (b == 0, INT_MIN / -1).

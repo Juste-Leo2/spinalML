@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Hardware component to test the subtract operation
 case class SubTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4), lanes = 2))
@@ -18,24 +17,21 @@ case class SubTestComp[T <: Data](dataType: HardType[T]) extends Component {
     val c = master(Tensor(dataType, Seq(4), lanes = 2))
   }
   
-  // Use the GGML-like syntax for subtraction
   io.c <> spinalML.ops.sub(io.a, io.b)
 }
 
 class SubTest extends AnyFunSuite {
   test("Test streaming sub operation on I8 tensors") {
     SimConfig.withWave.compile(SubTestComp(I8())).doSim { dut =>
-      // Generate a clock with a period of 10 simulation units
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize Stream handshake signals
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
       dut.io.c.stream.ready #= true
       
       dut.clockDomain.waitSampling()
       
-      // Send the first chunk (2 elements per lane)
+      // First chunk (2 elements per lane)
       dut.io.a.stream.valid #= true
       dut.io.a.stream.payload(0) #= 5
       dut.io.a.stream.payload(1) #= -2
@@ -44,14 +40,12 @@ class SubTest extends AnyFunSuite {
       dut.io.b.stream.payload(0) #= 3
       dut.io.b.stream.payload(1) #= 4
       
-      // Wait until the operation computes and outputs valid data
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       
       // Verify results for chunk 1 (5 - 3 = 2, -2 - 4 = -6)
       assert(dut.io.c.stream.payload(0).toInt == 2)
       assert(dut.io.c.stream.payload(1).toInt == -6)
       
-      // Stop sending data
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
       

@@ -86,7 +86,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       dut.io.readAddr #= 0
       dut.clockDomain.waitSampling(5)
 
-      // 1. Load initial tile into Ping bank (4 elements: 10, 20, 30, 40)
+      // Load initial tile into Ping bank (4 elements: 10, 20, 30, 40)
       for (v <- Seq(10, 20, 30, 40)) {
         dut.io.streamIn.valid #= true
         dut.io.streamIn.payload(0) #= v
@@ -96,7 +96,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       dut.clockDomain.waitSampling(2)
       assert(dut.io.tileReady.toBoolean, "Ping bank should be ready")
 
-      // 2. Enable residentHold
+      // Enable residentHold
       dut.io.residentHold.foreach(_ #= true)
 
       // Read Ping bank repeatedly across nextTile pulses without losing data
@@ -114,7 +114,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
         assert(dut.io.tileReady.toBoolean, s"Pass $pass: Ping bank should remain held and ready under residentHold")
       }
 
-      // 3. Prefetch staging: while Ping is held, stage a fresh tile into Pong
+      // Prefetch staging: while Ping is held, stage a fresh tile into Pong
       dut.io.stageRequest.foreach(_ #= true)
       for (v <- Seq(100, 200, 300, 400)) {
         dut.io.streamIn.valid #= true
@@ -192,7 +192,6 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
       writeWords(memSim.memory, weightBase, packed.words)
 
-      // Meter AR transactions
       var imgARs = 0L
       var weightARs = 0L
       dut.clockDomain.onSamplings {
@@ -295,7 +294,7 @@ class StreamDoubleBufferTest extends AnyFunSuite {
       assert(wDelta5 == 0L, s"Pass 5: expected 0 weight AR transactions in resumed residency, got $wDelta5")
       println(f"[StreamDoubleBufferTest] Pass 5 resident: weight ARs = $wDelta5 (zero DDR traffic resumed)")
 
-      // ---- Eager Prefetch Mode (CSR 0x10 = 3: RESIDENT + PREFETCH_EN) ----
+      //Eager Prefetch Mode (CSR 0x10 = 3: RESIDENT + PREFETCH_EN)
       // Pass 6: Switch to RESIDENT + PREFETCH mode and issue RELOAD
       writeCsr(0x10, 3)
       val wBeforeIdle6 = weightARs

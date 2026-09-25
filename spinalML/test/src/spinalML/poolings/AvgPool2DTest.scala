@@ -11,7 +11,6 @@ import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import spinalML.{RoundingConfig, RoundingMode}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing the AvgPool2D operation: 4x4 -> 2x2 (poolSize = 2, stride = 2)
 case class AvgPool2DTestComp[T <: Data](dataType: HardType[T], rounding: RoundingMode = RoundingConfig.current) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 4), lanes = 1))

@@ -166,7 +166,7 @@ async def run_concat_test(dut, op_name, dtype_name, dtype, num_A, num_B, lanes, 
             
     dut._log.info(f"[{op_name}][{dtype_name}] Passed Metadata Check")
 
-# --------- SLICE ---------
+# SLICE
 @cocotb.test()
 async def cocotb_slice_i8(dut): await run_slice_test(dut, "Slice", "I8", I8, 4, 2, 1, 3, False)
 @cocotb.test()
@@ -176,7 +176,7 @@ async def cocotb_slice_i16(dut): await run_slice_test(dut, "Slice", "I16", I16, 
 @cocotb.test()
 async def cocotb_slice_bf16(dut): await run_slice_test(dut, "Slice", "BF16", BF16, 4, 2, 1, 3, True)
 
-# --------- CONCATENATE ---------
+# CONCATENATE
 @cocotb.test()
 async def cocotb_concat_i8(dut): await run_concat_test(dut, "Concatenate", "I8", I8, 2, 4, 2, False)
 @cocotb.test()

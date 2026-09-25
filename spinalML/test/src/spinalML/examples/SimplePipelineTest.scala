@@ -10,7 +10,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.I8
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component to instantiate the pipeline with I8 data type
+// Pipeline under test, I8
 case class SimplePipelineTestComp() extends Component {
   val io = new Bundle {
     val a = slave(Tensor(I8(), Seq(1, 2), lanes = 2))
@@ -31,7 +31,6 @@ class SimplePipelineTest extends AnyFunSuite {
     SimConfig.withWave.compile(SimplePipelineTestComp()).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize streams
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
       dut.io.w.stream.valid #= false
@@ -39,7 +38,7 @@ class SimplePipelineTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: Load Weights W into the Matmul Double-Buffer
+      // Load Weights W into the Matmul Double-Buffer
       // W = [3, 4]T
       dut.io.w.stream.valid #= true
       dut.io.w.stream.payload(0) #= 3
@@ -48,7 +47,7 @@ class SimplePipelineTest extends AnyFunSuite {
       
       dut.io.w.stream.valid #= false
       
-      // Step 2: Stream Activations A and B concurrently
+      // Stream Activations A and B concurrently
       // A = [1, 2]
       // B = [10, 20]
       // Expected sum = A + B = [11, 22]
@@ -66,7 +65,7 @@ class SimplePipelineTest extends AnyFunSuite {
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
       
-      // Step 3: Wait for pipeline output Y
+      // Wait for pipeline output Y
       // Y = sum * W = [11, 22] * [3, 4]T
       // Y = 11*3 + 22*4 = 33 + 88 = 121
       dut.clockDomain.waitSamplingWhere(dut.io.y.stream.valid.toBoolean)

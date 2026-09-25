@@ -62,9 +62,7 @@ class Axi4StreamConverterFormal extends Component {
     assume(toAxis.io.tensor.stream.payload === past(toAxis.io.tensor.stream.payload))
   }
 
-  // =========================================================================
   // 1. Axi4StreamToTensor FLOW PROPERTIES
-  // =========================================================================
   // Handshake transparency
   assert(toTensor.io.tensor.stream.valid === toTensor.io.axis.valid,
     "toTensor: tensor.valid must strictly mirror axis.valid")
@@ -82,9 +80,7 @@ class Axi4StreamConverterFormal extends Component {
     }
   }
 
-  // =========================================================================
   // 2. TensorToAxi4Stream FLOW PROPERTIES
-  // =========================================================================
   // Handshake transparency
   assert(toAxis.io.axis.valid === toAxis.io.tensor.stream.valid,
     "toAxis: axis.valid must strictly mirror tensor.valid")
@@ -102,9 +98,7 @@ class Axi4StreamConverterFormal extends Component {
       "toAxis: padding bits must be zero")
   }
 
-  // =========================================================================
   // 3. TLAST GENERATION SPECIFICATION
-  // =========================================================================
   val chunkCounter = toAxis.chunkCounter.value.pull()
 
   // TLAST must be True IF AND ONLY IF chunkCounter is on the last chunk
@@ -124,9 +118,7 @@ class Axi4StreamConverterFormal extends Component {
     }
   }
 
-  // =========================================================================
   // 4. REACHABILITY / LIVENESS COVERS
-  // =========================================================================
   // 1. Transaction on toTensor
   cover(toTensor.io.axis.fire)
 

@@ -10,13 +10,10 @@ import spinalML.nn.{LayerSpec, Linear}
 import spinalML.replica.HWArithmetic._
 
 /**
- * R2 — pass-folded replica for spilling Linear layers.
- *
- * Proves the S2 numeric contract (docs/ddr_final_impl.md, docs/ddr_replica_status.md):
- * same logical model => same oracle logits whether the layer spills or not
- * (full-width partials, single final bias, Ks % effLanes == 0), for both the
- * int path (associative) and the float path (bit-exact fadd order).
- * No hardware elaborated beyond the dummy layout context.
+ * R2 — pass-folded replica for spilling Linear layers. Same logical model
+ * => same oracle logits whether the layer spills or not (full-width
+ * partials, single final bias, Ks % effLanes == 0), int (associative) and
+ * float (bit-exact fadd order) paths. No hardware beyond the dummy context.
  */
 class ReplicaSpillFoldTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)

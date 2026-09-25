@@ -28,7 +28,7 @@ case class FloatSweepComp(expBits: Int, mantBits: Int) extends Component {
  * Mirrors the Python golden model (tests/python/golden_models/ops.py) but is
  * written with plain unbounded Int arithmetic and explicit saturations, so it
  * CANNOT reproduce hardware width-truncation bugs by construction (unlike a
- * self-comparison formal oracle, see docs/symbolicTest.md).
+ * self-comparison formal oracle).
  */
 object FloatGolden {
 
@@ -45,7 +45,7 @@ object FloatGolden {
   def satBits(sign: Boolean, e: Int, m: Int): Int =
     if (isE4M3(e, m)) pack(sign, 15, 6, e, m) else pack(sign, (1 << e) - 1, 0, e, m)
 
-  /** NaN input class (Wave 5, propagation-only): E4M3 single slot (15, 7),
+  /** NaN input class (propagation-only): E4M3 single slot (15, 7),
     * other formats all-ones exponent with nonzero mantissa. Never emitted
     * spontaneously, but flows from host/DDR inputs. */
   def isNaNBits(bits: Int, e: Int, m: Int): Boolean = {
@@ -77,7 +77,7 @@ object FloatGolden {
     val (sa, ea, ma) = unpack(aBits, e, m)
     val (sb, eb, mb) = unpack(bBits, e, m)
 
-    // Wave 5: NaN propagates (beats zero: mul(NaN, 0) is NaN, like the RTL).
+    // NaN propagates (beats zero: mul(NaN, 0) is NaN, like the RTL).
     if (isNaNBits(aBits, e, m) || isNaNBits(bBits, e, m)) return nanBits(aBits, bBits, e, m)
 
     if (ea == 0 || eb == 0) return 0              // zero operand -> zero product
@@ -115,7 +115,7 @@ object FloatGolden {
     val (sa, ea, ma) = unpack(aBits, e, m)
     val (sb, eb, mb) = unpack(bBits, e, m)
 
-    // Wave 5: NaN propagates (beats the zero class, like the RTL).
+    // NaN propagates (beats the zero class, like the RTL).
     if (isNaNBits(aBits, e, m) || isNaNBits(bBits, e, m)) return nanBits(aBits, bBits, e, m)
 
     val aZero = ea == 0
@@ -257,7 +257,7 @@ class FloatSweepTest extends AnyFunSuite {
     runSweep(e, m, pairs)
   }
 
-  /** Wave 5 NaN propagation: every NaN encoding crossed with every canonical
+  /** NaN propagation: every NaN encoding crossed with every canonical
     * (narrow/medium exhaustive) or sampled (wide) value, both orders, add+mul.
     * NaN beats zero and saturations; output sign follows the first NaN operand.
     */

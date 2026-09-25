@@ -9,6 +9,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object DenseHandlers {
 
+  /** Dispatch to LayerReplicas for dense/norm layers (Linear, BatchNorm1D, LayerNorm1D). */
   def evalLinear(
     l: Linear,
     curTensor: ReplicaTensor,
@@ -18,14 +19,13 @@ object DenseHandlers {
     val inFeatures = l.inFeatures
     val outFeatures = l.outFeatures
     val lanes = l.effLanes
-    // P0a: multi-row support. The float path already folded rows inside
-    // LayerReplicas.linear; the int path was M=1-only. rows=1 reproduces the
-    // historical behavior exactly (same shape, same accumulation order).
+    // Multi-row support: rows=1 reproduces the historical M=1 behavior
+    // (same shape, same accumulation order).
     require(curTensor.length % inFeatures == 0,
       s"DenseHandlers: Linear input length ${curTensor.length} is not a multiple of inFeatures=$inFeatures")
     val rows = curTensor.length / inFeatures
     val nextShape = Seq(rows, outFeatures)
-    // S2 spill v1: the layout tool emits spilling layers slice-transposed
+    // The layout tool emits spilling layers slice-transposed
     // (WeightMemoryLayout R1); gather logical [o][k] rows from the physical
     // `p*Ks*N + n*Ks + k_local` order and fold passes in the replica.
     // Non-spilling layers keep the legacy direct slicing, untouched.

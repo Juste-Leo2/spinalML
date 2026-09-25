@@ -56,7 +56,7 @@ class RequantizeFormal extends Component {
 }
 
 /**
- * Formal proof of the RNE narrowing path of RequantizeOp (Wave 4 commit 0).
+ * Formal proof of the RNE narrowing path of RequantizeOp.
  *
  * The solver explores the full I32 input space symbolically, so every tie
  * (remainder == half) and every saturation boundary is covered exhaustively —

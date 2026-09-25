@@ -53,9 +53,7 @@ case class DMAReader[T <: Data](
     val outStream = master(Tensor(dataType, shape, outLanes))
   }
 
-  // ==========================================
   // 1. AR (Address Read) Channel Handshake
-  // ==========================================
   // Requests longer than the AXI4 arlen limit (256 beats) are split into
   // chained INCR bursts. Bursts are additionally clipped at 4 KiB boundaries,
   // as required by the AXI4 protocol (no burst may cross a 4K edge): the next
@@ -98,7 +96,6 @@ case class DMAReader[T <: Data](
     burstRemain := burstLen.resized
   }
 
-  // Default tied-off AXI4 signals
   io.axiMaster.ar.id    := 0
   io.axiMaster.ar.prot  := 0
   io.axiMaster.ar.cache := 0
@@ -106,9 +103,7 @@ case class DMAReader[T <: Data](
   io.axiMaster.ar.qos   := 0
   io.axiMaster.ar.region := 0
 
-  // ==========================================
   // 2. R (Read Data) Channel Handshake -> Raw Tensor
-  // ==========================================
   val axiRawTensor = Tensor(dataType, shape, axiLanes)
 
   axiRawTensor.stream.valid := io.axiMaster.r.valid && (burstRemain =/= 0)
@@ -122,16 +117,12 @@ case class DMAReader[T <: Data](
   when(io.axiMaster.r.valid && io.axiMaster.r.ready && burstRemain =/= 0) {
     burstRemain := burstRemain - 1
   }  
-  // Convert physical AXI bits into ML DataType array
   for (i <- 0 until axiLanes) {
     val slice = io.axiMaster.r.data(i * dataType.getBitsWidth, dataType.getBitsWidth bits)
     axiRawTensor.stream.payload(i).assignFromBits(slice)
   }
 
-  // ==========================================
   // 3. Internal Gearbox (Repack)
-  // ==========================================
-  // Automatically adapt the raw physical AXI stream to the desired ML lanes.
   val gearboxOps = scala.collection.mutable.ArrayBuffer[RepackOp[_]]()
   val repackedTensor = repack(axiRawTensor, outLanes,
     reArm = if (flushableGearbox) Some(io.cmd.fire) else None,

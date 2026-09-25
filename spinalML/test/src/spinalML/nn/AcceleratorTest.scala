@@ -12,6 +12,9 @@ import spinalML.harness.MemoryHarness
 import spinalML.replica.{ModelReplica, WeightMemoryLayout}
 
 class AcceleratorTest extends AnyFunSuite {
+  /** Accelerator SoC suite on the compact 4x4 toy model: CSR control, single
+   * and continuous streaming, DDR write-back, residency/reload and eager
+   * prefetch — bit-exact vs ModelReplica, AR traffic-metered. */
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
 
@@ -64,7 +67,6 @@ class AcceleratorTest extends AnyFunSuite {
       )
       memSim.start()
 
-      // 1. Prepare deterministic weights and input data
       val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
       writeWords(memSim.memory, weightBase, packed.words)
 
@@ -72,11 +74,9 @@ class AcceleratorTest extends AnyFunSuite {
       val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
       writeWords(memSim.memory, imgBase, imgWords)
 
-      // Calculate oracle
       val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
       val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
 
-      // 2. AXI-Lite helpers
       def writeCsr(addr: BigInt, data: BigInt): Unit = {
         dut.io.ctrlBus.aw.valid #= true
         dut.io.ctrlBus.aw.payload.addr #= addr
@@ -105,7 +105,6 @@ class AcceleratorTest extends AnyFunSuite {
         data
       }
 
-      // Initialize control bus
       dut.io.ctrlBus.aw.valid #= false
       dut.io.ctrlBus.w.valid #= false
       dut.io.ctrlBus.ar.valid #= false
@@ -114,14 +113,11 @@ class AcceleratorTest extends AnyFunSuite {
       dut.io.outStream.stream.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // Program addresses
       writeCsr(0x08, imgBase)
       writeCsr(0x0C, weightBase)
 
-      // Pulse START
       writeCsr(0x00, 1)
 
-      // Collect outputs
       val collected = scala.collection.mutable.ArrayBuffer[Double]()
       var cycles = 0
       val timeout = 10000
@@ -209,7 +205,6 @@ class AcceleratorTest extends AnyFunSuite {
       dut.io.outStream.stream.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // Set bases
       writeCsr(0x08, imgBase)
       writeCsr(0x0C, weightBase)
 
@@ -219,7 +214,6 @@ class AcceleratorTest extends AnyFunSuite {
       // Single START pulse to initiate continuous auto-advance
       writeCsr(0x00, 1)
 
-      // Monitor continuous frames with bounded loop
       val allOutputs = scala.collection.mutable.ArrayBuffer[Seq[Double]]()
       val currentFrameOutputs = scala.collection.mutable.ArrayBuffer[Double]()
       var silence = 0
@@ -285,7 +279,6 @@ class AcceleratorTest extends AnyFunSuite {
       )
       memSim.start()
 
-      // 1. Prepare deterministic weights and input data
       val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
       writeWords(memSim.memory, weightBase, packed.words)
 
@@ -293,11 +286,9 @@ class AcceleratorTest extends AnyFunSuite {
       val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
       writeWords(memSim.memory, imgBase, imgWords)
 
-      // Calculate oracle
       val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
       val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
 
-      // 2. AXI-Lite helpers
       def writeCsr(addr: BigInt, data: BigInt): Unit = {
         dut.io.ctrlBus.aw.valid #= true
         dut.io.ctrlBus.aw.payload.addr #= addr
@@ -326,7 +317,6 @@ class AcceleratorTest extends AnyFunSuite {
         data
       }
 
-      // Initialize control bus
       dut.io.ctrlBus.aw.valid #= false
       dut.io.ctrlBus.w.valid #= false
       dut.io.ctrlBus.ar.valid #= false
@@ -337,7 +327,6 @@ class AcceleratorTest extends AnyFunSuite {
 
       val outBase = 0x30000L
 
-      // Program addresses
       writeCsr(0x08, imgBase)
       writeCsr(0x0C, weightBase)
 
@@ -349,10 +338,8 @@ class AcceleratorTest extends AnyFunSuite {
       val dmaStatusBefore = readCsr(0x28)
       assert(dmaStatusBefore == 0, s"DMA writer should be idle before start, got 0x$dmaStatusBefore%X")
 
-      // Pulse START
       writeCsr(0x00, 1)
 
-      // Wait for inference and DDR write-back to finish
       var cycles = 0
       val timeout = 10000
       var doneObserved = false
@@ -467,7 +454,6 @@ class AcceleratorTest extends AnyFunSuite {
       writeCsr(0x24, 1) // writeToDdr = true
       writeCsr(0x1C, 1) // RUN = true
 
-      // Start continuous streaming
       writeCsr(0x00, 1)
 
       var timeout = 0
@@ -492,7 +478,6 @@ class AcceleratorTest extends AnyFunSuite {
       assert(stopIssued, "STOP was never issued")
       assert(completedFrames == numFrames, s"Expected $numFrames frames, observed $completedFrames")
 
-      // Wait until accelerator is completely idle
       var idleCycles = 0
       while (dut.io.busy.toBoolean && idleCycles < 200) {
         dut.clockDomain.waitSampling()
@@ -551,7 +536,6 @@ class AcceleratorTest extends AnyFunSuite {
         dut.clockDomain.waitSampling()
       }
 
-      // AR traffic meter: track weight vs image reads
       var arWeightCount = 0L
       var arImgCount = 0L
       dut.clockDomain.onSamplings {
@@ -582,7 +566,7 @@ class AcceleratorTest extends AnyFunSuite {
         val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
 
         val collected = scala.collection.mutable.ArrayBuffer[Double]()
-        writeCsr(0x00, 1) // Pulse START
+        writeCsr(0x00, 1)
 
         var cycles = 0
         val timeout = 5000
@@ -827,7 +811,6 @@ class AcceleratorTest extends AnyFunSuite {
       writeCsr(0x08, imgBase)
       writeCsr(0x0C, weightBase)
 
-      // Pulse START
       writeCsr(0x00, 1)
 
       val collected = scala.collection.mutable.ArrayBuffer[Double]()

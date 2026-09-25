@@ -44,8 +44,8 @@ case class TapBuffer[T <: Data](dataType: HardType[T], depth: Int, lanes: Int, s
   // and the direct consumer (e.g. a conv that soaks its whole input before
   // emitting) may still sit on the LAST beat when the FIFO is exactly full:
   // the source *re-delivers* that held beat (its valid stays high, its ready
-  // is gated by us), so the direct would otherwise consume it TWICE (M1.7
-  // bis — one duplicated fork element in the skip chain of WideResidual).
+  // is gated by us), so the direct would otherwise consume it TWICE (one
+  // duplicated fork element in the skip chain of WideResidual).
   // A one-entry slack (cap = tensor + 1) keeps the tee fire-free: the
   // re-delivered trailing beat is absorbed by the slack and never reaches
   // the direct; the consumer pops stay aligned on the first `entries`.

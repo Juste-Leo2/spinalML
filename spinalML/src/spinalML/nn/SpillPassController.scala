@@ -8,16 +8,15 @@ import spinal.lib._
 import spinalML.memory.{FetchRequest, WriteRequest}
 
 /**
- * S2b spill pass controller (docs/ddr_final_impl.md): owns the K-pass loop
- * of the single v1 spilling layer.
+ * Spill pass controller: owns the K-pass loop of the single v1 spilling layer.
  *
  * One pass `p` on `P` slices:
  *   1. Prelude — hold `passFirst`/`passLast` for the pass; fire the drain
  *      write (p < P-1) against the single M*N spill region; re-fire the
- *      W-slice fetch (p > 0, held until the fetch plane accepts — NN-01
- *      sticky discipline); pulse `biasReArm` once (the bias stays parked
+ *      W-slice fetch (p > 0, held until the fetch plane accepts — sticky
+ *      discipline); pulse `biasReArm` once (the bias stays parked
  *      from the START fetch, consumed final only). The seed read (p > 0) is
- *      issued as `spillBeats` SINGLE-BEAT chunks (S2e, see below), starting
+ *      issued as `spillBeats` SINGLE-BEAT chunks (see below), starting
  *      in the prelude and continuing into WaitPass as the engine consumes.
  *   2. WaitPass — the compute drains (seed self-synchronizes by
  *      backpressure: each chunk is accepted only once the previous one was
@@ -25,14 +24,14 @@ import spinalML.memory.{FetchRequest, WriteRequest}
  *      deadlocks).
  *   3. WaitFence (non-final) — the next pass starts only after
  *      `writerDone`: same-address RAW on the single region. `writerDone` is
- *      latched (NN-01 sticky discipline): the 1-cycle pulse may arrive
+ *      latched (sticky discipline): the 1-cycle pulse may arrive
  *      BEFORE `passDone` (fast memory completing the drain while the engine
  *      still drop-drains the seed pad), and a pre-fence pulse must never be
  *      missed.
  *
- * S2e single-beat seed chunks (conv P=2 deadlock fix): the seed used to be
+ * Single-beat seed chunks (conv P=2 deadlock fix): the seed used to be
  * one full-region command. Past the seed reader's 1-beat flushable gearbox
- * the engine only takes N beats per row (row-interleaved seeding, S1), so
+ * the engine only takes N beats per row (row-interleaved seeding), so
  * an in-order memory wedged: unconsumed seed beats ahead of the A (image)
  * beats the engine waited for, while the seed waited for the engine — a
  * circular wait. Chunking bounds the in-flight seed to one beat: a chunk is
@@ -40,15 +39,15 @@ import spinalML.memory.{FetchRequest, WriteRequest}
  * which is exactly the engine's consumption pace. Every R stall therefore
  * resolves through engine consumption needing no bus data, so image/W
  * beats behind always flow. The engine drop-drains the last beat's pad
- * elements before passDone (S1 spillPadElems), keeping the gate truthful
+ * elements before passDone (spillPadElems), keeping the gate truthful
  * across passes.
  *
- * P == 1 (full-width single pass, legal since S0) flows through with no
+ * P == 1 (full-width single pass) flows through with no
  * reader/writer command: seed zeros, drain straight to `io.y`.
  *
  * STREAM_PER_PASS fail-safe: `refetchW` is suppressed under residency —
  * a spill under resident/prefetch modes stalls loudly instead of silently
- * corrupting (see the S0 runtime-contract note in Sequential).
+ * corrupting (see the runtime-contract note in Sequential).
  */
 case class SpillPassController(
   passes: Int,
@@ -74,12 +73,12 @@ case class SpillPassController(
     val wFetchFire = in Bool() // W-slice fetch accepted (reqW.fire of the layer)
     val residentMode = in Bool() // residency control plane level (fail-safe)
 
-    val passFirst = out Bool() // stable per pass (S1 contract)
-    val passLast = out Bool() // stable per pass (S1 contract)
+    val passFirst = out Bool() // stable per pass
+    val passLast = out Bool() // stable per pass
     val passIdx = out UInt((log2Up(passes) max 1) bits) // current pass (fetch addressing)
     val refetchW = out Bool() // re-fire the W-slice fetch (held till wFetchFire)
     val biasReArm = out Bool() // one-cycle pulse per pass prelude
-    // S2c: one-cycle A re-stream pulse per pass p > 0 (prelude). Sequential
+    // One-cycle A re-stream pulse per pass p > 0 (prelude). Sequential
     // routes it: exclusive node-0 spill restarts the image band sweep
     // (DDR-backed, free); shared/deep nodes replay the StreamTap. Suppressed
     // under residency with refetchW (same STREAM_PER_PASS fail-safe).
@@ -89,7 +88,7 @@ case class SpillPassController(
     val busy = out Bool()
     val done = out Bool() // one-cycle pulse when the final pass drains
   }
-  // S2c e2e observability: bench-side reads of the pass levels/pulses.
+  // Test-only observability: bench-side reads of the pass levels/pulses.
   // Zero behavior change (test-only visibility into an internal controller).
   io.passFirst.simPublic()
   io.passLast.simPublic()
@@ -108,16 +107,16 @@ case class SpillPassController(
   val passLastR = RegInit(if (passes == 1) True else False)
   val busyR = RegInit(False)
   val doneR = RegInit(False)
-  // Sticky drain-done (NN-01): the writer's 1-cycle done may precede
+  // Sticky drain-done: the writer's 1-cycle done may precede
   // passDone (fast memory vs the engine's seed-pad drain tail), so latch it
   // wherever it arrives; the fence consumes (and clears) the flag.
   val writerDoneSeen = RegInit(False)
   when(io.writerDone) {
     writerDoneSeen := True
   }
-  // Sticky prelude servants (NN-01: hold until the handshake, never a pulse
+  // Sticky prelude servants (hold until the handshake, never a pulse
   // the other side can miss).
-  // S2e seed-chunk cursor: the seed read is spillBeats single-beat chunks.
+  // Seed-chunk cursor: the seed read is spillBeats single-beat chunks.
   // beatIdx counts ACCEPTED chunks; readerFired (kept for the formal pin)
   // means all of them were accepted. The servant stays valid across the
   // prelude AND WaitPass: early chunks may still be unconsumed (engine idle
@@ -134,7 +133,6 @@ case class SpillPassController(
   val isLast = cnt === U(passes - 1, cnt.getWidth bits)
   val preludeEntry = (state === State.sPrelude) && (prevState =/= State.sPrelude)
 
-  // ---- Prelude servants ------------------------------------------------
   when(preludeEntry) {
     beatIdx := 0
     readerFired := False
@@ -161,7 +159,7 @@ case class SpillPassController(
     writerFired := True
   }
   // W-slice refetch (passes > 0), suppressed under residency (fail-safe).
-  // S2c e2e lesson: refetchW must assert one cycle AFTER the pass index is
+  // Lesson: refetchW must assert one cycle AFTER the pass index is
   // stable — the fetch plane addresses from the passIdx register, which
   // settles the cycle after cnt advances. Firing on the entry cycle would
   // re-fetch the PREVIOUS slice (same-cycle stale address). preludeHeld is
@@ -183,7 +181,6 @@ case class SpillPassController(
   val writerOk = isLast || writerFired
   val fetchOk = (cnt === 0) || fetchSeen
 
-  // ---- Main FSM --------------------------------------------------------
   io.passFirst := passFirstR
   io.passLast := passLastR
   io.passIdx := cnt
@@ -200,7 +197,7 @@ case class SpillPassController(
       }
     }
     is(State.sPrelude) {
-      // S2d scale lesson (K64-P8 stall at pass 2): never exit on the
+      // Scale lesson (K64-P8 stall at pass 2): never exit on the
       // prelude ENTRY cycle. The servant flags (readerFired/writerFired/
       // fetchSeen) still hold the PREVIOUS non-zero prelude's True values
       // during that cycle (preludeEntry clears them the same cycle, taking
@@ -210,7 +207,7 @@ case class SpillPassController(
       // never trip it (prelude 0 leaves the cnt!=0 servants False, so
       // prelude 1 genuinely waited); P >= 3 stalls. preludeHeld is True
       // from the second prelude cycle, once the clearing has landed. (The
-      // S2e beat cursor resets to 0 at the entry, so it can never fake a
+      // beat cursor resets to 0 at the entry, so it can never fake a
       // serviced prelude on the entry cycle either.)
       when(preludeHeld && readerOk && writerOk && fetchOk) {
         state := State.sWaitPass

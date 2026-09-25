@@ -7,11 +7,11 @@ import spinal.core.sim._
 import spinalML.utils.Float
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wave 5 NaN propagation probe: E4M3 single slot (15, 7) and FP4 (3, 1)
+// NaN propagation probe: E4M3 single slot (15, 7) and FP4 (3, 1)
 // flow through mul/add/gt/max/roundTo/widen with the canonical encoding
 // and the first-NaN sign rule. NaN is never emitted spontaneously
 // (saturation still yields 448/inf); LUT/PWL ops keep mapping NaN to 0
-// (documented trap, see docs/rounding_policy.md §5).
+// (documented trap).
 case class FloatNaNComp() extends Component {
   val io = new Bundle {
     val a4 = in(FP4_E2M1())

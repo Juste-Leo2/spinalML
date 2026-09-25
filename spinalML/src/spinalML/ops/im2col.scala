@@ -32,8 +32,6 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
   
   val inTensor = if (inLanes != 1) repack(io.a, 1) else io.a
 
-  // Line Buffers to hold previous rows of the image.
-  // Each row has W pixels, and each pixel has C channels.
   val lineBufferDepth = W * C
   val lineBuffers: Seq[LineBuffer2D[T]] = {
     val bufs = scala.collection.mutable.ArrayBuffer[LineBuffer2D[T]]()
@@ -64,7 +62,6 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
   inTensor.stream.ready := False
   io.c.stream.valid := False
   
-  // Map output payload directly from shift register based on current chunk
   for(i <- 0 until outLanes) {
     val flatIndex = (outChunkCount.value * outLanes) + i
     io.c.stream.payload(i) := shiftReg(flatIndex.resized)
@@ -100,7 +97,6 @@ case class Im2ColOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int, K:
           
           channelCount.increment()
           when(channelCount.willOverflowIfInc) {
-            // Shift the 2D window by 1 column (C elements) for each row
             for (r <- 0 until K) {
               val rowOffset = r * K * C
               for (i <- 0 until K * C - C) {

@@ -28,9 +28,7 @@ class BramAdapter(
   val mem     = Mem(Bits(axiConfig.dataWidth bits), memoryWords)
   val memData = Bits(axiConfig.dataWidth bits)
 
-  // ------------------------------------------------------------------
   // Virtual -> physical index mapping
-  // ------------------------------------------------------------------
   def mapIndex(addr: UInt): UInt = {
     val isWeight = addr >= weightBase
     // Addresses below imgBase must not underflow `addr - imgBase` into a huge
@@ -48,9 +46,7 @@ class BramAdapter(
   // byte yields byte-wide memory symbols (which pack into full-width block
   // RAMs) instead of one single-bit RAM per data bit.
 
-  // ------------------------------------------------------------------
   // AXI4 read response machine
-  // ------------------------------------------------------------------
   val raddrR   = Reg(UInt(32 bits)) init 0
   val rlenR    = Reg(UInt(8 bits)) init 0
   val ridR     = Reg(UInt(axiConfig.idWidth bits)) init 0
@@ -91,11 +87,9 @@ class BramAdapter(
   io.axi.r.payload.last := rlastR
   io.axi.r.payload.resp := B"00"
 
-  // ------------------------------------------------------------------
   // AXI4 write slave (accelerator write-back, e.g. DMAWriter): single
   // outstanding burst, AW accepted first (the master serializes AW/W/B),
   // every W beat committed with its byte strobes, then one B response.
-  // ------------------------------------------------------------------
   val beatCountW = log2Up((1 << axiConfig.lenWidth) + 1)
   val awPending  = RegInit(False)
   val bValidR    = RegInit(False)

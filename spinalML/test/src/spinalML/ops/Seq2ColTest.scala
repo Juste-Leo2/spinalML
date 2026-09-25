@@ -10,7 +10,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component for Seq of 3 with K=2
+// Seq of 3, K=2
 case class Seq2ColTestComp_3_K2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(3, 1), lanes = 1)) // Sequence of 3
@@ -19,7 +19,7 @@ case class Seq2ColTestComp_3_K2[T <: Data](dataType: HardType[T]) extends Compon
   io.c <> seq2col(io.a, kernelSize = 2, outLanes = 2)
 }
 
-// Wrapper component for Seq of 5 with K=3
+// Seq of 5, K=3
 case class Seq2ColTestComp_5_K3[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(5, 1), lanes = 1)) // Sequence of 5
@@ -28,7 +28,7 @@ case class Seq2ColTestComp_5_K3[T <: Data](dataType: HardType[T]) extends Compon
   io.c <> seq2col(io.a, kernelSize = 3, outLanes = 3)
 }
 
-// Wrapper component for Seq of 3 with K=2 and C=2
+// Seq of 3, K=2, C=2
 case class Seq2ColTestComp_3_K2_C2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(3, 2), lanes = 1)) // Sequence of 3, C=2, lanes=1
@@ -53,7 +53,6 @@ class Seq2ColTest extends AnyFunSuite {
         Seq(2, 3)
       )
       
-      // Thread to feed inputs
       fork {
         var i = 0
         dut.io.a.stream.valid #= true
@@ -67,7 +66,6 @@ class Seq2ColTest extends AnyFunSuite {
         dut.io.a.stream.valid #= false
       }
       
-      // Thread to check outputs
       var i = 0
       while (i < 2) {
         dut.clockDomain.waitSampling()

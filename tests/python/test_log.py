@@ -11,10 +11,7 @@ from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_unary_test
 
-# =========================================================================
 # Cocotb Test Logic
-# =========================================================================
-
 @cocotb.test()
 async def cocotb_log_i8(dut):
     def expected_fn(val):
@@ -45,10 +42,7 @@ async def cocotb_log_bf16_base10(dut):
         return pwl_log_float(val, BF16, base=10.0, index_bits=8)
     await run_unary_test(dut, "Log", "BF16.base10", BF16, [2.5, 12.5, 0.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=lambda x: log_b(x, 10.0), edge_cases=[0.0, -1.0])
 
-# =========================================================================
 # Pytest Launchers
-# =========================================================================
-
 def run_log_sim(dtype_filter, toplevel, testcase_name, request=None):
     v_file = run_mill("spinalML.ops.LogTest", dtype_filter, toplevel)
     build_dir = f"sim_build/{toplevel.lower()}"

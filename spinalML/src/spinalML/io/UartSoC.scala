@@ -26,13 +26,13 @@ class UartSoC[T <: Data](
   val memoryWords: Int = 4096,
   val imgBase: Int    = 0x10000,
   val weightBase: Int = 0x20000,
-  // Phase-1 DDR plumbing note (docs/ddr_impl.md): the SoC `target` selects the
-  // default memory implementation, while `acceleratorFactory` independently
-  // carries `Accelerator.target` into `Sequential`. Keep both consistent by
-  // hand for now (e.g. ASIC SoC + Accelerator(Target.ASIC(...))); Phase 2
-  // (MemorySpec) will construct both from a single descriptor instead of
-  // relying on two defaults. No strict require here: existing tops elaborate
-  // with the Simulation default inside FPGA/ASIC SoCs in unit tests.
+  // DDR plumbing: the SoC `target` selects the default memory implementation,
+  // while `acceleratorFactory` independently carries `Accelerator.target`
+  // into `Sequential` — keep both consistent by hand (e.g. ASIC SoC +
+  // Accelerator(Target.ASIC(...))). MemorySpec will one day build both from
+  // a single descriptor instead of two defaults. No strict require here:
+  // existing tops elaborate with the Simulation default inside FPGA/ASIC
+  // SoCs in unit tests.
   val memoryAdapterFactory: Option[(Axi4Config) => spinalML.memory.MemoryAdapter] = None,
   val outCount: Int   = 10,
   val version: Int    = 0x01,
@@ -77,8 +77,7 @@ class UartSoC[T <: Data](
     // WIDTH MISMATCH deep inside the serializer below.
     // TODO(multi-byte-logits): support BF16/FP16 outputs by serializing
     //   bytesPerElem bytes per element in the R reply — this changes the
-    //   protocol (UartBridge byte counting, uart_host.read_logits, docs) and
-    //   is tracked in docs/full_roadmap.md §Refactoring 1.4.
+    //   protocol (UartBridge byte counting, uart_host.read_logits).
     val outElemBits = acc.io.outStream.stream.payload(0).getBitsWidth
     require(outElemBits == 8,
       s"UartSoC only serializes 8-bit output elements over UART (got $outElemBits bits) — see docs/uart_bridge.md and the multi-byte-logits TODO")

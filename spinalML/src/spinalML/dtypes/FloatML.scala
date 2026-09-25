@@ -13,6 +13,5 @@ case class FloatML(expBits: Int, mantBits: Int) extends Bundle {
   val exponent = UInt(expBits bits)
   val sign = Bool()
   
-  // IEEE bias calculation: (2^(expBits - 1)) - 1
   def bias: Int = (1 << (expBits - 1)) - 1
 }

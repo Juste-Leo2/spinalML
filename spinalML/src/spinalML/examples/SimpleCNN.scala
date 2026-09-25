@@ -32,9 +32,7 @@ case class SimpleCNN(dataType: HardType[Data]) extends Component {
     val y = master(Tensor(dataType, Seq(2, 1), lanes = 2))
   }
   
-  // --------------------------------------------------------
-  // 1. Conv1D Layer (Single Channel Convolution)
-  // --------------------------------------------------------
+  // 1. Conv1D (single channel)
   val convW = Tensor(dataType, Seq(3, 1), lanes = 3)
   convW.stream.valid := True
   convW.stream.payload.foreach(_.assignFromBits(B(0, dataType.getBitsWidth bits)))
@@ -45,9 +43,7 @@ case class SimpleCNN(dataType: HardType[Data]) extends Component {
   
   val conv1dOut = Conv1D(io.x, convW, convB) // Output [14, 1], lanes 1
   
-  // --------------------------------------------------------
   // 2. BatchNorm1D + ReLU
-  // --------------------------------------------------------
   val bnGamma = Tensor(dataType, Seq(1), lanes = 1)
   val bnBeta = Tensor(dataType, Seq(1), lanes = 1)
   bnGamma.stream.valid := True
@@ -59,21 +55,15 @@ case class SimpleCNN(dataType: HardType[Data]) extends Component {
   
   val reluOut = relu(bnOut)
   
-  // --------------------------------------------------------
   // 3. MaxPool1D
-  // --------------------------------------------------------
   val poolIn = reshape(reluOut, Seq(14, 1))
   val poolOut = maxpool1d(poolIn, poolSize = 2, stride = 2)
   
-  // --------------------------------------------------------
-  // 4. Repack (Gearbox) to feed Linear
-  // --------------------------------------------------------
+  // 4. Repack (gearbox) to feed Linear
   val poolReshaped = reshape(poolOut, Seq(1, 7))
   val repacked = repack(poolReshaped, newLanes = 7)
   
-  // --------------------------------------------------------
-  // 5. Linear (Fully Connected)
-  // --------------------------------------------------------
+  // 5. Linear
   val linW1 = Tensor(dataType, Seq(7, 1), lanes = 7)
   linW1.stream.valid := True
   linW1.stream.payload.foreach(_.assignFromBits(B(0, dataType.getBitsWidth bits)))
@@ -102,9 +92,7 @@ case class SimpleCNN(dataType: HardType[Data]) extends Component {
   val concatOut = concatenate(outClass1, outClass2, axis = 1)
   val concatReshaped = reshape(concatOut, Seq(2, 1))
   
-  // --------------------------------------------------------
   // 6. Softmax
-  // --------------------------------------------------------
   val softmaxComp = Softmax1D(dataType, channels = 2, seqLen = 1)
   softmaxComp.io.x <> concatReshaped
   

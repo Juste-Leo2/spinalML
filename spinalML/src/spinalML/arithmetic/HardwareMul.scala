@@ -24,6 +24,61 @@ import spinalML.primitives.gowin.GowinMULT18X18
  */
 object HardwareMul {
 
+  private[arithmetic] def useGowinDsp(config: ArithmeticConfig, isSim: Boolean): Boolean =
+    config.target match {
+      case Target.FPGA(FpgaFamily.Gowin, useHardDsp) => useHardDsp && config.useDsp && !isSim
+      case _                                         => false
+    }
+
+  // Physical Gowin MULT18X18 mapping with clocked registers
+  private[arithmetic] def gowinDsp(
+    a: Bits,
+    b: Bits,
+    signed: Boolean,
+    latency: Int,
+    enable: Bool
+  ): Bits = {
+    val dsp = new GowinMULT18X18(
+      areg = latency >= 2,
+      breg = latency >= 2,
+      outReg = true,
+      pipeReg = false,
+      asignReg = latency >= 2,
+      bsignReg = latency >= 2
+    )
+    dsp.io.A := a
+    dsp.io.B := b
+    dsp.io.SIA := B(0, 18 bits)
+    dsp.io.SIB := B(0, 18 bits)
+    dsp.io.ASIGN := (if (signed) True else False)
+    dsp.io.BSIGN := (if (signed) True else False)
+    dsp.io.ASEL := False
+    dsp.io.BSEL := False
+    dsp.io.CE := enable
+    dsp.io.DOUT
+  }
+
+  /** Staging register with deterministic reset (integer datapaths). */
+  private[arithmetic] def stagedInit[T <: Data](x: T, en: Bool): T =
+    RegNextWhen(x, en, init = x.getZero)
+
+  /** Staging register without reset value (float datapaths, as before). */
+  private[arithmetic] def staged[T <: Data](x: T, en: Bool): T =
+    RegNextWhen(x, en)
+
+  /** Shared 0/1/2-cycle retiming: make builds the product, stage registers it. */
+  private[arithmetic] def retime[T <: Data](
+    a: T,
+    b: T,
+    enable: Bool,
+    latency: Int,
+    stage: (T, Bool) => T
+  )(make: (T, T) => T): T = latency match {
+    case 0 => make(a, b)
+    case 1 => stage(make(a, b), enable)
+    case 2 => stage(make(stage(a, enable), stage(b, enable)), enable)
+  }
+
   /**
    * Multiplies two hardware signals with an explicit accumulator return type.
    */
@@ -38,107 +93,37 @@ object HardwareMul {
     require(latency >= 0 && latency <= 2, s"Latency must be 0, 1, or 2, got $latency")
 
     val isSim = GenerationFlags.simulation.isEnabled || config.target.isSim
-    val isGowinPhysical = config.target match {
-      case Target.FPGA(FpgaFamily.Gowin, useHardDsp) => useHardDsp && config.useDsp && !isSim
-      case _                                         => false
-    }
+    val isGowinPhysical = useGowinDsp(config, isSim)
 
     (a, b) match {
       case (valA: SInt, valB: SInt) =>
-        val wA = valA.getBitsWidth
-        val wB = valB.getBitsWidth
         val wOut = widthOf(accType)
-
-        if (isGowinPhysical && latency >= 1 && wA <= 18 && wB <= 18) {
-          // Physical Gowin MULT18X18 mapping with clocked registers
-          val dsp = new GowinMULT18X18(
-            areg = latency >= 2,
-            breg = latency >= 2,
-            outReg = true,
-            pipeReg = false,
-            asignReg = latency >= 2,
-            bsignReg = latency >= 2
-          )
-          dsp.io.A := valA.resize(18 bits).asBits
-          dsp.io.B := valB.resize(18 bits).asBits
-          dsp.io.SIA := B(0, 18 bits)
-          dsp.io.SIB := B(0, 18 bits)
-          dsp.io.ASIGN := True
-          dsp.io.BSIGN := True
-          dsp.io.ASEL := False
-          dsp.io.BSEL := False
-          dsp.io.CE := enable
-
-          val outSigned = dsp.io.DOUT.asSInt.resize(wOut)
-          outSigned.asInstanceOf[TAcc]
+        if (isGowinPhysical && latency >= 1 && valA.getBitsWidth <= 18 && valB.getBitsWidth <= 18) {
+          gowinDsp(valA.resize(18 bits).asBits, valB.resize(18 bits).asBits,
+            signed = true, latency, enable).asSInt.resize(wOut).asInstanceOf[TAcc]
         } else {
           // Standard behavioral RTL (ASIC standard-cells, Simulation, Generic FPGA DSP inference, or soft LUT)
-          val rawProd: SInt = latency match {
-            case 0 => (valA * valB).resize(wOut)
-            case 1 =>
-              val p = (valA * valB).resize(wOut)
-              RegNextWhen(p, enable, init = p.getZero)
-            case 2 =>
-              val inA = RegNextWhen(valA, enable, init = valA.getZero)
-              val inB = RegNextWhen(valB, enable, init = valB.getZero)
-              val p = (inA * inB).resize(wOut)
-              RegNextWhen(p, enable, init = p.getZero)
-          }
-          rawProd.asInstanceOf[TAcc]
+          retime(valA, valB, enable, latency, stagedInit[SInt] _) { (x, y) =>
+            (x * y).resize(wOut)
+          }.asInstanceOf[TAcc]
         }
 
       case (valA: UInt, valB: UInt) =>
-        val wA = valA.getBitsWidth
-        val wB = valB.getBitsWidth
         val wOut = widthOf(accType)
-
-        if (isGowinPhysical && latency >= 1 && wA <= 18 && wB <= 18) {
-          val dsp = new GowinMULT18X18(
-            areg = latency >= 2,
-            breg = latency >= 2,
-            outReg = true,
-            pipeReg = false,
-            asignReg = latency >= 2,
-            bsignReg = latency >= 2
-          )
-          dsp.io.A := valA.resize(18 bits).asBits
-          dsp.io.B := valB.resize(18 bits).asBits
-          dsp.io.SIA := B(0, 18 bits)
-          dsp.io.SIB := B(0, 18 bits)
-          dsp.io.ASIGN := False
-          dsp.io.BSIGN := False
-          dsp.io.ASEL := False
-          dsp.io.BSEL := False
-          dsp.io.CE := enable
-
-          val outUnsigned = dsp.io.DOUT.asUInt.resize(wOut)
-          outUnsigned.asInstanceOf[TAcc]
+        if (isGowinPhysical && latency >= 1 && valA.getBitsWidth <= 18 && valB.getBitsWidth <= 18) {
+          gowinDsp(valA.resize(18 bits).asBits, valB.resize(18 bits).asBits,
+            signed = false, latency, enable).asUInt.resize(wOut).asInstanceOf[TAcc]
         } else {
-          val rawProd: UInt = latency match {
-            case 0 => (valA * valB).resize(wOut)
-            case 1 =>
-              val p = (valA * valB).resize(wOut)
-              RegNextWhen(p, enable, init = p.getZero)
-            case 2 =>
-              val inA = RegNextWhen(valA, enable, init = valA.getZero)
-              val inB = RegNextWhen(valB, enable, init = valB.getZero)
-              val p = (inA * inB).resize(wOut)
-              RegNextWhen(p, enable, init = p.getZero)
-          }
-          rawProd.asInstanceOf[TAcc]
+          // Standard behavioral RTL (ASIC standard-cells, Simulation, Generic FPGA DSP inference, or soft LUT)
+          retime(valA, valB, enable, latency, stagedInit[UInt] _) { (x, y) =>
+            (x * y).resize(wOut)
+          }.asInstanceOf[TAcc]
         }
 
       case (valA: FloatML, valB: FloatML) =>
-        val fProd = Float.mul(valA, valB)
-        val outFloat = latency match {
-          case 0 => fProd
-          case 1 => RegNextWhen(fProd, enable)
-          case 2 =>
-            val inA = RegNextWhen(valA, enable)
-            val inB = RegNextWhen(valB, enable)
-            RegNextWhen(Float.mul(inA, inB), enable)
-        }
-        outFloat.asInstanceOf[TAcc]
+        retime(valA, valB, enable, latency, staged[FloatML] _) { (x, y) =>
+          Float.mul(x, y)
+        }.asInstanceOf[TAcc]
 
       case _ =>
         throw new IllegalArgumentException(

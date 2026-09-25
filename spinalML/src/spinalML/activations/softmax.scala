@@ -15,7 +15,6 @@ case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: In
     val y = master(Tensor(dataType, Seq(seqLen, channels), lanes = channels))
   }
 
-  // Helper Math Functions
   def maxFn(a: T, b: T): T = (a, b) match {
     case (vx: SInt, va: SInt) => Mux(vx > va, vx, va).asInstanceOf[T]
     case (vx: UInt, va: UInt) => Mux(vx > va, vx, va).asInstanceOf[T]
@@ -56,7 +55,6 @@ case class Softmax1D[T <: Data](dataType: HardType[T], channels: Int, seqLen: In
     case _ => throw new Exception("Unsupported type")
   }
 
-  // Generic Pipelined Tree
   def buildPipelinedTree[C <: Data, N <: Data](
     inputStream: Stream[Vec[T]], 
     carryStream: Stream[C],

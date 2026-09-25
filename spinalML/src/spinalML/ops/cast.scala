@@ -28,7 +28,7 @@ case class CastOp[TIn <: Data, TOut <: Data](
   lanes: Int,
   scales: Seq[Double] = Seq(1.0),
   runtimeScale: Boolean = false,
-  // DTYPE-06: per-op rounding override (default = RoundingConfig.current,
+  // Per-op rounding override (default = RoundingConfig.current,
   // i.e. env decides). Explicit Truncate keeps the legacy bit-exact cast.
   rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
@@ -39,7 +39,6 @@ case class CastOp[TIn <: Data, TOut <: Data](
     val runtimeScaleVal = if (runtimeScale) in Bits(32 bits) else null
   }
 
-  // Pass through the stream control signals
   io.c.stream.arbitrationFrom(io.a.stream)
 
   val totalBeats = (shape.product + lanes - 1) / lanes
@@ -93,7 +92,7 @@ case class CastOp[TIn <: Data, TOut <: Data](
         require(!useScale, "CastOp SInt -> SInt does not support scales")
         io.c.stream.payload(i).assignFrom(valIn.resize(valOut.getWidth).asInstanceOf[TOut])
       case (valIn: FloatML, valOut: FloatML) =>
-        // OPS-10: same format is a bit-identical passthrough; otherwise
+        // Same format is a bit-identical passthrough; otherwise
         // Float.roundTo (narrowing, switch-aware) or exact widening.
         require(!useScale, "CastOp FloatML -> FloatML does not support scales")
         val converted =
@@ -103,12 +102,12 @@ case class CastOp[TIn <: Data, TOut <: Data](
             spinalML.utils.Float.roundTo(valIn, valOut.expBits, valOut.mantBits, rounding).asInstanceOf[TOut]
         io.c.stream.payload(i).assignFrom(converted)
       case (valIn: FloatML, valOut: SInt) =>
-        // OPS-10: round-then-saturate into the SInt range (switch-aware).
+        // Round-then-saturate into the SInt range (switch-aware).
         require(!useScale, "CastOp FloatML -> SInt does not support scales")
         io.c.stream.payload(i).assignFrom(
           spinalML.utils.Float.toSInt(valIn, valOut.getWidth, rounding).asInstanceOf[TOut])
       case _ =>
-        throw new Exception("Type de cast non supporté (SInt <-> FloatML et SInt -> SInt sont gérés)")
+        throw new Exception("Unsupported cast type (only SInt <-> FloatML and SInt -> SInt are handled)")
     }
   }
 

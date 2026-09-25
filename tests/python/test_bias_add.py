@@ -113,12 +113,12 @@ async def run_bias_add_test(dut, op_name, dtype_name, dtype, lanes, num_bias, nu
     dut._log.info(f"[{op_name}][{dtype_name}] Passed BiasAdd Check")
 
 
-# --------- BiasAdd scalar (lanes=1, N=1) ---------
+# BiasAdd scalar (lanes=1, N=1)
 @cocotb.test()
 async def cocotb_bias_add_i8_scalar(dut):
     await run_bias_add_test(dut, "BiasAddScalar", "I8", I8, 1, 1, 4, False, "BiasAddTestComp")
 
-# --------- BiasAdd broadcast (lanes=2, N=2) ---------
+# BiasAdd broadcast (lanes=2, N=2)
 @cocotb.test()
 async def cocotb_bias_add_i8_bcast(dut):
     await run_bias_add_test(dut, "BiasAddBcast", "I8", I8, 2, 2, 2, False, "BiasAddTestComp2")

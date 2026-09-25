@@ -10,12 +10,12 @@ import spinalML.tensors.Tensor
 case class ConcatenateAxis0Op[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB: Seq[Int], lanes: Int) extends Component {
   require(shapeA.tail == shapeB.tail, "Tensors must have the same shape except for the concatenation axis (axis 0)")
 
-  // OPS-04 contract: the FSM counts streamed beats, not axis-0 cells.
+  // Beat-counting contract: the FSM counts streamed beats, not axis-0 cells.
   // Row-major, one axis-0 cell = tailProduct elements = beatsPerRow beats.
   // 1D legacy: shape.head counts beats directly (all existing benches drive
   // `head` beats of `lanes` elements). Rows must be beat-aligned
   // (tailProduct % lanes == 0): a beat straddling two rows belongs to both
-  // and is unrecoverable — same fail-fast rationale as OPS-07.
+  // and is unrecoverable — hence the elaboration-time require below.
   private def beatsPerRow(shape: Seq[Int]): Int =
     if (shape.tail.isEmpty) 1
     else {
@@ -87,8 +87,8 @@ case class ConcatenateAxis0Op[T <: Data](dataType: HardType[T], shapeA: Seq[Int]
 }
 
 case class ConcatenateAxis1Op[T <: Data](dataType: HardType[T], shape: Seq[Int], lanesA: Int, lanesB: Int) extends Component {
-  // OPS-05: the join pairs input beats lockstep, one output beat per input
-  // beat pair. Correct if and only if each beat holds exactly one full row
+  // Lockstep beat pairing: the join pairs input beats lockstep, one output
+  // beat per input beat pair. Correct if and only if each beat holds exactly one full row
   // on both sides (enforced by `concatenate.apply` below): sub-row lanes
   // would emit interleaved half-joins, unequal lanes deadlock StreamJoin.
   val io = new Bundle {
@@ -118,9 +118,8 @@ object concatenate {
       comp.io.c
     } else if (axis == 1) {
       require(a.shape == b.shape, "Tensors must have same temporal shape for axis 1 concatenation")
-      // OPS-05 contract: the per-beat lane join is a row-wise concat only
-      // when each beat carries exactly one full row on both sides. Anything
-      // else is silently wrong (sub-row lanes interleave half-rows) or hangs
+      // Row-wise concat iff each beat carries exactly one full row on both
+      // sides. Anything else is silently wrong (sub-row lanes interleave half-rows) or hangs
       // (unequal lanes => unequal beat counts => StreamJoin starves).
       require(a.shape.length > 1,
         s"Concatenate axis=1 needs a row dimension (2D+ tensors), got shape ${a.shape}")

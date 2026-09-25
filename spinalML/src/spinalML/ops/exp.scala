@@ -10,8 +10,8 @@ import spinalML.utils.{MathLUTs, UnaryLUTOp}
 import spinalML.{RoundingConfig, RoundingMode}
 
 case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
-                            // Option B (switch-aware): ROM/LUT constant rounding
-                            // follows the elaboration mode (RNE vs legacy).
+                            // Switch-aware ROM/LUT constant rounding follows
+                            // the elaboration mode (RNE vs legacy).
                             // Composed ops instantiate with the default (env).
                             rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
@@ -61,7 +61,6 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
       val x = io.a.stream.payload(i).asInstanceOf[FloatML]
       val isZero = x.exponent === 0
       
-      // 1. Convert to Fixed Point Q8.8
       val expTrueSInt = x.exponent.intoSInt - bias
       val shiftSInt = expTrueSInt - mantBits + 8
       
@@ -79,16 +78,14 @@ case class ExpOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int,
       
       val fixedX = Mux(x.sign, -absFixed.intoSInt, absFixed.intoSInt)
       
-      // 2. Multiply by log2(e) in Q0.16 format. log2(e) * 2^16 = 94548
+      // log2(e) * 2^16 = 94548 in Q0.16
       val log2e = S(94548, 18 bits)
       val yFixedFull = (fixedX * log2e) // Q8.8 * Q0.16 = Q8.24
       
-      // 3. Extract Integer (I) and Fractional (F)
       val I = (yFixedFull >> 24).resize(expBits + 2 bits) // SInt
       // We extract the top `lutIndexBits` from the 24-bit fractional part
       val F = yFixedFull(23 downto (24 - lutIndexBits)).asUInt // UInt for LUT index
       
-      // 4. LUT Lookup
       val readMant = mantLuts(i).readSync(F, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)

@@ -17,7 +17,6 @@ case class LeakyReLUOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes:
   for (i <- 0 until lanes) {
     io.x.stream.payload(i) match {
       case valX: SInt => 
-        // Arithmetic right shift for negative slope
         io.y.stream.payload(i).assignFrom(Mux(valX < 0, valX >> shift, valX).asInstanceOf[T])
       case valX: UInt => 
         io.y.stream.payload(i).assignFrom(valX.asInstanceOf[T])

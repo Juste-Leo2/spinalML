@@ -165,11 +165,7 @@ def abs_hw(x: float, dtype) -> float:
         return dtype.to_float(x_bits)
     else:
         # Integer: just use python abs() and requantize (in case of min negative value overflow)
-        # SInt: min value -128 becomes +128 which overflows to -128 or gets clamped to 127 in HW?
-        # In HW: valA < 0 ? -valA : valA.
-        # Wait, for SInt 8 bits, -(-128) is 128, which truncated to 8 bits is -128.
-        # But wait, python abs(-128) is 128. If we want bit accurate:
-        # Let's do exactly what hardware does: Mux(valA < 0, -valA, valA)
+        # Hardware 2's complement negation: Mux(valA < 0, -valA, valA)
         x_bits = dtype.from_float(x)
         valA = x_bits
         if valA & (1 << (dtype.bit_width - 1)): # is negative
@@ -247,7 +243,7 @@ def pwl_log_float(x_val: float, dtype, base: float = math.e, index_bits: int = 8
     """Golden model replicating exactly the LogOp algebraic separation branch for FloatML > 8 bits:
     log_b(x) = log2(x) * ln(2)/ln(b), with Q8.8 fixed point, Q0.16 constant and LZD re-quantization.
 
-    Option B: the Q0.16 constant and the Q8.8 ROM entries quantize half-even
+    The Q0.16 constant and the Q8.8 ROM entries quantize half-even
     (Python round, like the RTL roundRNE) under RNE, legacy half-up under
     trunc. None follows SPINALML_ROUNDING."""
     rounding = resolve_rounding(rounding)
@@ -325,17 +321,17 @@ def softmax(x: np.ndarray, dtype: FloatML = None) -> np.ndarray:
 
 import math
 def pwl_int(x_val: float, bit_width: int, math_fn, index_bits: int = 8, rounding=None) -> int:
-    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les entiers, pour n'importe quelle fonction.
+    """Bit-exact golden of the hardware piecewise-linear (PWL) approximation
+    for integers, for any function.
 
-    Option B: les coefficients encodés (intEncodeFn miroir) arrondissent
-    half-even sous RNE, legacy half-up sous trunc. None suit
-    SPINALML_ROUNDING."""
+    The encoded coefficients (intEncodeFn mirror) round half-even under RNE,
+    legacy half-up under trunc. None follows SPINALML_ROUNDING."""
     rounding = resolve_rounding(rounding)
     # The input bits exactly as injected by Cocotb
     from golden_models.dtypes import SIntML
     x_int = SIntML(bit_width).from_float(x_val, rounding)
-    # Si x_int représente un nombre négatif en complément à 2, x_int > 0 dans sa version binaire non-signée
-    # Mais le segment index a besoin des bits bruts
+    # If x_int is a negative 2's complement number, x_int > 0 in its unsigned
+    # binary form — but the segment index needs the raw bits
     x_bits = x_int
         
     shift = bit_width - index_bits
@@ -410,7 +406,7 @@ def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8, roundi
     PWLLUTs.createConstantSegmentFn; the old linear fit saturated its int
     coefficients on steep 1/x slopes (recip(1) evaluated to -1).
 
-    Option B: the encoded sample follows `rounding` like intEncodeFn."""
+    The encoded sample follows `rounding` like intEncodeFn."""
     rounding = resolve_rounding(rounding)
     from golden_models.dtypes import SIntML
 
@@ -440,11 +436,11 @@ def pwl_reciprocal_int(x_val: float, bit_width: int, index_bits: int = 8, roundi
     return encode(y)
 
 def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8, rounding=None) -> int:
-    """Golden model reproduisant exactement l'approximation linéaire (PWL) matérielle pour les flottants.
+    """Bit-exact golden of the hardware piecewise-linear (PWL) approximation
+    for floats.
 
-    Option B: les coefficients (a_bits/b_bits via from_float, miroir de
-    floatEncodeFn dans generateROMs) suivent `rounding`. None suit
-    SPINALML_ROUNDING."""
+    The coefficients (a_bits/b_bits via from_float, mirror of floatEncodeFn
+    in generateROMs) follow `rounding`. None follows SPINALML_ROUNDING."""
     rounding = resolve_rounding(rounding)
     bit_width = dtype.exp_bits + dtype.mant_bits + 1
 
@@ -480,7 +476,7 @@ def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8, rounding=None) 
     a_hw = dtype.to_float(a_bits)
     b_hw = dtype.to_float(b_bits)
     
-    # L'architecture matérielle (SpinalHDL Float) utilise une troncature (Round Towards Zero) pour économiser de la logique
+    # Hardware architecture (SpinalHDL Float) uses truncation (Round Towards Zero) to save logic
     def float_mul_hw(v1: float, v2: float) -> float:
         b1 = dtype.from_float(v1); b2 = dtype.from_float(v2)
         s1 = (b1 >> (dtype.exp_bits + dtype.mant_bits)) & 1
@@ -507,7 +503,7 @@ def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8, rounding=None) 
         return dtype.to_float((sign << (dtype.exp_bits + dtype.mant_bits)) | (exp << dtype.mant_bits) | mant_trunc)
 
     def float_add_hw(v1: float, v2: float) -> float:
-        # Pour simplifier, on utilise le float Python mais on force la troncature de la mantisse
+        # Force mantissa truncation to mirror hardware Round Towards Zero
         import math
         res = v1 + v2
         if res == 0.0: return 0.0
@@ -520,9 +516,9 @@ def pwl_float(x_val: float, dtype, math_fn, index_bits: int = 8, rounding=None) 
         sign = 1 if res < 0 else 0
         return dtype.to_float((sign << (dtype.exp_bits + dtype.mant_bits)) | (exp_val << dtype.mant_bits) | mant_val)
 
-    # p = a * x (tronqué HW)
+    # p = a * x (HW truncated)
     p_hw = float_mul_hw(a_hw, x_val)
-    # res = p + b (tronqué HW)
+    # res = p + b (HW truncated)
     res_hw = float_add_hw(p_hw, b_hw)
     
     return dtype.from_float(res_hw)
@@ -539,9 +535,9 @@ def floatml_algebraic_pack(dtype, sign, new_exp, mant_val):
     return (sign << (dtype.exp_bits + dtype.mant_bits)) | (out_exp << dtype.mant_bits) | out_mant
 
 def pwl_exp_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
-    """Algebraic-path golden (mantissa ROM). Option B: the ROM entry
-    quantizes half-even under RNE (like generateFloatMantissaROM), legacy
-    half-up under trunc. None follows SPINALML_ROUNDING."""
+    """Algebraic-path golden (mantissa ROM): the ROM entry quantizes
+    half-even under RNE (like generateFloatMantissaROM), legacy half-up
+    under trunc. None follows SPINALML_ROUNDING."""
     rounding = resolve_rounding(rounding)
     x_bits = dtype.from_float(x_val, rounding)
     exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)
@@ -600,7 +596,7 @@ def pwl_sqrt_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> i
     return pwl_float(x_val, dtype, sqrt_fn, index_bits, rounding)
 
 def pwl_reciprocal_float(x_val: float, dtype, index_bits: int = 8, rounding=None) -> int:
-    """Algebraic-path golden (mantissa ROM). Option B: like pwl_exp_float."""
+    """Algebraic-path golden (mantissa ROM): quantized like pwl_exp_float."""
     rounding = resolve_rounding(rounding)
     x_bits = dtype.from_float(x_val, rounding)
     exp = (x_bits >> dtype.mant_bits) & ((1 << dtype.exp_bits) - 1)

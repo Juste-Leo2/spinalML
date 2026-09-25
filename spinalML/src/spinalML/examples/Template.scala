@@ -15,25 +15,19 @@ import spinalML.activations._
  */
 case class Template[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int) extends Component {
   
-  // ==========================================
-  // 1. DEFINE YOUR IO (Inputs / Outputs)
-  // ==========================================
+  // 1. Define your IO (inputs / outputs)
   val io = new Bundle {
     val x = slave(Tensor(dataType, shape, lanes))
     val y = master(Tensor(dataType, shape, lanes))
   }
   
-  // ==========================================
-  // 2. WRITE YOUR ML DATAFLOW
-  // ==========================================
+  // 2. Write your ML dataflow
   // Example: Y = relu(abs(X))
   
   val absX = abs(io.x)
   val reluX = relu(absX)
   
-  // ==========================================
-  // 3. CONNECT TO OUTPUT
-  // ==========================================
+  // 3. Connect to output
   io.y <> reluX
   
 }

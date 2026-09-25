@@ -14,9 +14,7 @@ from utils.tb_utils import seed_random, SEED
 
 seed_random()
 
-# ==========================================
 # CONV2D LAYER
-# ==========================================
 async def run_conv2d_test(dut, op_name, dtype_name, dtype, X, W, b, is_floatml, W_shape, W_lanes, X_shape, X_lanes, Y_shape, Y_lanes, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())

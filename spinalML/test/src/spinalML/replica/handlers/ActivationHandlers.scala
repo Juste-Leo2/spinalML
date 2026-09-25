@@ -7,6 +7,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object ActivationHandlers {
 
+  /** Dispatch to LayerReplicas for activations (ReLU, LeakyReLU, Sigmoid, Tanh, Softmax). */
   def evalReLU(
     curTensor: ReplicaTensor,
     curShape: Seq[Int]

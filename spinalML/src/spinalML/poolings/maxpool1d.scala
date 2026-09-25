@@ -21,7 +21,6 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
     val c = master(Tensor(dataType, Seq(L_out, channels), lanes = channels))
   }
   
-  // Shift registers to hold the window for the max operation for each channel
   val shiftRegs = Seq.fill(channels)(Vec(Reg(dataType), poolSize))
   shiftRegs.foreach(_.foreach(r => r.init(r.getZero.asInstanceOf[T])))
   
@@ -31,7 +30,6 @@ case class MaxPool1DOp[T <: Data](dataType: HardType[T], L: Int, channels: Int, 
   io.a.stream.ready := False
   io.c.stream.valid := False
   
-  // Combinatorial max computation (Max-Tree)
   def buildMaxTree(nodes: Seq[T]): T = {
     if (nodes.length == 1) return nodes.head
     val nextLevel = nodes.grouped(2).map {

@@ -9,7 +9,7 @@ import spinalML.dtypes.{BF16, FP4_E2M1, FP8_E4M3}
 import spinalML.utils.Float
 
 /**
- * Netlist-level guard for Wave 5 NaN propagation (companion of the
+ * Netlist-level guard for NaN propagation (companion of the
  * simulation-side [[spinalML.dtypes.FloatNaNTest]] and the exhaustive
  * `FloatSweepTest` NaN sweeps).
  *

@@ -43,11 +43,11 @@ case class FetchRequest2D(addressWidth: Int) extends Bundle {
  *  - Element dtype must be at least one byte wide (byte-addressed fetch).
  *  - Row width must be divisible by `outLanes`: the trim masks whole output
  *    beats and cannot split an element group across a row boundary.
- *  - When `outLanes > 1`, callers must additionally guarantee that every row
- *    start address falls on an output-group boundary (headSkipElems % outLanes
- *    == 0). Row addresses are runtime values, so this is checked by formal
- *    properties rather than at elaboration time (see roadmap §8).
- */
+  *  - When `outLanes > 1`, callers must additionally guarantee that every row
+  *    start address falls on an output-group boundary (headSkipElems % outLanes
+  *    == 0). Row addresses are runtime values, so this is checked by formal
+  *    properties rather than at elaboration time.
+  */
 case class DMAReader2D[T <: Data](
   dataType: HardType[T],
   shape: Seq[Int],
@@ -61,16 +61,13 @@ case class DMAReader2D[T <: Data](
     val outStream = master(Tensor(dataType, shape, outLanes))
   }
 
-  // Instantiation of the highly optimized 1D reader
   val reader1D = DMAReader(dataType, shape, outLanes, axiConfig)
   io.axiMaster <> reader1D.io.axiMaster
 
   val readerCmd = Stream(FetchRequest(axiConfig.addressWidth))
   reader1D.io.cmd << readerCmd
 
-  // --------------------------------------------------------
   // Geometry helpers
-  // --------------------------------------------------------
   require(shape.length >= 2,
     "DMAReader2D: shape must be at least 2D (H, W) — it describes a patch of rows")
   require(dataType.getBitsWidth >= 8,
@@ -94,9 +91,7 @@ case class DMAReader2D[T <: Data](
   val beatsW         = log2Up(beatsPerRowMax + 1)
   val rowWidth     = U(shape(1), log2Up(shape(1) + 1) bits)
 
-  // --------------------------------------------------------
-  // Address Generator State Machine
-  // --------------------------------------------------------
+  // Address generator state machine
   val currentAddress = Reg(UInt(axiConfig.addressWidth bits)) init (0)
   val currentRow     = Reg(UInt(16 bits)) init (0)
   val lastRow        = Reg(Bool()) init (False)
@@ -119,26 +114,22 @@ case class DMAReader2D[T <: Data](
 
   io.cmd.ready := False
 
-  // Combinational geometry for the row starting at currentAddress
   val headSkipBytes = currentAddress % U(bytesPerBeat, axiConfig.addressWidth bits)
   val headSkipElems = headSkipBytes >> log2Up(elemBytes)
   val reqAddrAligned = currentAddress - headSkipBytes
   val wordsForCurrentRow = ((headSkipElems +^ rowWidth +^ U(elemsPerWord - 1)) /
                             U(elemsPerWord)).resize(rowWordsW bits)
 
-  // Output stream beats per fetched row
   val totalFetchElems = rowWords * U(elemsPerWord)
   val rowFetchedBeats = ((totalFetchElems / outLanes).resize(beatsW bits)) +
                         Mux(totalFetchElems % outLanes =/= 0, U(1, beatsW bits), U(0, beatsW bits))
 
-  // --------------------------------------------------------
   // Row trim: mask leading (alignment) and trailing (overshoot) elements of
   // each row's raw stream so the output carries exactly `shape(1)` elements
   // per row. With aligned, exact-width rows this is a pure passthrough.
   // The latched window is in beats; `headSkipElems` and `rowWidth` are both
   // multiples of `outLanes` under the documented row contract, so the
   // division below is exact and no element group is ever split.
-  // --------------------------------------------------------
   val elemCnt  = Reg(UInt(beatsW bits)) init (0)
   val suppress = (elemCnt < rowSkip.resize(beatsW bits)) || (elemCnt > rowKeepEnd)
 

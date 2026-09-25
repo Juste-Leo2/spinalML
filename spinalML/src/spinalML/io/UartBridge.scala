@@ -73,9 +73,7 @@ class UartBridge(
     val accDone       = in(Bool())
   }
 
-  // ------------------------------------------------------------------
   // Registers (1:1 with top.v)
-  // ------------------------------------------------------------------
   val state   = RegInit(IDLE)
   val byteCnt = Reg(UInt(log2Up((wordBytes max 4) + 1) bits)) init 0
   val addrReg = Reg(UInt(32 bits)) init 0
@@ -121,9 +119,7 @@ class UartBridge(
   val statusByte = io.statusArValid ## io.statusRValid ## csrAwValidR ## csrWValidR ##
                    io.outStream.valid ## io.accDone ## io.accBusy ## B"1"
 
-  // ------------------------------------------------------------------
   // Defaults (w_bram_en-style pulse, tx_start-style pulse)
-  // ------------------------------------------------------------------
   wrEnableR := False
   txStartR  := False
 

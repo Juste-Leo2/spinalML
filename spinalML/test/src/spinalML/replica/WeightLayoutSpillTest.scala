@@ -10,14 +10,10 @@ import spinalML.nn.{LayerSpec, Linear}
 
 /**
  * R1 — slice-transposed weight layout for spilling Linear layers.
- *
  * Independent reference: the `programmedW(ks)` helper semantics from
  * `SequentialSpillTest` (per-pass contiguous slices `p*Ks*N + n*Ks+k`).
- * Verifies the S2 layout contract (docs/ddr_final_impl.md).
- *
- * Note: building deterministic weights instantiates Spinal `Data` (dtypes),
- * so each case elaborates inside a dummy component context — no hardware is
- * generated or simulated, only the layout tool runs.
+ * Note: dtypes need an elaboration context, so each case runs the layout
+ * tool inside a dummy component — no hardware generated or simulated.
  */
 class WeightLayoutSpillTest extends AnyFunSuite {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)

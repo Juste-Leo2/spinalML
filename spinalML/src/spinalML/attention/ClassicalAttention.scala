@@ -30,10 +30,9 @@ case class ClassicalAttention(
     Seq(inShape(0), embedDim)
   }
   
-  // Weights: Wq, Wk, Wv, Wo. Each is [embedDim, embedDim].
-  // They are stored sequentially in memory, so total shape is [4 * embedDim, embedDim]
+  // Wq, Wk, Wv, Wo each [embedDim, embedDim], sequential in memory.
   override def getWeightShape(): Seq[Int] = Seq(embedDim * 4, embedDim)
-  override def getBiasShape(): Seq[Int] = Seq(0) // No bias for simplicity in V1
+  override def getBiasShape(): Seq[Int] = Seq(0) // No bias
 }
 
 case class ClassicalAttentionHW[T <: Data, TW <: Data, TAcc <: Data](
@@ -88,7 +87,7 @@ case class ClassicalAttentionHW[T <: Data, TW <: Data, TAcc <: Data](
   // 1. Projections per head: Q_h = X * Wq_h, K_h = X * Wk_h, V_h = X * Wv_h
   // Weight streams are column-major (each stream transaction = one weight column),
   // so head h owns the transaction block [h*headDim, (h+1)*headDim) = columns of Wq/Wk/Wv.
-  // The projection stage runs at `projLanes` parallelism (transistor/speed knob).
+  // The projection stage runs at `projLanes` parallelism.
   val xForks = StreamFork(io.x.stream, 3 * numHeads)
   val wqForks = StreamFork(wqIn.stream, numHeads)
   val wkForks = StreamFork(wkIn.stream, numHeads)
@@ -145,11 +144,10 @@ case class ClassicalAttentionHW[T <: Data, TW <: Data, TAcc <: Data](
     q_fifo.stream << q.stream.queue(seqLen * headDim)
     val scores = matmul(q_fifo, k_fifo, dataType)
     
-    // 4. Scale: scores / sqrt(headDim)
-    // Currently approximated or skipped since it's just a constant scale.
-    // For V1, we pass the scores directly to softmax.
-    // NOTE: if pretrained weights without rescaling are ever reused, this
-    // constant multiplication must be implemented to stay faithful to the model.
+    // 4. Scale: scores / sqrt(headDim), skipped (constant scale: scores go
+    // directly to softmax). NOTE: if pretrained weights without rescaling
+    // are ever reused, this constant multiplication must be implemented to
+    // stay faithful to the model.
     
     // 5. Softmax per head (Softmax1D operates over seqLen rows)
     val scores_repacked = repack(scores, seqLen)

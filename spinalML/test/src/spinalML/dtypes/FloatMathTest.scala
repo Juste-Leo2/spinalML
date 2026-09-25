@@ -250,7 +250,7 @@ class FloatMathSaturateTest extends AnyFunSuite {
       sleep(1)
       assert(getBits(dut.io.mul4) == 0xE, s"FP4 2*-inf should be -inf, got ${getBits(dut.io.mul4).toBinaryString}")
 
-      // FP8 E4M3 has no infinity (DTYPE-07): (15,0) is the finite 256.0,
+      // FP8 E4M3 has no infinity: (15,0) is the finite 256.0,
       // so inf+inf is really 256+256 = 512 -> saturate to max finite 448 (15,6).
       dut.io.a8.sign #= false; dut.io.a8.exponent #= 15; dut.io.a8.mantissa #= 0
       dut.io.b8.sign #= false; dut.io.b8.exponent #= 15; dut.io.b8.mantissa #= 0

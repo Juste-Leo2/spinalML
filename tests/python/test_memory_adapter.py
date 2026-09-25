@@ -413,7 +413,7 @@ async def cocotb_ddr_adapter_accel_write(dut):
             break
     assert acc_ready_seen, "DdrAdapter never accepts accelerator writes (aw.ready stuck low)"
 
-    # --- 1. Host write takes the bus and blocks the accelerator AW ---
+    # 1. Host write takes the bus and blocks the accelerator AW
     dut.io_wrEnable.value = 1
     dut.io_wrAddr.value = 0x80000000
     dut.io_wrData.value = 0x1122334455667788
@@ -448,7 +448,7 @@ async def cocotb_ddr_adapter_accel_write(dut):
     await RisingEdge(dut.clk)
     dut.extIo_ddrMaster_b_valid.value = 0
 
-    # --- 2. Accelerator 2-beat burst now owns the bus ---
+    # 2. Accelerator 2-beat burst now owns the bus
     burst_addr = 0x9000
     words = [0xAAAABBBBCCCCDDDD, 0x1234567890ABCDEF]
     strbs = [0xFF, 0x0F]

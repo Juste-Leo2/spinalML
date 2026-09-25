@@ -10,9 +10,9 @@ import spinalML.utils.{MathLUTs, UnaryLUTOp}
 import spinalML.{RoundingConfig, RoundingMode}
 
 case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int, forceAlg: Boolean = false,
-                              // Option B (switch-aware): ROM/LUT constant rounding
-                              // follows the elaboration mode (RNE vs legacy).
-                              // Composed ops instantiate with the default (env).
+                               // Switch-aware ROM/LUT constant rounding follows
+                               // the elaboration mode (RNE vs legacy).
+                               // Composed ops instantiate with the default (env).
                               rounding: RoundingMode = RoundingConfig.current) extends Component {
   val bitWidth = dataType.getBitsWidth
   val io = new Bundle {
@@ -20,7 +20,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
     val c = master(Tensor(dataType, shape, lanes))
   }
 
-  // OPS-02: negative inputs saturate to +0 (no NaN in the fabric). The LUT
+  // Negative inputs saturate to +0 (no NaN in the fabric). The LUT
   // and PWL ROMs encode this directly (no segment ever mixes signs, so every
   // negative entry evaluates to exactly 0); the algebraic path muxes below.
   val negToZeroFn = (x: Double) => if (x < 0.0) 0.0 else 1.0 / Math.sqrt(x + 1e-9)
@@ -91,7 +91,7 @@ case class RsqrtOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int
       val readVal = rsqrtLuts(i).readSync(lutIndex, enable = io.a.stream.ready)
       
       val outX = FloatML(expBits, mantBits)
-      // OPS-02: an rsqrt output is never negative. A negative input —
+      // An rsqrt output is never negative. A negative input —
       // including -0, since the fabric has no signed zero — saturates to +0
       // via expIsNeg below.
       outX.sign := False

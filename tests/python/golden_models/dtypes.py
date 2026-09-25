@@ -5,7 +5,7 @@ import os
 
 
 def resolve_rounding(rounding=None):
-    """Shared Option B switch: None follows SPINALML_ROUNDING (default RNE).
+    """Shared rounding switch: None follows SPINALML_ROUNDING (default RNE).
 
     Mirrors the RTL elaboration switch (`RoundingConfig.current`): 'rne'
     (half-even) vs 'trunc' (legacy half-up / truncation bit-exact).
@@ -46,9 +46,9 @@ class FloatML:
     def from_float(self, value: float, rounding=None) -> int:
         """Convert a Python float into the integer bit representation of the FloatML.
 
-        Option B: the mantissa quantizes half-even (Python round, like the
-        RTL roundRNE) under RNE, or legacy half-up (floor(x + 0.5), like
-        Math.round) under trunc. None follows SPINALML_ROUNDING.
+        The mantissa quantizes half-even (Python round, like the RTL roundRNE)
+        under RNE, or legacy half-up (floor(x + 0.5), like Math.round) under
+        trunc. None follows SPINALML_ROUNDING.
         """
         rounding = resolve_rounding(rounding)
         if value == 0.0 or np.isnan(value):
@@ -57,7 +57,7 @@ class FloatML:
         sign_bit = 1 if value < 0 else 0
         value = abs(value)
         
-        # Handle infinity and overflow (DTYPE-07: same formula as Scala
+        # Handle infinity and overflow (same formula as Scala
         # doubleToFields). E4M3 has no infinity: it tops out at max finite
         # 448 (exp field 15, mantissa 6); the mantissa-7 slot is NaN.
         is_e4m3 = self.exp_bits == 4 and self.mant_bits == 3
@@ -69,7 +69,7 @@ class FloatML:
             max_val = (1.0 + max_mant / (1 << self.mant_bits)) * (2 ** (max_exp - self.bias))
 
         if value > max_val or np.isinf(value):
-            # Saturate as per Scala logic (DTYPE-07): 448 for E4M3, canonical
+            # Saturate as per Scala logic: 448 for E4M3, canonical
             # infinity (exp all-ones, mant 0) for other formats.
             if is_e4m3:
                 exp_val = (1 << self.exp_bits) - 1
@@ -136,7 +136,7 @@ class SIntML:
         return float(bits)
         
     def from_float(self, value: float, rounding=None) -> int:
-        """Integer quantize (2's complement bits). Option B: half-even under
+        """Integer quantize (2's complement bits): half-even under
         RNE (like the RTL roundRNE), legacy half-up under trunc. None
         follows SPINALML_ROUNDING."""
         if np.isnan(value):

@@ -91,7 +91,7 @@ async def run_relu_test(dut, op_name, dtype_name, dtype, X, is_floatml, collect=
             else:
                 assert out_bits == exp_bits, f"HW Mismatch at Y[{m}][{n}]: got {out_val} instead of {dtype.to_float(exp_bits)}"
 
-# ----------------- COCOTB TESTS -----------------
+# COCOTB TESTS
 @cocotb.test()
 async def cocotb_relu_i8(dut):
     collect = {"out": [], "true": []}
@@ -133,7 +133,7 @@ async def cocotb_relu_bf16(dut):
     dut._log.info(log_msg)
 
 
-# ----------------- PYTEST RUNNERS -----------------
+# PYTEST RUNNERS
 def run_relu_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.activations.ReLUTest", dtype_filter, "ReLUTestComp")
     build_dir = f"sim_build/relu_relutestcomp_{dtype_filter.lower()}"

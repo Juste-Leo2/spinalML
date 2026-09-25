@@ -163,10 +163,8 @@ async def cocotb_attention_bf16(dut):
 
 def test_pytest_attention_bf16(request): run_layer_sim("ClassicalAttention", "BF16", "cocotb_attention_bf16", "AttentionTestComp", request)
 
-# ==========================================
 # CLASSICAL ATTENTION — WEIGHT-ONLY QUANTIZATION (wXaY)
 # SInt weights (I4/I8) + shared compile-time scale(s), float activations
-# ==========================================
 QUANT_COMBOS = {
     "w8a16": (I8, 8, BF16),
     "w4a16": (I4, 4, BF16),

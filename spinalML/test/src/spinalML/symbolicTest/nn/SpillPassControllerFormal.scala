@@ -7,8 +7,7 @@ import spinal.core.formal._
 import spinalML.nn.SpillPassController
 
 /**
- * S2d formal pinning of the S2b spill pass controller
- * (docs/ddr_final_impl.md §S2, docs/ddr_impl.md §5.3).
+ * Isolated formal pinning of the spill pass controller.
  *
  * Isolated safety proof: no AXI, no memory, no Sequential — every input is
  * symbolic (`anyseq`), so the properties hold under EVERY legal environment,
@@ -23,7 +22,7 @@ import spinalML.nn.SpillPassController
  *     (one command for the spillBeats=1 configuration proven here), one
  *     drain command per pass p<P-1, both at `spillBase` (+ chunk stride),
  *     never in pass 0 / final pass.
- *  2. Prelude service completeness AND the S2d entry-cycle fix: leaving the
+ *  2. Prelude service completeness AND the entry-cycle fix: leaving the
  *     prelude requires `past(preludeHeld)` (never on the entry cycle, where
  *     the servant flags still hold the previous prelude's values) and the
  *     service evidence of the pass being closed (reader/writer/fetch fires,
@@ -43,7 +42,7 @@ import spinalML.nn.SpillPassController
 class SpillPassControllerFormal extends Component {
   val dut = FormalDut(SpillPassController(passes = 3, addrWidth = 8, spillBeats = 1))
 
-  // ---- Symbolic environment -------------------------------------------
+  // Symbolic environment
   anyseq(dut.io.start)
   anyseq(dut.io.spillBase)
   anyseq(dut.io.passDone)
@@ -61,7 +60,7 @@ class SpillPassControllerFormal extends Component {
     assume(!dut.io.start)
   }
 
-  // ---- State handles ---------------------------------------------------
+  // State handles
   val state        = dut.state.pull().asBits.asUInt
   val cnt          = dut.cnt.pull()
   val preludeEntry = dut.preludeEntry.pull()
@@ -92,12 +91,12 @@ class SpillPassControllerFormal extends Component {
   when(preludeEntry) { restartSeen := False }
   when(dut.io.restartA) { restartSeen := True }
 
-  // Runtime contract (docs/ddr_impl.md §5.3): spill runs under
-  // STREAM_PER_PASS. The host never toggles residency mid-run — an isolated
-  // one-cycle residency glitch could otherwise suppress `restartA` while
-  // `biasReArm` still pulses (they share the pulse cycle), which is outside
-  // the documented usage. Residency may be high for a WHOLE run (the
-  // fail-safe then stalls the prelude, as the suppression properties show).
+  // Runtime contract: spill runs under STREAM_PER_PASS. The host never
+  // toggles residency mid-run — an isolated one-cycle residency glitch could
+  // otherwise suppress `restartA` while `biasReArm` still pulses (they share
+  // the pulse cycle), which is outside the documented usage. Residency may
+  // be high for a WHOLE run (the fail-safe then stalls the prelude, as the
+  // suppression properties show).
   when(pastValid() && dut.io.busy) {
     assume(dut.io.residentMode === past(dut.io.residentMode))
   }
@@ -108,7 +107,7 @@ class SpillPassControllerFormal extends Component {
     assume(dut.io.refetchW)
   }
 
-  // ---- 1. Command contract --------------------------------------------
+  // 1. Command contract
   when(dut.io.readerCmd.valid) {
     assert(inPrelude && cnt =/= 0 && !readerFired, "seed command outside a p>0 prelude")
     assert(dut.io.readerCmd.address === dut.io.spillBase, "seed command address must be spillBase")
@@ -120,9 +119,9 @@ class SpillPassControllerFormal extends Component {
     assert(dut.io.writerCmd.length === U(0, 16 bits), "spillBeats=1 must command a single beat")
   }
 
-  // ---- 2. Prelude exit: timing fix + service completeness --------------
+  // 2. Prelude exit: timing fix + service completeness
   when(pastValid() && past(inPrelude) && !inPrelude) {
-    // S2d fix pin: never exit on the prelude entry cycle (stale servants).
+    // Entry-cycle fix pin: never exit on the prelude entry cycle (stale servants).
     assert(past(preludeHeld), "prelude exited on its entry cycle (stale servant flags)")
     when(past(cnt) =/= 0) {
       assert(past(readerFired) || past(dut.io.readerCmd.fire), "pass p>0 exited without its seed command")
@@ -140,7 +139,7 @@ class SpillPassControllerFormal extends Component {
     }
   }
 
-  // ---- 3. refetchW contract -------------------------------------------
+  // 3. refetchW contract
   when(dut.io.refetchW) {
     assert(inPrelude && cnt =/= 0, "refetchW outside a p>0 prelude")
     assert(notResident, "refetchW under residency violates STREAM_PER_PASS")
@@ -153,7 +152,7 @@ class SpillPassControllerFormal extends Component {
       "refetchW dropped without an accepted fetch")
   }
 
-  // ---- 4. One-shot pulses and fires -----------------------------------
+  // 4. One-shot pulses and fires
   when(pastValid() && past(dut.io.biasReArm)) { assert(!dut.io.biasReArm, "biasReArm pulsed twice") }
   when(pastValid() && past(dut.io.restartA)) { assert(!dut.io.restartA, "restartA pulsed twice") }
   when(pastValid() && past(dut.io.readerCmd.fire)) { assert(!dut.io.readerCmd.valid, "seed commanded twice") }
@@ -162,7 +161,7 @@ class SpillPassControllerFormal extends Component {
   when(dut.io.biasReArm) { assert(inPrelude, "biasReArm outside a prelude") }
   when(dut.io.residentMode) { assert(!dut.io.refetchW && !dut.io.restartA, "restartA under residency") }
 
-  // ---- 5. FSM flow -----------------------------------------------------
+  // 5. FSM flow
   assert(dut.io.passIdx === cnt, "passIdx must mirror cnt")
 
   when(pastValid() && past(state === sIdle) && past(dut.io.start) && !past(dut.io.busy)) {
@@ -198,7 +197,7 @@ class SpillPassControllerFormal extends Component {
   when(pastValid() && past(state === sFinish)) { assert(dut.io.done && !dut.io.busy, "no done on finish") }
   when(dut.io.done) { assert(state === sIdle, "done must return the FSM to idle") }
 
-  // ---- 6. Reachability (non-vacuity) ----------------------------------
+  // 6. Reachability (non-vacuity)
   cover(state === sIdle)
   cover(inPrelude && cnt === 0)
   cover(inPrelude && cnt === 1 && !passFirstR && !passLastR)

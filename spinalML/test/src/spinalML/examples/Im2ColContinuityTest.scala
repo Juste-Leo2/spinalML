@@ -26,13 +26,13 @@ case class Im2ColContinuityTestComp[T <: Data](dataType: HardType[T], H: Int, W:
 }
 
 /**
- * Phase-3 S2 proof: Im2ColOp window state IS the halo carrier (M2 resolved
- * by design, Phase-3 edition).
+ * Banding proof: Im2ColOp window state IS the halo carrier (no halo refetch
+ * by design).
  *
  * The seam-convention of this op is internal (the matching windows/weight
  * layout convention lives in the layer pair that consumes it, validated
- * end-to-end elsewhere). The S2 gate therefore proves the ONLY property the
- * phase-3 banding actually depends on — seam-independence of the FEED and
+ * end-to-end elsewhere). This suite therefore proves the ONLY property the
+ * banding actually depends on — seam-independence of the FEED and
  * the CONSTITUENT-CLEAN segmentation:
  *
  * 1. SEAM-STALL-EQUIVALENCE — the same picture pushed as ONE continuous

@@ -10,7 +10,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component for 3x3 image with 2x2 kernel
+// 3x3 image, 2x2 kernel
 case class Im2ColTestComp_3x3_K2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(3, 3, 1), lanes = 1)) // 3x3 image
@@ -19,7 +19,7 @@ case class Im2ColTestComp_3x3_K2[T <: Data](dataType: HardType[T]) extends Compo
   io.c <> im2col(io.a, kernelSize = 2, outLanes = 4)
 }
 
-// Wrapper component for 4x4 image with 3x3 kernel
+// 4x4 image, 3x3 kernel
 case class Im2ColTestComp_4x4_K3[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 4, 1), lanes = 1)) // 4x4 image
@@ -28,7 +28,7 @@ case class Im2ColTestComp_4x4_K3[T <: Data](dataType: HardType[T]) extends Compo
   io.c <> im2col(io.a, kernelSize = 3, outLanes = 9)
 }
 
-// Wrapper component for 3x3 image with 2x2 kernel and 2 channels
+// 3x3 image, 2x2 kernel, 2 channels
 case class Im2ColTestComp_3x3_K2_C2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(3, 3, 2), lanes = 1)) // 3x3x2 image, lanes=1 (streams sequentially)
@@ -55,7 +55,6 @@ class Im2ColTest extends AnyFunSuite {
         Seq(5, 6, -1, -2)
       )
       
-      // Thread to feed inputs
       fork {
         var i = 0
         dut.io.a.stream.valid #= true
@@ -69,7 +68,6 @@ class Im2ColTest extends AnyFunSuite {
         dut.io.a.stream.valid #= false
       }
       
-      // Thread to check outputs
       var i = 0
       while (i < 4) {
         dut.clockDomain.waitSampling()

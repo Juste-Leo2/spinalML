@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing the mul operation
 case class MulTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4), lanes = 2))
@@ -18,7 +17,6 @@ case class MulTestComp[T <: Data](dataType: HardType[T]) extends Component {
     val c = master(Tensor(dataType, Seq(4), lanes = 2))
   }
   
-  // GGML-like syntax for mul
   io.c <> spinalML.ops.mul(io.a, io.b)
 }
 
@@ -27,14 +25,13 @@ class MulTest extends AnyFunSuite {
     SimConfig.withWave.compile(MulTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize Stream signals
       dut.io.a.stream.valid #= false
       dut.io.b.stream.valid #= false
       dut.io.c.stream.ready #= true
       
       dut.clockDomain.waitSampling()
       
-      // Send first chunk (lanes = 2)
+      // First chunk (lanes = 2)
       dut.io.a.stream.valid #= true
       dut.io.a.stream.payload(0) #= 3
       dut.io.a.stream.payload(1) #= -2
@@ -46,7 +43,6 @@ class MulTest extends AnyFunSuite {
       // Because of m2sPipe, the result will take 1 cycle to arrive.
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       
-      // Check results for chunk 1 (3*2 = 6, -2*3 = -6)
       assert(dut.io.c.stream.payload(0).toInt == 6)
       assert(dut.io.c.stream.payload(1).toInt == -6)
       

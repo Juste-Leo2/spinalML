@@ -22,7 +22,7 @@ import spinalML.dtypes._
 case class Mnist(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 4),
   override val tileHeight: Int = -1,
-  // M2: overridable spec — tests inject Linear weightLanes via copy().
+  // Overridable spec — tests inject Linear weightLanes via copy().
   override val modelSpec: Seq[spinalML.nn.LayerSpec] = Mnist.defaultModelSpec
 ) extends Accelerator(
   dataType    = BF16(),

@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{FloatML, I4, I8, I16, I32, FP4_E2M1, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component
 case class LinearTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(1, 2), lanes = 2)) // 1 row, 2 cols (M=1, K=2)
@@ -65,7 +64,7 @@ class LinearTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: Load Weights W into the Matmul Double-Buffer
+      // Load Weights W into the Matmul Double-Buffer
       // W = [2, -1]T
       dut.io.w.stream.valid #= true
       dut.io.w.stream.payload(0) #= 2
@@ -73,14 +72,14 @@ class LinearTest extends AnyFunSuite {
       dut.clockDomain.waitSamplingWhere(dut.io.w.stream.ready.toBoolean)
       dut.io.w.stream.valid #= false
       
-      // Step 2: Send the bias b
+      // Send the bias b
       // b = 3
       dut.io.b.stream.valid #= true
       dut.io.b.stream.payload(0) #= 3
       dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
       dut.io.b.stream.valid #= false
       
-      // Step 3: Stream Activations A (1 row)
+      // Stream Activations A (1 row)
       // Row 0: [-2, 3] -> Y0 = (-2*2 + 3*(-1)) + 3 = -4 - 3 + 3 = -4
       
       val a_data = Seq(Seq(-2, 3))
@@ -94,7 +93,7 @@ class LinearTest extends AnyFunSuite {
       
       dut.io.a.stream.valid #= false
       
-      // Step 4: Verify output Y (1 row)
+      // Verify output Y (1 row)
       for (i <- 0 until 1) {
         dut.clockDomain.waitSamplingWhere(dut.io.y.stream.valid.toBoolean)
         val result = dut.io.y.stream.payload(0).toInt
@@ -130,7 +129,7 @@ class LinearTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: Load Weights W (I8, scale = 1.0)
+      // Load Weights W (I8, scale = 1.0)
       // W = [2, -1]^T streamed column-major as one beat of 2 lanes
       dut.io.w.stream.valid #= true
       dut.io.w.stream.payload(0).asInstanceOf[SInt] #= 2
@@ -138,14 +137,14 @@ class LinearTest extends AnyFunSuite {
       dut.clockDomain.waitSamplingWhere(dut.io.w.stream.ready.toBoolean)
       dut.io.w.stream.valid #= false
       
-      // Step 2: Send the bias b (BF16)
+      // Send the bias b (BF16)
       // b = 3
       dut.io.b.stream.valid #= true
       setFloat(dut.io.b.stream.payload(0).asInstanceOf[FloatML], 3.0f)
       dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
       dut.io.b.stream.valid #= false
       
-      // Step 3: Stream Activations A (BF16)
+      // Stream Activations A (BF16)
       // Row 0: [-2, 3] -> Y0 = (-2*dequant(2) + 3*dequant(-1)) + 3 = -4
       
       val expected_y = Seq(-4.0f)
@@ -158,7 +157,7 @@ class LinearTest extends AnyFunSuite {
       
       dut.io.a.stream.valid #= false
       
-      // Step 4: Verify output Y (1 row)
+      // Verify output Y (1 row)
       for (i <- 0 until 1) {
         dut.clockDomain.waitSamplingWhere(dut.io.y.stream.valid.toBoolean)
         val result = getFloat(dut.io.y.stream.payload(0).asInstanceOf[FloatML])

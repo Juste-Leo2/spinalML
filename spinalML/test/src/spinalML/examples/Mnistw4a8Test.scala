@@ -119,9 +119,7 @@ class Mnistw4a8Test extends AnyFunSuite {
     convW ++ convB ++ fcW ++ fcB
   }
 
-  // ------------------------------------------------------------------
   // Dynamic input selection (same policy as MnistTest)
-  // ------------------------------------------------------------------
   case class Tc(image: Seq[String], label: Option[Int], name: String)
 
   def buildCases(): Seq[Tc] = {
@@ -185,7 +183,7 @@ class Mnistw4a8Test extends AnyFunSuite {
 
   test("Mnistw4a8 SoC black-box: logits match the software replica") {
     val cases = buildCases()
-    // M2: the model spec carries the Linear K-chunk width (default weightLanes
+    // The model spec carries the Linear K-chunk width (default weightLanes
     // has moved into Mnistw4a8.defaultModelSpec); MNIST_WLANES overrides it.
     val spec = sys.env.get("MNIST_WLANES") match {
       case Some(s) => Mnistw4a8.defaultModelSpec.map {

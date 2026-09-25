@@ -7,9 +7,8 @@ import spinal.lib._
 import spinalML.tensors.Tensor
 
 /**
- * S2c StreamTap (docs/ddr_final_impl.md): on-chip A-operand rejeueur for a
- * spilling layer whose input is NOT DDR-backed (deep node, or a node-0
- * shared with another consumer — re-firing DDR there would push duplicate
+ * StreamTap: on-chip A-operand replayer for a spilling layer whose input
+ * is NOT DDR-backed (deep node, or a node-0 shared with another consumer — re-firing DDR there would push duplicate
  * beats into the other branch).
  *
  * Pass 0 (`arm` at the command boundary, then snoop mode): fully

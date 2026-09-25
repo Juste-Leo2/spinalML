@@ -30,9 +30,7 @@ case class HighLevelAttentionTemplate(override val axiConfig: Axi4Config) extend
   dataType = BF16(),          // Activations stay in the float domain (softmax policy)
   inputShape = Seq(4, 8),     // [seqLen, embedDim]
 
-  // ==========================================
-  // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
-  // ==========================================
+  // Define your neural network topology here
   modelSpec = Seq(
     // Multi-Head Attention (numHeads must be a power of 2, embedDim % numHeads == 0)
     ClassicalAttention(
@@ -56,7 +54,6 @@ case class HighLevelAttentionTemplate(override val axiConfig: Axi4Config) extend
   axiConfig = axiConfig
 )
 
-// Generate the Verilog for the FPGA
 object HighLevelAttentionTemplateVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   SpinalVerilog(HighLevelAttentionTemplate(axiConfig))

@@ -18,14 +18,11 @@ object dot {
     require(a.shape(0) % a.lanes == 0,
       s"Dot requires the vector length (${a.shape(0)}) to be a multiple of lanes (${a.lanes})")
     
-    // View both vectors as 1xN and Nx1 matrices
     val aMatrix = reshape(a, Seq(1, a.shape(0)))
     val bMatrix = reshape(b, Seq(b.shape(0), 1))
     
-    // matmul outputs a [1, 1] tensor with lanes = 1
     val scalar = matmul(aMatrix, bMatrix)
     
-    // Back to a 1D scalar tensor
     reshape(scalar, Seq(1))
   }
 }

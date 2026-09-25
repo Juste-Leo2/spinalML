@@ -89,9 +89,7 @@ class ClassicalAttentionFormal extends Component {
     assume(dut.io.wo.stream.payload === past(dut.io.wo.stream.payload))
   }
 
-  // ==========================================
   // 1. OUTPUT STREAM PROTOCOL SAFETY
-  // ==========================================
   // Output valid and payload must remain stable once asserted until accepted by receiver
   when(pastValid() && !clockDomain.isResetActive) {
     when(past(dut.io.y.stream.valid) && !past(dut.io.y.stream.ready)) {
@@ -101,9 +99,7 @@ class ClassicalAttentionFormal extends Component {
     }
   }
 
-  // ==========================================
   // 2. REACHABILITY / LIVENESS COVERS
-  // ==========================================
   val fireX  = dut.io.x.stream.fire
   val fireWq = dut.io.wq.stream.fire
   val fireWk = dut.io.wk.stream.fire

@@ -31,10 +31,10 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   tileSize: Int = 1024,
   parallelN: Boolean = false,
   temporal: Int = 0,
-  // S1 compute-side spill (docs/ddr_final_impl.md): K-pass slice engine. The
-  // layer streams one K-slice per pass (S2 re-fires); pass 0 seeds zeros,
-  // passes > 0 seed from spillIn, non-final passes drain partials to
-  // spillOut, the final pass drives io.y with the real bias added once.
+  // K-pass slice engine. The layer streams one K-slice per pass (the
+  // controller re-fires); pass 0 seeds zeros, passes > 0 seed from
+  // spillIn, non-final passes drain partials to spillOut, the final pass
+  // drives io.y with the real bias added once.
   spill: Boolean = false,
   // Trailing pad elements closing the seed region's last AXI beat (see
   // MatmulOp spillPadElems). Computed by Sequential from the region beats;
@@ -56,8 +56,8 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     val reArm = in Bool()
     // Command-boundary re-arm for the bias cache (see BiasAddOp)
     val biasReArm = in Bool()
-    // S1 spill ports (spill=true only). Same level contract as MatmulOp:
-    // the S2 pass controller holds passFirst/passLast stable per pass.
+    // Spill ports (spill=true only). Same level contract as MatmulOp:
+    // the pass controller holds passFirst/passLast stable per pass.
     val spillIn = if (spill) Some(slave(Tensor(accType, Seq(M, N), lanes = 1))) else None
     val spillOut = if (spill) Some(master(Tensor(accType, Seq(M, N), lanes = 1))) else None
     val passFirst = if (spill) Some(in Bool()) else None
@@ -77,20 +77,19 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     if (needsDequant) cast(io.w, dataType, weightScales)
     else io.w.asInstanceOf[Tensor[T]]
   
-  // 1. Matrix Multiplication: A * W_deq (reArm re-arms the internal B buffer,
-  //    which carries this layer's weights; temporal bounds the rows in flight)
+  // Matmul A*W_deq (reArm re-arms the internal B buffer, which carries
+  // this layer's weights; temporal bounds the rows in flight).
   val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
     spill = spill, passFirst = io.passFirst, passLast = io.passLast,
     spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
 
-  // 2. Add Bias (Broadcast): (A * W_deq) + b
-  // S1 bias-zero mux: BiasAddOp always consumes exactly N beats per pass
+  // Bias-zero mux: BiasAddOp always consumes exactly N beats per pass
   // (its FSM is untouched), but on non-final passes the beats come from an
   // on-chip zero source — no DDR bias fetch, bias added once on the final
   // pass. The zero generator offers exactly N beats per pass and re-arms
   // with the bias cache (same per-pass pulse); over-consumption would
   // backpressure visibly instead of aliasing data. Exactness of x + 0 per
-  // dtype is the S1 gate (MatmulSpillTest); on failure the fallback is a
+  // dtype is the gate (MatmulSpillTest); on failure the fallback is a
   // BiasAddOp bypass on non-final passes.
   val bForAdd: Tensor[TAcc] = if (spill) {
     val zeroRemain = Reg(UInt(log2Up(N + 1) bits)) init (N)

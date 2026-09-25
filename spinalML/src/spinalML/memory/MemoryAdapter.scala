@@ -37,7 +37,7 @@ abstract class MemoryAdapter(val axiConfig: Axi4Config) extends Component {
  *
  * Decouples the *choice* of backing store from the silicon `Target`: an FPGA
  * build can run on on-chip BRAM in test and on external DRAM in production
- * without touching the Layer-1 datapath (docs/ddr_impl.md Phase 1).
+ * without touching the Layer-1 datapath.
  */
 sealed trait MemoryKind
 object MemoryKind {
@@ -50,8 +50,7 @@ object MemoryKind {
 }
 
 /**
- * Read/write fencing policy for `DdrAdapter` (Phase-4 DDR plumbing,
- * docs/ddr_impl.md).
+ * Read/write fencing policy for `DdrAdapter`.
  *
  * - `fenceReadsOnWrite` (RAW): forwarded reads stall while a write is in
  *   flight. Required by DRAM controllers with no read/write ordering.

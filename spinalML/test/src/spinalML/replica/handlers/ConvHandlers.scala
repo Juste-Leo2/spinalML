@@ -10,6 +10,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object ConvHandlers {
 
+  /** Dispatch to LayerReplicas for Conv2D/Conv1D (float + int), with spill gather. */
   def evalConv2D(
     c: Conv2D,
     curTensor: ReplicaTensor,
@@ -27,7 +28,7 @@ object ConvHandlers {
     val wOut = w - kSize + 1
     val nextShape = Seq(hOut, wOut, outC)
 
-    // P1 spill: layer and layout must agree (no silent double transposition).
+    // Layer and layout must agree (no silent double transposition).
     require((c.spilling && wInfo.spillKSlice > 0) || (!c.spilling && wInfo.spillKSlice <= 0),
       s"ConvHandlers: Conv2D(spillKSlice=${c.spillKSlice}) vs layout spillKSlice=${wInfo.spillKSlice} mismatch — " +
         "rebuild weights with WeightMemoryLayout.buildDeterministicWeights (no double transposition)")
@@ -68,11 +69,9 @@ object ConvHandlers {
           arr3D(ch)(y)(x) = if (idx < raw.length) raw(idx) else PZERO
           idx += 1
         }
-        // P1 spill: the layout tool emits spilling layers slice-transposed
-        // (WeightMemoryLayout); gather logical [o][k] rows from the physical
-        // `p*Ks*N + n*Ks + k_local` order and fold passes in the replica.
+        // Spill gather: logical [o][k] rows from the physical
+        // `p*Ks*N + n*Ks + k_local` order (cf. DenseHandlers.evalLinear).
         // Non-spilling layers keep the legacy direct slicing, untouched.
-        // (Layer/layout consistency is required once above, both paths.)
         val ks = if (wInfo.spillKSlice > 0) wInfo.spillKSlice else kElems
         def physIdx(o: Int, k: Int): Int = {
           val p = k / ks
@@ -106,13 +105,13 @@ object ConvHandlers {
     val kElems = kSize * inC
     val nextShape = Seq(l - kSize + 1, outC)
 
-    // P2 spill: layer and layout must agree (no silent double transposition).
+    // Layer and layout must agree (no silent double transposition).
     require((c.spilling && wInfo.spillKSlice > 0) || (!c.spilling && wInfo.spillKSlice <= 0),
       s"ConvHandlers: Conv1D(spillKSlice=${c.spillKSlice}) vs layout spillKSlice=${wInfo.spillKSlice} mismatch — " +
         "rebuild weights with WeightMemoryLayout.buildDeterministicWeights (no double transposition)")
 
-    // Slice-transposed physical gather (same p*Ks*N + n*Ks + k_local order
-    // as Conv2D): logical [o][k] rows unwound per output, both dtypes.
+    // Same spill gather as evalConv2D (shared helper, both dtypes):
+    // logical [o][k] rows unwound per output.
     def physIdx(o: Int, k: Int, ks: Int): Int = {
       val p = k / ks
       val kl = k % ks

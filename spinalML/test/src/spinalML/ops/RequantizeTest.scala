@@ -69,9 +69,9 @@ class RequantizeTest extends AnyFunSuite {
 
   test("Test streaming Requantize operation I32 -> I8 with shift and saturation") {
     // I32 inputs. The expected outputs follow the elaboration rounding switch
-    // (default RNE since Wave 4 commit 0): -10 >> 2 = -2.5 is a tie, RNE
-    // rounds to even (-2) while the legacy truncation lane floors to -3.
-    // Both modes are covered bit-exact (see also RoundingPolicyTest).
+    // (default RNE): -10 >> 2 = -2.5 is a tie, RNE rounds to even (-2) while
+    // the legacy truncation lane floors to -3. Both modes are covered
+    // bit-exact (see also RoundingPolicyTest).
     val useTrunc = RoundingConfig.current == RoundingMode.Truncate
     val inputData = Array(
       Array(100, -100, 1000, -1000), // shift=2: 25, -25, 250->127, -250->-128

@@ -15,13 +15,11 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
   val memSize = depth / lanes
   
   val io = new Bundle {
-    // Interface to StreamDoubleBuffer
     val readAddr  = out UInt(log2Up(memSize) bits)
     val readData  = in Vec(dataType, lanes)
     val nextTile  = out Bool()
     val tileReady = in Bool()
     
-    // Output Stream Interface
     val streamOut = master(Stream(Vec(dataType, lanes)))
 
     // Command-boundary re-arm pulse: resets the read FSM and flushes the
@@ -31,7 +29,6 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     val reArm     = in Bool() default(False)
   }
   
-  // State Machine for reading and tile delivery tracking
   val readCounter = Counter(memSize)
   val popCounter  = Counter(memSize)
   val isReading   = RegInit(False)
@@ -44,8 +41,6 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     isReading  := True
   }
   
-  // To handle the 1-cycle read latency from StreamDoubleBuffer cleanly with Stream backpressure,
-  // we issue read requests and push the responses into a small FIFO.
   // The request stream drives the read addresses.
   val reqStream = Stream(UInt(log2Up(memSize) bits))
   reqStream.valid := isReading
@@ -60,7 +55,6 @@ case class DoubleBufferStreamer[T <: Data](dataType: HardType[T], depth: Int, la
     }
   }
   
-  // Explicit FIFO to perfectly handle the 1-cycle BRAM read latency and downstream backpressure.
   val fifo = new StreamFifo(Vec(dataType, lanes), 16)
   io.streamOut << fifo.io.pop
 
