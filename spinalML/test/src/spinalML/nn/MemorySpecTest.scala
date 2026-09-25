@@ -10,9 +10,9 @@ import spinalML.dtypes.I8
 import spinalML.memory.MemoryKind
 
 /**
- * Phase-2/4 DDR plumbing guards (docs/ddr_impl.md):
- * - `CsrMap` freezes the CSR addresses (spill base live since Phase 4,
- *   stride/status still reserved) without collision.
+ * DDR plumbing guards:
+ * - `CsrMap` freezes the CSR addresses (spill base live, stride/status
+ *   still reserved) without collision.
  * - `MemorySpec` keeps legacy defaults and validates its inputs.
  * - `Sequential.totalWeightBytes` matches the hand-computed `MemLayout`
  *   footprint (single source of truth, no duplicated layout loop).

@@ -40,14 +40,14 @@ class SequentialSpillTest extends AnyFunSuite {
   val AFull = Seq(1, 2, 3, 4)
   val W = (0 until 4).map(k => (0 until 4).map(j => ((k + j) % 3) - 1))
   // Diagnostic bias: huge and distinctive so the EFFECTIVE bias reads out
-  // of y-(P0+P1) directly (S2c e2e debug).
+  // of y-(P0+P1) directly.
   val B = Seq(40, 50, 60, 70)
   // Deep-node (tap) case, layer 0: quasi-passthrough W0 = identity + tiny
   // B0, so y0 = A + B0 stays small and the spill layer-1 oracle below is
   // the only arithmetic under test.
   val W0 = (0 until 4).map(k => (0 until 4).map(j => if (k == j) 1 else 0))
   val B0 = Seq(1, 2, 3, 4)
-  // DDR layout contract (S2): each K-slice is stored TRANSPOSED and
+  // DDR layout contract: each K-slice is stored TRANSPOSED and
   // contiguously (the engine reads B column-major: readAddr = n*chunksK+k,
   // cf. S1 bBeats and the replica's slice(o*K..)). Slice p linear order =
   // for n: for k in slice: W[k][n]. (Legacy whole-transpose would scatter
@@ -160,7 +160,7 @@ class SequentialSpillTest extends AnyFunSuite {
       dut.io.outStream.stream.ready #= true
       tick(); tick()
 
-      // Bring-up settle (S2b lesson): the memory-model agents must own the
+      // Bring-up settle: the memory-model agents must own the
       // bus before stimulus, or a spurious B/R wedges a DMA counter.
       var settled = 0
       var sc = 0
@@ -199,8 +199,8 @@ class SequentialSpillTest extends AnyFunSuite {
         if (runs > 1) runTag = s"$label-run$run"
         writeCsr(0x00, 1)
 
-      // Authoritative controller trace (bench reads, not VCD): levels and
-      // pulses around both preludes. Prints on change only.
+      // Authoritative controller trace (SimLog TRACE, bench reads, not VCD):
+      // levels and pulses around both preludes, on change only.
       val ctrl = dut.model.spillCtrl.get
       var lastCtl = ""
       var cycles = 0
@@ -212,18 +212,16 @@ class SequentialSpillTest extends AnyFunSuite {
         if (s != lastCtl) { SimLog.trace("SPILL")(s"ctl [$runTag cyc=$cycles]: $s"); lastCtl = s }
       }
 
-      // Collect up to 8 beats
-
-      // Collect up to 8 beats: 4 = silent pass 0 (S1 contract), 8 = pass-0
+      // Collect up to 8 beats: 4 = silent pass 0, 8 = pass-0
       // leak into y (would explain first-4 anomalies).
       val collected = scala.collection.mutable.ArrayBuffer[Int]()
-      // S2d drain history: sample the spill region every cycle, print on
+      // Drain history: sample the spill region every cycle, TRACE on
       // change — shows which pass drains landed and what they wrote.
       var lastMon = memSim.memory.readBigInt(spillBase, 4)
-      // S2d bus monitor: log every AXI read/write command (fire cycle) —
+      // Bus monitor: TRACE every AXI read/write command (fire cycle) —
       // W-slice fetch addresses per pass, seed reads, drain writes.
-      // S2d window monitor: sample the K-window position every cycle,
-      // print on change — reconstructs exactly which stream beats each
+      // Window monitor: sample the K-window position every cycle,
+      // TRACE on change — reconstructs exactly which stream beats each
       // pass consumed (winLo = window low beat, aBeat = intra-row beat).
       val spillIdx = dut.model.spillLayerIdx.get
       val winLoSig = dut.model.spillWinLoOf(spillIdx)
@@ -326,7 +324,7 @@ class SequentialSpillTest extends AnyFunSuite {
   }
 
   test("S2d e2e node-0 spill K=64 P=8 at exact fit: 8-pass GEMM bit-exact, region holds pass-0 partials") {
-    // Footprint (S2d fit proof): image 64B + weights 264B (256B W @0, 4B
+    // Footprint: image 64B + weights 264B (256B W @0, 4B
     // bias @256) + out 8B + spill 8B = 344B — the capacity below is exact.
     runCase(Seq(Linear(inFeatures = 64, outFeatures = 4, weightLanes = 2, spillKSlice = 8)),
       Seq(imgBase -> A64, weightBase -> programmedW64(8), (weightBase + 256) -> B64),

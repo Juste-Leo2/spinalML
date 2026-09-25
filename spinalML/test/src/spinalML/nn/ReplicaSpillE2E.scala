@@ -134,7 +134,7 @@ object ReplicaSpillE2E {
       dut.io.outStream.stream.ready #= true
       tick(); tick()
 
-      // Bring-up settle (S2b lesson): memory-model agents own the bus first.
+      // Bring-up settle: memory-model agents own the bus first.
       var settled = 0
       var sc = 0
       while (settled < 5 && sc < 500) {

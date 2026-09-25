@@ -37,9 +37,22 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 - **R4 tests** : class-doc = contrat prouvé ≤ 6 lignes + géométrie
   1 ligne inline.
 
+## Dérivation `nn` e2e/SoC tests (zone 4b, validée)
+
+- **N1 suites e2e** : class-doc = preuve (quoi vs quel oracle) + géométrie
+  1 ligne ; labels de phase gardés (repris par les noms de tests).
+- **N2 bench discipline** : settle/moniteurs en clair, explications gardées ;
+  tags S1/S2b/S2e retirés ; moniteurs cycle-à-cycle déjà migrés SimLog
+  TRACE (commit 1).
+- **N3 knob/config** : géométrie chiffrée inline gardée ; pointeurs `docs/`
+  → essentiel inliné (docs appelées à partir en archive).
+- **N4 SoC goldens** : X/W/b + expected inline gardés ; step-markers
+  paraphrases (`Pulse START`, `Program addresses`, …) dehors.
+- **N5 bug IDs** : `NN-02`, `BUG-DDR-*`, `LAY-02` gardés (noms de
+  tests/messages), explications gardées.
+
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
-- **4b `nn` spill tests** : à définir.
 - **4c `arithmetic`/`ops` RTL** : à définir (pressenti : largeurs /
   latence / reset en 1 ligne par branche).
 - **4d `layers`/`memory`** : à définir.

@@ -13,7 +13,7 @@ import spinalML.tensors.Tensor
 import spinalML.memory.{DMAReader, DMAWriter}
 import org.scalatest.funsuite.AnyFunSuite
 
-// S2b unit harness: SpillPassController + spill DMA pair against AxiMemorySim.
+// Unit harness: SpillPassController + spill DMA pair against AxiMemorySim.
 // P=2, I8 on a 64-bit AXI bus. The bench stubs the compute side: it sources
 // the drain stream, sinks the seed stream, and scripts passDone / wFetchFire.
 // Pass 1 must read back exactly what pass 0 wrote (single-region loopback
@@ -34,7 +34,7 @@ case class SpillPassLoopWrapper(M: Int = 1, N: Int = 4) extends Component {
     // Compute-side spill streams (stubbed by the bench).
     val seedOut = master(Tensor(accType, Seq(M, N), lanes = 1))
     val drainIn = slave(Tensor(accType, Seq(M, N), lanes = 1))
-    // Controller observables (the S2b contract under test).
+    // Controller observables (the contract under test).
     val passFirst = out Bool()
     val passLast = out Bool()
     val passIdx = out UInt(1 bits)
@@ -60,7 +60,7 @@ case class SpillPassLoopWrapper(M: Int = 1, N: Int = 4) extends Component {
   ctrl.io.residentMode := io.residentMode
 
   val reader = DMAReader(accType, Seq(M, N), outLanes = 1, axiConfig,
-    // S2e production recipe mirror: single-beat seed chunks, so no trim (the
+    // Production recipe mirror: single-beat seed chunks, so no trim (the
     // trim counter restarts at every cmd.fire); the flushable accept gate
     // paces chunks at the stub's consumption rate. No engine pad-drain here
     // (the stub consumes exactly what the test collects).
@@ -97,7 +97,7 @@ case class SpillPassLoopWrapper(M: Int = 1, N: Int = 4) extends Component {
 
 class SpillPassControllerTest extends AnyFunSuite {
 
-  // S1 bench discipline, controller-scale: every edge is preceded by a DUT
+  // Bench discipline, controller-scale: every edge is preceded by a DUT
   // read (poke-then-edge races the clock), valids are held (never toggled
   // per beat), payloads pre-poked, exactly one tick per beat.
   test("S2b pass loop: write-back, fence, seed read-back, done") {
@@ -146,7 +146,7 @@ class SpillPassControllerTest extends AnyFunSuite {
       // ---- Pass 0 prelude ------------------------------------------------
       // Single observation loop: writerCmd.fire is a single cycle issued on
       // prelude entry — polling for it AFTER watching bias would miss it
-      // (same record-vs-transfer trap as S1). Observe everything together.
+      // (record-vs-transfer trap). Observe everything together.
       dut.io.start #= true
       tick()
       dut.io.start #= false
@@ -218,7 +218,7 @@ class SpillPassControllerTest extends AnyFunSuite {
       assert(dut.io.passIdx.toInt == 1, "controller never advanced to pass 1")
       // Catch the pass-1 entry pulse: the 1-cycle biasReArm fires on prelude
       // entry (~1 cycle after the index flips), so observe IMMEDIATELY — any
-      // settle ticks first would consume it (same record-vs-transfer trap).
+      // settle ticks first would consume it.
       // Levels (regs) settle right after; assert them once the pulse is seen.
       var sawBias1 = false
       var sawReader = false
@@ -314,7 +314,7 @@ class SpillPassControllerTest extends AnyFunSuite {
   }
 
   test("S2b multi-beat seed chunking: paced loopback over 2 beats") {
-    // S2e pin: M=2, N=8 I8 = 16 partials = 2 AXI beats (exact, no pad). The
+    // M=2, N=8 I8 = 16 partials = 2 AXI beats (exact, no pad). The
     // pass-1 seed must arrive as TWO single-beat chunks at base/base+8
     // (length 0 each), paced by the reader's accept gate, and read back
     // exactly what pass 0 drained. The drain write stays one full-region
@@ -386,8 +386,8 @@ class SpillPassControllerTest extends AnyFunSuite {
       // Bench-side sticky done (mirror of the DUT's writerDoneSeen latch):
       // the 2-beat drain can complete while the queue is still pushing, i.e.
       // before passDone — a raw-pulse poll would miss the early done
-      // exactly like the pre-S2e fence did. writerDone is a clocked-reg
-      // pulse, so every-cycle sampling catches it.
+      // (the pre-fence bug). writerDone is a clocked-reg pulse, so
+      // every-cycle sampling catches it.
       var wDoneSeen = false
       def pollDone(): Unit = {
         if (dut.io.writerDone.toBoolean) wDoneSeen = true
@@ -404,7 +404,7 @@ class SpillPassControllerTest extends AnyFunSuite {
       tick()
       dut.io.passDone #= false
       // Seed-chunk record starts here: chunk 0 can fire as soon as the
-      // pass-1 prelude opens (same record-vs-transfer trap as S1) — the
+      // pass-1 prelude opens (record-vs-transfer trap) — the
       // passIdx poll below must record fires, not just collect seeds.
       val chunkAddrs = scala.collection.mutable.ArrayBuffer[Long]()
       val chunkLens = scala.collection.mutable.ArrayBuffer[Int]()

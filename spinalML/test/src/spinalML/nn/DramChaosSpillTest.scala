@@ -14,7 +14,7 @@ import spinalML.harness.{DramChaosConfig, DramChaosInterposer, MemoryHarness, Un
 import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
 
 /**
- * S2 — DRAM chaos on spilling GEMM layers (Phase A, docs/ddr_stress.md).
+ * DRAM chaos on spilling GEMM layers.
  *
  * The DUT talks to `AxiMemorySim` through the test-only `DramChaosInterposer`
  * (LFSR read/write latency, row-miss + turnaround penalties, periodic refresh
@@ -25,11 +25,12 @@ import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
  * P1-6: the top and the case are parameterized by (spec, inShape) so the same
  * chaos proof covers the spilling Linear (S2/P0c) and the spilling Conv2D
  * (P1-6, [6,6,2] in, K=2 -> [5,5,2] out, KFull=8, Ks=4, P=2). Chaos is the
- * harshest exerciser of the S2e single-beat seed pacing: blackouts and
+ * harshest exerciser of the single-beat seed pacing: blackouts and
  * row-miss penalties stall chunk acceptance mid-pass.
  */
 class DramChaosSpillTop(val isInt: Boolean, val cfg: DramChaosConfig,
   val spec: Seq[LayerSpec], val inShape: Seq[Int]) extends Component {
+  /** Test-only top: DUT + chaos interposer, mem/ctrl/stream ports exposed. */
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   val dt: Data = if (isInt) I8() else BF16()
   val dut = new Accelerator(
@@ -75,7 +76,7 @@ class DramChaosSpillTest extends AnyFunSuite {
     var imgWords: Seq[BigInt] = null
     var expected: Seq[Double] = null
 
-    // Untouched oracle + DDR image (same deterministic build as R3).
+    // Untouched oracle + DDR image (same deterministic build as ReplicaSpillE2E).
     SpinalConfig(targetDirectory = "out/tmp-chaos-spill-e2e").generateVerilog(new Component {
       setDefinitionName("ChaosSpillE2eLayout")
       val dt = if (isInt) I8() else BF16()

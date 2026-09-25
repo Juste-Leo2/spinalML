@@ -8,8 +8,8 @@ import spinal.lib.bus.amba4.axi.Axi4Config
 import spinalML.dtypes.I8
 
 /**
- * S0 compute-side spill guards (docs/ddr_final_impl.md): elaboration-time
- * knobs and requires only — no RTL behavior change.
+ * Compute-side spill guards: elaboration-time knobs and requires only —
+ * no RTL behavior change.
  * - `Linear.spillKSlice` validates like `weightLanes` (divisor of inFeatures,
  *   multiple of effLanes so the pass-internal chunking matches the replica).
  * - `Sequential` accepts a spilling layer only with `temporal >= 1`
@@ -119,8 +119,8 @@ class SpillConfigTest extends AnyFunSuite {
   test("P2-3 spilling Conv1D elaborates and sizes totalSpillBytes") {
     // K=2, inC=4 -> KFull=8, weightLanes=4 -> effLanes=4: Ks=4, P=2, slice
     // 4xN=8B beat-aligned; L=6 -> M=5 windows, region 5x2 I8 = 10B -> 16B
-    // beat-aligned. Full engine + pass wiring elaborate (the P2-2 loud
-    // guard is gone); P2-4 proves the numerics.
+    // beat-aligned. Full engine + pass wiring elaborate (no loud guard);
+    // P2-4 proves the numerics.
     val layers = Seq(Conv1D(inChannels = 4, outChannels = 2, kernelSize = 2,
       weightLanes = 4, spillKSlice = 4))
     val report = SpinalConfig().generateVerilog(spillSequential(layers, inputShape = Seq(6, 4)))
@@ -129,14 +129,14 @@ class SpillConfigTest extends AnyFunSuite {
   }
 
   test("Sequential: spill requires temporal >= 1") {
-    // The windowed row drain is the spill drain path (S1/S2).
+    // The windowed row drain is the spill drain path.
     val layers = Seq(Linear(inFeatures = 8, outFeatures = 4, weightLanes = 2, spillKSlice = 4))
     intercept[Exception] {
       SpinalConfig().generateVerilog(spillSequential(layers, temporal = 0))
     }
     // NOTE: no elaboration require on weightResidency — the flag only wires
     // the (default-off) control plane. The STREAM_PER_PASS runtime contract
-    // is enforced by the S2 pass controller.
+    // is enforced by the pass controller.
     SpinalConfig().generateVerilog(spillSequential(layers, weightResidency = true))
   }
 

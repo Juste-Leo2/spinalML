@@ -12,6 +12,9 @@ import spinalML.harness.MemoryHarness
 import spinalML.replica.{HWArithmetic, ModelReplica, WeightMemoryLayout}
 
 class SequentialTest extends AnyFunSuite {
+  /** Sequential SoC integration (non-spill + residency/prefetch): consecutive
+   * inferences, band tiling, AR traffic metering, arbiter cascade and
+   * idWidth fit — bit-exact vs ModelReplica throughout. */
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   val spinalConfig = SpinalConfig(bitVectorWidthMax = 16384)
 
@@ -108,7 +111,6 @@ class SequentialTest extends AnyFunSuite {
 
       val numPasses = 5
       for (pass <- 0 until numPasses) {
-        // Vary input values per pass
         val inInts = (0 until 16).map(idx => ((idx * 3 + pass * 5) % 7).toLong)
         val imgWords = MemoryHarness.packBytes(inInts.map(_.toInt))
         writeWords(memSim.memory, imgBase, imgWords)
@@ -116,7 +118,6 @@ class SequentialTest extends AnyFunSuite {
         val inputTensor = ModelReplica.IntTensor(Seq(4, 4, 1), inInts, 8)
         val oracle = ModelReplica.forwardWithTrace(dut.modelSpec, dut.inputShape, inputTensor, packed)
 
-        // Pulse START
         writeCsr(0x00, 1)
 
         val collected = scala.collection.mutable.ArrayBuffer[Double]()
@@ -434,7 +435,6 @@ class SequentialTest extends AnyFunSuite {
       val packed = WeightMemoryLayout.buildDeterministicWeights(dut.modelSpec, dut.globalDataType, axiConfig)
       writeWords(memSim.memory, weightBase, packed.words)
 
-      // Meter AR transactions
       var weightARs = 0L
       dut.clockDomain.onSamplings {
         if (dut.io.axiMaster.ar.valid.toBoolean && dut.io.axiMaster.ar.ready.toBoolean) {
