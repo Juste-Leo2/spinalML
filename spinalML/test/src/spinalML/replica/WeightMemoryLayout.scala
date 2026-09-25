@@ -89,6 +89,143 @@ object WeightMemoryLayout {
     }
   }
 
+  private[replica] case class RawRegion(values: Seq[F], ints: Seq[Long], raw: Seq[Long])
+
+  private[replica] case class EmittedRegion(offset: Int, values: Seq[F], ints: Seq[Long])
+
+  private[replica] def resolveNodeTypes(
+    layers: Seq[LayerSpec],
+    pipelineDataType: HardType[Data]
+  ): scala.collection.mutable.ArrayBuffer[HardType[Data]] = {
+    val nodeTypes = scala.collection.mutable.ArrayBuffer[HardType[Data]](pipelineDataType)
+    for (i <- layers.indices) {
+      val l = layers(i)
+      val outType = l match {
+        case ad: Add => nodeTypes(ad.a)
+        case cc: Concat => nodeTypes(cc.a)
+        case _ => l.outType(nodeTypes(i))
+      }
+      nodeTypes += outType
+    }
+    nodeTypes
+  }
+
+  private[replica] def genFloatBits(
+    elems: Int,
+    eW: Int,
+    mW: Int,
+    modulus: Int,
+    step: Double
+  ): RawRegion = {
+    val values = (0 until elems).map { idx =>
+      val floatVal = (((idx % modulus) + 1) * step).toFloat
+      fromDouble(floatVal, eW, mW)
+    }
+    val raw = values.map { f =>
+      val sign = if (f.s) 1L else 0L
+      (sign << (eW + mW)) | ((f.e.toLong & ((1L << eW) - 1)) << mW) | (f.m.toLong & ((1L << mW) - 1))
+    }
+    RawRegion(values, Nil, raw)
+  }
+
+  private[replica] def genIntBits(
+    elems: Int,
+    elemBits: Int,
+    expBits: Int,
+    mantBits: Int,
+    modulus: Int
+  ): RawRegion = {
+    // Integer domain (e.g. I4, I8, I16)
+    val ints = (0 until elems).map { idx =>
+      ((idx % modulus) + 1).toLong
+    }
+    val mask = if (elemBits >= 64) -1L else (1L << elemBits) - 1
+    val values = ints.map(v => fromSInt(v, elemBits, expBits, mantBits))
+    RawRegion(values, ints, ints.map(v => v & mask))
+  }
+
+  // Slice-transpose the physical weight order for spilling layers.
+  // Legacy order ([n][k]) is the generation order above, so non-spill
+  // layers flow through untouched, bit-identical to before.
+  private[replica] def spillTranspose(
+    layer: LayerSpec,
+    wElems: Int,
+    spillKs: Int
+  ): Option[(Int, Int, Int)] = {
+    if (spillKs <= 0) None
+    else {
+      val (spillK, spillN) = layer match {
+        case s: SpillableGEMM => (s.spillKFull, s.spillN)
+        case _ => (wElems, 1)
+      }
+      require(wElems == spillK * spillN,
+        s"WeightMemoryLayout: spilling ${layer.getClass.getSimpleName} wElems=$wElems != K*N=${spillK * spillN}")
+      Some((spillK, spillN, spillKs))
+    }
+  }
+
+  private[replica] def emitRegion(
+    memoryBytes: scala.collection.mutable.ArrayBuffer[Byte],
+    startOffset: Int,
+    beatBytes: Int,
+    elems: Int,
+    dtype: HardType[Data],
+    expBits: Int,
+    mantBits: Int,
+    modulus: Int,
+    step: Double,
+    transpose: Option[(Int, Int, Int)]
+  ): (Int, EmittedRegion) = {
+    val regionOffset = MemLayout.alignToBeat(startOffset, beatBytes)
+
+    val data = dtype()
+    val elemBits = data.getBitsWidth
+    val gen = if (data.isInstanceOf[FloatML]) {
+      val fType = data.asInstanceOf[FloatML]
+      genFloatBits(elems, fType.expBits, fType.mantBits, modulus, step)
+    } else {
+      genIntBits(elems, elemBits, expBits, mantBits, modulus)
+    }
+
+    val permuted = transpose match {
+      case Some((k, n, ks)) =>
+        // Float path leaves weightInts empty (and vice versa): only permute
+        // populated sequences, keeping index correspondence with rawBits.
+        RawRegion(
+          if (gen.values.nonEmpty) sliceTransposeFlat(gen.values, k, n, ks) else gen.values,
+          if (gen.ints.nonEmpty) sliceTransposeFlat(gen.ints, k, n, ks) else gen.ints,
+          sliceTransposeFlat(gen.raw, k, n, ks))
+      case None => gen
+    }
+
+    val packedBytes = packRawBits(permuted.raw, elemBits)
+    while (memoryBytes.length < regionOffset + packedBytes.length) memoryBytes += 0.toByte
+    for (idx <- packedBytes.indices) {
+      memoryBytes(regionOffset + idx) = packedBytes(idx)
+    }
+
+    val nextOffset = MemLayout.alignToBeat(
+      regionOffset + MemLayout.regionBytes(elems, elemBits), beatBytes)
+    (nextOffset, EmittedRegion(regionOffset, permuted.values, permuted.ints))
+  }
+
+  // Convert byte array into 64-bit AXI words
+  private[replica] def packWords(
+    memoryBytes: scala.collection.mutable.ArrayBuffer[Byte],
+    totalBytes: Int
+  ): Seq[BigInt] = {
+    val words = scala.collection.mutable.ArrayBuffer[BigInt]()
+    for (i <- 0 until totalBytes by 8) {
+      var word = BigInt(0)
+      for (b <- 0 until 8) {
+        val byteVal = if (i + b < memoryBytes.length) memoryBytes(i + b).toInt & 0xFF else 0
+        word |= (BigInt(byteVal) << (8 * b))
+      }
+      words += word
+    }
+    words.toSeq
+  }
+
   /**
    * Builds deterministic weights for a given sequence of LayerSpecs.
    * Mirrors Sequential.scala layout:
@@ -113,16 +250,7 @@ object WeightMemoryLayout {
     // Memory buffer as byte array
     val memoryBytes = scala.collection.mutable.ArrayBuffer.fill(65536)(0.toByte)
 
-    val nodeTypes = scala.collection.mutable.ArrayBuffer[HardType[Data]](pipelineDataType)
-    for (i <- layers.indices) {
-      val l = layers(i)
-      val outType = l match {
-        case ad: Add => nodeTypes(ad.a)
-        case cc: Concat => nodeTypes(cc.a)
-        case _ => l.outType(nodeTypes(i))
-      }
-      nodeTypes += outType
-    }
+    val nodeTypes = resolveNodeTypes(layers, pipelineDataType)
 
     for (i <- layers.indices) {
       val layer = layers(i)
@@ -153,107 +281,22 @@ object WeightMemoryLayout {
       }
 
       if (wElems > 0) {
-        currentOffset = MemLayout.alignToBeat(currentOffset, beatBytes)
-        wOffset = currentOffset
-
-        val wData = wType()
-        val wElemBits = wData.getBitsWidth
-        val isFloat = wData.isInstanceOf[FloatML]
-
-        val rawBitsLegacy: Seq[Long] = if (isFloat) {
-          val fType = wData.asInstanceOf[FloatML]
-          val eW = fType.expBits
-          val mW = fType.mantBits
-          wValues = (0 until wElems).map { idx =>
-            val floatVal = (((idx % 7) + 1) * 0.0625).toFloat
-            fromDouble(floatVal, eW, mW)
-          }
-          wValues.map { f =>
-            val sign = if (f.s) 1L else 0L
-            (sign << (eW + mW)) | ((f.e.toLong & ((1L << eW) - 1)) << mW) | (f.m.toLong & ((1L << mW) - 1))
-          }
-        } else {
-          // Integer domain (e.g. I4, I8, I16)
-          wInts = (0 until wElems).map { idx =>
-            ((idx % 7) + 1).toLong
-          }
-          val mask = if (wElemBits >= 64) -1L else (1L << wElemBits) - 1
-          wValues = wInts.map(v => fromSInt(v, wElemBits, expBits, mantBits))
-          wInts.map(v => v & mask)
-        }
-
-        // Slice-transpose the physical weight order for spilling layers.
-        // Legacy order ([n][k]) is the generation order above, so non-spill
-        // layers flow through untouched, bit-identical to before.
-        val spillActive = spillKs > 0
-        if (spillActive) {
-          val (spillK, spillN) = layer match {
-            case s: SpillableGEMM => (s.spillKFull, s.spillN)
-            case _ => (wElems, 1)
-          }
-          require(wElems == spillK * spillN,
-            s"WeightMemoryLayout: spilling ${layer.getClass.getSimpleName} wElems=$wElems != K*N=${spillK * spillN}")
-          // Float path leaves weightInts empty (and vice versa): only permute
-          // populated sequences, keeping index correspondence with rawBits.
-          if (wValues.nonEmpty) wValues = sliceTransposeFlat(wValues, spillK, spillN, spillKs)
-          if (wInts.nonEmpty) wInts = sliceTransposeFlat(wInts, spillK, spillN, spillKs)
-        }
-        val rawBits: Seq[Long] =
-          if (spillActive) {
-            val (spillK, spillN) = layer match {
-              case s: SpillableGEMM => (s.spillKFull, s.spillN)
-              case _ => (wElems, 1)
-            }
-            sliceTransposeFlat(rawBitsLegacy, spillK, spillN, spillKs)
-          } else rawBitsLegacy
-
-        val packedBytes = packRawBits(rawBits, wElemBits)
-        while (memoryBytes.length < wOffset + packedBytes.length) memoryBytes += 0.toByte
-        for (idx <- packedBytes.indices) {
-          memoryBytes(wOffset + idx) = packedBytes(idx)
-        }
-
-        val wBytes = MemLayout.regionBytes(wElems, wElemBits)
-        currentOffset = MemLayout.alignToBeat(wOffset + wBytes, beatBytes)
+        val transpose = spillTranspose(layer, wElems, spillKs)
+        val (next, region) = emitRegion(memoryBytes, currentOffset, beatBytes,
+          wElems, wType, expBits, mantBits, 7, 0.0625, transpose)
+        currentOffset = next
+        wOffset = region.offset
+        wValues = region.values
+        wInts = region.ints
       }
 
       if (bElems > 0) {
-        currentOffset = MemLayout.alignToBeat(currentOffset, beatBytes)
-        bOffset = currentOffset
-
-        val bData = bType()
-        val bElemBits = bData.getBitsWidth
-        val isFloat = bData.isInstanceOf[FloatML]
-
-        val rawBits: Seq[Long] = if (isFloat) {
-          val fType = bData.asInstanceOf[FloatML]
-          val eW = fType.expBits
-          val mW = fType.mantBits
-          bValues = (0 until bElems).map { idx =>
-            val floatVal = (((idx % 5) + 1) * 0.03125).toFloat
-            fromDouble(floatVal, eW, mW)
-          }
-          bValues.map { f =>
-            val sign = if (f.s) 1L else 0L
-            (sign << (eW + mW)) | ((f.e.toLong & ((1L << eW) - 1)) << mW) | (f.m.toLong & ((1L << mW) - 1))
-          }
-        } else {
-          bInts = (0 until bElems).map { idx =>
-            ((idx % 5) + 1).toLong
-          }
-          val mask = if (bElemBits >= 64) -1L else (1L << bElemBits) - 1
-          bValues = bInts.map(v => fromSInt(v, bElemBits, expBits, mantBits))
-          bInts.map(v => v & mask)
-        }
-
-        val packedBytes = packRawBits(rawBits, bElemBits)
-        while (memoryBytes.length < bOffset + packedBytes.length) memoryBytes += 0.toByte
-        for (idx <- packedBytes.indices) {
-          memoryBytes(bOffset + idx) = packedBytes(idx)
-        }
-
-        val bBytes = MemLayout.regionBytes(bElems, bElemBits)
-        currentOffset = MemLayout.alignToBeat(bOffset + bBytes, beatBytes)
+        val (next, region) = emitRegion(memoryBytes, currentOffset, beatBytes,
+          bElems, bType, expBits, mantBits, 5, 0.03125, None)
+        currentOffset = next
+        bOffset = region.offset
+        bValues = region.values
+        bInts = region.ints
       }
 
       layerInfos += LayerWeightInfo(
@@ -274,20 +317,11 @@ object WeightMemoryLayout {
       )
     }
 
-    // Convert byte array into 64-bit AXI words
     val alignedTotalBytes = MemLayout.alignToBeat(currentOffset, beatBytes)
-    val words = scala.collection.mutable.ArrayBuffer[BigInt]()
-    for (i <- 0 until alignedTotalBytes by 8) {
-      var word = BigInt(0)
-      for (b <- 0 until 8) {
-        val byteVal = if (i + b < memoryBytes.length) memoryBytes(i + b).toInt & 0xFF else 0
-        word |= (BigInt(byteVal) << (8 * b))
-      }
-      words += word
-    }
+    val words = packWords(memoryBytes, alignedTotalBytes)
 
     PackedWeightsResult(
-      words = words.toSeq,
+      words = words,
       layers = layerInfos.toSeq,
       totalBytes = alignedTotalBytes
     )
