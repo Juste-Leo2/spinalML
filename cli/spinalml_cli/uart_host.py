@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Léonard Adamo (Juste-Leo2) - SPDX-License-Identifier: MIT
 
-"""UART bridge L2 protocol (host side), see docs/uart_bridge.md.
+"""UART bridge L2 protocol (host side).
 
 This class only encodes/decodes the protocol: the actual byte transport is
 provided by subclasses (serial port on Radxa/PC, or the cocotb simulator in
@@ -43,9 +43,7 @@ class UartHost:
     def recv(self, timeout: float = 1.0) -> int:
         raise NotImplementedError
 
-    # ------------------------------------------------------------------
     # Command encoders
-    # ------------------------------------------------------------------
     def cmd_csr_write(self, addr: int, val: int) -> bytes:
         """'C' command: 4-byte addr (LSB-first per byte, reference RTL
         `{rx, acc[31:8]}` accumulation) + 4-byte val (LSB-first)."""
@@ -73,9 +71,7 @@ class UartHost:
         """'V' command."""
         return bytes([CMD_VERSION])
 
-    # ------------------------------------------------------------------
     # One-shot command senders (send payload then fetch the answer)
-    # ------------------------------------------------------------------
     def write_csr(self, addr: int, val: int) -> None:
         for byte in self.cmd_csr_write(addr, val):
             self.send(byte)

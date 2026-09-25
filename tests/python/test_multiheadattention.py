@@ -168,10 +168,8 @@ async def cocotb_multihead_bf16(dut):
 def test_pytest_multihead_bf16(request): run_layer_sim("MultiHeadAttention", "BF16", "cocotb_multihead_bf16", "MultiHeadAttentionTestComp", request)
 
 
-# ==========================================
 # MULTI-HEAD ATTENTION — WEIGHT-ONLY QUANTIZATION (wXaY)
 # SInt weights (I4/I8) + shared compile-time scale(s), float activations
-# ==========================================
 QUANT_COMBOS = {
     "w8a16": (I8, 8, BF16),
     "w4a16": (I4, 4, BF16),

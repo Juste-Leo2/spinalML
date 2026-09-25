@@ -72,15 +72,10 @@ async def cocotb_test_double_buffer_streamer(dut):
     assert received_data == expected_data, f"Data mismatch! Got {received_data}, expected {expected_data}"
     
     # Check that nextTile was pulsed!
-    # nextTile pulses for exactly 1 cycle when the reading finishes.
-    # We might have missed it in the loop if it happened after we collected the 16th element,
-    # but let's just wait a few cycles and verify it goes high.
-    # Wait, nextTile is pulsed when the read requests finish, which happens BEFORE the output stream finishes!
-    # Because there is a FIFO in between. 
-    # Let's just assure it doesn't crash and outputs the right data.
+    # nextTile pulses for exactly 1 cycle when the reading finishes
+    # (ahead of the output stream drain: a FIFO sits in between).
 
 def test_double_buffer_streamer_runner():
-    """Pytest runner for test_double_buffer_streamer"""
     # Filter on generate_verilog ONLY: the Scala suite also elaborates a
     # depth=8 instance for its sim test under the same toplevel filename, and
     # run_mill copies the newest DoubleBufferStreamer.v it finds. Running the

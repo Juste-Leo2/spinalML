@@ -13,9 +13,7 @@ from utils.tb_utils import seed_random, SEED
 
 seed_random()
 
-# ==========================================
 # LINEAR LAYER
-# ==========================================
 async def run_linear_test(dut, op_name, dtype_name, dtype, A, W, b, is_floatml, A_shape=(1, 2), A_lanes=2, W_shape=(2, 1), W_lanes=2, b_shape=(1, 1), b_lanes=1, Y_shape=(1, 1), Y_lanes=1, collect=None):
     clock = Clock(dut.clk, 10, units="ns")
     cocotb.start_soon(clock.start())
@@ -125,10 +123,8 @@ def test_pytest_linear_fp8(request): run_layer_sim("Linear", "FP8", "cocotb_line
 def test_pytest_linearmulti_i8(request): run_layer_sim("Linear", "I8", "cocotb_linearmulti_i8", "LinearTestCompMulti", request)
 def test_pytest_linearmulti_fp8(request): run_layer_sim("Linear", "FP8", "cocotb_linearmulti_fp8", "LinearTestCompMulti", request)
 
-# ==========================================
 # LINEAR LAYER — WEIGHT-ONLY QUANTIZATION (wXaY)
 # SInt weights (I4/I8) + compile-time scale(s), float activations
-# ==========================================
 QUANT_COMBOS = {
     "w8a16": (I8, 8, BF16),
     "w4a16": (I4, 4, BF16),

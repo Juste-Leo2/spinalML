@@ -14,7 +14,6 @@ Applied to the routed pnr.json just before gowin_pack. Content-driven:
 only cells matching the buggy pattern are touched, so it is a natural no-op
 once nextpnr is updated. REMOVE this module once the pinned oss-cad-suite
 ships the fix (check nextpnr-himbaechel --version / changelog).
-See docs/bugs/2026-09-gowin-rne-dsp-lut-saturation.md §8.
 """
 
 import json

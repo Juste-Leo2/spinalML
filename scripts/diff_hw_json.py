@@ -454,7 +454,7 @@ def _append_yosys_logs(md, metrics, ko_dir, ok_dir):
 def analyze(ko_dir, ok_dir, labels=None):
     md, metrics, ko_label, ok_label = _report_header(ko_dir, ok_dir, labels)
 
-    # ---- synth / pnr primitives ---------------------------------------
+    # Synth / pnr primitives
     for kind in ("synth", "pnr"):
         ko_path = Path(ko_dir) / f"{kind}.json"
         ok_path = Path(ok_dir) / f"{kind}.json"
@@ -474,7 +474,7 @@ def analyze(ko_dir, ok_dir, labels=None):
             _append_ram_lanes(md, metrics, ko_mod, ok_mod)
             _append_routing(md, ko_mod, ok_mod)
 
-    # ---- Yosys logs ----------------------------------------------------
+    # Yosys logs
     _append_yosys_logs(md, metrics, ko_dir, ok_dir)
     return "\n".join(md), metrics
 

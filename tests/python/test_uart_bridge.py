@@ -3,7 +3,7 @@
 """
 Bridge L2 protocol scenario test on UartBridgeTestComp.
 
-Covers, in one long session (reference protocol, see docs/uart_bridge.md):
+Covers, in one long session (reference protocol):
   - 'V' version reply
   - 'S' status byte (idle + after idle)
   - 'C' CSR writes (0x08 imgBase / 0x0C weightBase / 0x1C run) verified on
@@ -120,15 +120,15 @@ async def cocotb_uart_bridge(dut):
     dut.io_bram_r_ready.value = 0
     await RisingEdge(dut.clk)
 
-    # --- 'V' version ---
+    # 'V' version
     (ver,) = await script(dut, b"V", capture_symbols=12, n_frames=1)
     assert ver == 0x01, f"V reply {ver} != 1"
 
-    # --- 'S' idle status: bit0 = 1 (protocol probe) ---
+    # 'S' idle status: bit0 = 1 (protocol probe)
     (status,) = await script(dut, b"S", capture_symbols=12, n_frames=1)
     assert status == 0x01, f"idle status {hex(status)} != 0x01"
 
-    # --- 'C' CSR writes (silent commands) ---
+    # 'C' CSR writes (silent commands)
     await script(dut,
                  b"C" + (0x00000008).to_bytes(4, "little") + (0x00010000).to_bytes(4, "little"),
                  capture_symbols=2, n_frames=0)
@@ -152,7 +152,7 @@ async def cocotb_uart_bridge(dut):
         await RisingEdge(dut.clk)
     assert int(dut.io_runRegR.value) == 0x01, f"CSR run reg {hex(int(dut.io_runRegR.value))}"
 
-    # --- 'W' memory write: image region 0x10000 (8 words) ---
+    # 'W' memory write: image region 0x10000 (8 words)
     await script(dut,
                  b"W" + (0x00010000).to_bytes(4, "little") + (64).to_bytes(4, "little") + WORD0,
                  capture_symbols=2, n_frames=0)
@@ -165,7 +165,7 @@ async def cocotb_uart_bridge(dut):
     assert words[0] == w0, f"BRAM[0x10000] {hex(words[0])} != {hex(w0)}"
     assert words[1] == w1, f"BRAM[0x10008] {hex(words[1])} != {hex(w1)}"
 
-    # --- 'W' weights region 0x20000 (mapped to +0x800) ---
+    # 'W' weights region 0x20000 (mapped to +0x800)
     w_word = bytes(range(0x40, 0x48))
     await script(dut,
                  b"W" + (0x00020000).to_bytes(4, "little") + (8).to_bytes(4, "little") + w_word,
@@ -185,7 +185,7 @@ async def cocotb_uart_bridge(dut):
     (ver,) = await script(dut, b"V", capture_symbols=12, n_frames=1)
     assert ver == 0x01, "bridge stuck after W len=0"
 
-    # --- 'R' 10 logits from the stub stream (trigger it first via CSR 0x00) ---
+    # 'R' 10 logits from the stub stream (trigger it first via CSR 0x00)
     await script(dut,
                  b"C" + (0x00000000).to_bytes(4, "little") + (0x00000001).to_bytes(4, "little"),
                  capture_symbols=2, n_frames=0)

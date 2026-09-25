@@ -83,7 +83,7 @@ def run_mill(test_class, dtype_filter, toplevel):
 @pytest.fixture(autouse=True)
 def cleanup_verilog():
     yield
-    # Nettoyage à la racine pour éviter la pollution
+    # Root cleanup to prevent test artifact pollution
     for f in glob.glob(os.path.join(PROJECT_ROOT, "*.v")) + glob.glob(os.path.join(PROJECT_ROOT, "*.bin")):
         try:
             os.remove(f)
@@ -91,7 +91,7 @@ def cleanup_verilog():
             pass
 
 def copy_roms(build_dir):
-    """Copie les ROMs générées par SpinalHDL dans le dossier de simulation Verilator"""
+    """Copy the SpinalHDL-generated ROMs into the Verilator simulation folder"""
     os.makedirs(build_dir, exist_ok=True)
     # Check PROJECT_ROOT first
     for f in glob.glob(os.path.join(PROJECT_ROOT, "*.bin")):

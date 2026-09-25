@@ -197,7 +197,7 @@ def random_matrices_batch(M, K, N, range_val=5.0, integer=True, batch_size=1):
         return A_batch, B_batch
     return gen
 
-# ----------------- VECTOR -----------------
+# VECTOR
 @cocotb.test()
 async def cocotb_matmul_vector_i8(dut):
     await run_matmul_test(dut, "MatmulVector", "I8", I8, lambda: get_random_matrices(1, 2, 1, range_val=10.0, integer=True), 1, 2, 1, 2, is_floatml=False)
@@ -214,7 +214,7 @@ async def cocotb_matmul_vector_i16(dut):
 async def cocotb_matmul_vector_bf16(dut):
     await run_matmul_test(dut, "MatmulVector", "BF16", BF16, lambda: get_random_matrices(1, 2, 1, range_val=20.0, integer=False), 1, 2, 1, 2, is_floatml=True)
 
-# ----------------- GEMM PARALLEL -----------------
+# GEMM PARALLEL
 @cocotb.test()
 async def cocotb_matmul_gemm_parallel_i8(dut):
     await run_matmul_test(dut, "MatmulGEMMPar", "I8", I8, lambda: get_random_matrices(2, 4, 2, range_val=5.0, integer=True), 2, 4, 2, 2, is_floatml=False)
@@ -223,7 +223,7 @@ async def cocotb_matmul_gemm_parallel_i8(dut):
 async def cocotb_matmul_gemm_parallel_fp8(dut):
     await run_matmul_test(dut, "MatmulGEMMPar", "FP8", FP8_E4M3, lambda: get_random_matrices(2, 4, 2, range_val=3.0, integer=False), 2, 4, 2, 2, is_floatml=True)
 
-# ----------------- GEMM SEQUENTIAL -----------------
+# GEMM SEQUENTIAL
 @cocotb.test()
 async def cocotb_matmul_gemm_sequential_i16(dut):
     await run_matmul_test(dut, "MatmulGEMMSeq", "I16", I16, lambda: get_random_matrices(2, 4, 2, range_val=100.0, integer=True), 2, 4, 2, 2, is_floatml=False)
@@ -232,7 +232,7 @@ async def cocotb_matmul_gemm_sequential_i16(dut):
 async def cocotb_matmul_gemm_sequential_bf16(dut):
     await run_matmul_test(dut, "MatmulGEMMSeq", "BF16", BF16, lambda: get_random_matrices(2, 4, 2, range_val=10.0, integer=False), 2, 4, 2, 2, is_floatml=True)
 
-# ----------------- DYNAMIC PADDING -----------------
+# DYNAMIC PADDING
 @cocotb.test()
 async def cocotb_matmul_dyn_pad_i8(dut):
     await run_matmul_test(dut, "MatmulDynPad", "I8", I8, lambda: get_random_matrices(1, 3, 1, range_val=10.0, integer=True), 1, 3, 1, 2, is_floatml=False)
@@ -241,7 +241,7 @@ async def cocotb_matmul_dyn_pad_i8(dut):
 async def cocotb_matmul_dyn_pad_fp8(dut):
     await run_matmul_test(dut, "MatmulDynPad", "FP8", FP8_E4M3, lambda: get_random_matrices(1, 3, 1, range_val=5.0, integer=False), 1, 3, 1, 2, is_floatml=True)
 
-# ----------------- BATCHED MATMUL -----------------
+# BATCHED MATMUL
 @cocotb.test()
 async def cocotb_matmul_batched_i8(dut):
     # batch_size=2, M=1, K=2, N=1
@@ -252,7 +252,7 @@ async def cocotb_matmul_batched_fp8(dut):
     # batch_size=2, M=1, K=2, N=1
     await run_matmul_test(dut, "MatmulBatched", "FP8", FP8_E4M3, random_matrices_batch(1, 2, 1, range_val=5.0, integer=False, batch_size=2), 1, 2, 1, 2, is_floatml=True, batch_size=2)
 
-# ----------------- RUNNERS -----------------
+# RUNNERS
 def run_matmul_sim(dtype_filter, testcase_name, toplevel, request=None):
     v_file = run_mill("spinalML.ops.MatmulTest", dtype_filter, toplevel)
     build_dir = f"sim_build/matmul_{toplevel.lower()}_{dtype_filter.lower()}"

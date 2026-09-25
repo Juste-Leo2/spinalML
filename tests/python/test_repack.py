@@ -88,7 +88,7 @@ async def run_repack_test(dut, op_name, dtype_name, dtype, num_transfers_in, in_
     dut._log.info(f"[{op_name}][{dtype_name}] Passed Metadata Check")
 
 
-# --------- REPACK ---------
+# REPACK
 @cocotb.test()
 async def cocotb_repack_i8(dut): await run_repack_test(dut, "Repack", "I8", I8, 4, 2, 4, False)
 @cocotb.test()

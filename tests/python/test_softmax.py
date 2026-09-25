@@ -60,11 +60,11 @@ def softmax_hw(val_arr, dtype):
         exp_vals.append(e_val)
         
     # 4. Adder Tree (pairwise, odd tail passthrough — matches Softmax1D's
-    # buildPipelinedTree, including non-power-of-2 channels). Since Phase 2,
-    # the HW accumulates in a wide format: FP32 tree for wide floats (single
-    # rounding to the dtype at the reciprocal input), exact int sums for
-    # ints, and an exact integer block-float sum for narrow floats (FP8),
-    # all saturating/normalizing once at the reciprocal input.
+    # buildPipelinedTree, including non-power-of-2 channels). The HW accumulates
+    # in a wide format: FP32 tree for wide floats (single rounding to the dtype
+    # at the reciprocal input), exact int sums for ints, and an exact integer
+    # block-float sum for narrow floats (FP8), all saturating/normalizing once
+    # at the reciprocal input.
     if is_float:
         if dtype.mant_bits <= 4:
             # Narrow float: exact int block-float (fixed ref: exp field 1 = LSB)
@@ -111,7 +111,7 @@ def softmax_hw(val_arr, dtype):
         sum_val = float(sum(exp_vals))
         
     # 5. Reciprocal HW approximation (ROM mantissa + exponent algebra;
-    # Newton refinement is not yet enabled in the HW: phase 2 refinement TBD)
+    # Newton refinement is not yet enabled in the HW)
     if is_float:
         if bit_width <= 8:
             r_bits = pwl_reciprocal_float(sum_val, dtype, index_bits=8)
@@ -194,8 +194,7 @@ async def cocotb_softmax_bf16(dut):
     ], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_softmax)
 
 
-# --- Non-power-of-2 channel coverage (10 channels => tree 10->5->3->2->1) ---
-
+# Non-power-of-2 channel coverage (10 channels => tree 10->5->3->2->1)
 @cocotb.test()
 async def cocotb_softmax_i8_c10(dut):
     # 10 channels: the HW sum now accumulates exactly in a wide int then

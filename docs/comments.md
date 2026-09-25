@@ -127,9 +127,24 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 - **G5 structure** : bannières `----`/`===` → titres nus ; bench
   discipline (bounded waits, watchdogs) gardée.
 
+## Dérivation Python (zone 4h/4i fusionnée, 1 commit, validée)
+
+L'approche diffère du Scala sur trois points de statut :
+- **P1 surface API intouchée** : docstrings `"""` des fonctions publiques
+  (contrats, valeurs de retour, env vars), strings `help=` d'argparse et
+  messages d'erreur CLI = UI, jamais purgés ; paraphrase pure seulement
+  (`"""Run mill."""` sur `def run_mill`) ; FR traduit, pas purgé.
+- **P2 goldens = miroirs** (`tests/python/golden_models/`) : contrats
+  bit-exact, formules, slots E4M3 gardés ; tags `Wave`/`DTYPE` unwrappés ;
+  pointeurs `mirrors Scala <f>` gardés (références code, cf. R2/G3).
+- **P3 tests = wrappers déclaratifs** : bannières `# ===`/`# ---` → titres
+  nus ou dehors ; oracles (valeurs, hex packing, edge cases) gardés ;
+  chat (`# Init`, `# Let's…`, `# We create…`) dehors.
+- Noms de tests, asserts, `SimConfig`/cocotb API : intouchés (code).
+
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
 - **4f `src` restant** : fait (F1-F6 ci-dessus).
 - **4g tests Scala restants** : fait (G1-G5 ci-dessus).
-- **4h Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
-- **4i Python `scripts/` + `tests/python`** : à définir.
+- **4h Python CLI (`cli/`)** : fait (P1-P3, fusionné avec 4i en 1 commit).
+- **4i Python `scripts/` + `tests/python`** : fait (idem).

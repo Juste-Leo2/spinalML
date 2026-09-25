@@ -11,10 +11,7 @@ from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_unary_test
 
-# =========================================================================
 # Cocotb Test Logic
-# =========================================================================
-
 @cocotb.test()
 async def cocotb_exp_i8(dut):
     def expected_fn(val):
@@ -39,10 +36,7 @@ async def cocotb_exp_bf16(dut):
         return pwl_exp_float(val, BF16, index_bits=8)
     await run_unary_test(dut, "Exp", "BF16", BF16, [2.5, 12.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=math.exp, edge_cases=[12.5])
 
-# =========================================================================
 # Pytest Launchers
-# =========================================================================
-
 def run_exp_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.ops.ExpTest", dtype_filter, "ExpTestComp")
     build_dir = f"sim_build/exp_{dtype_filter.lower()}"

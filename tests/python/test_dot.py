@@ -154,7 +154,7 @@ def get_random_vectors(K, range_val=5.0, integer=True):
     return A, B
 
 
-# ----------------- DOT (N=8, lanes=2) -----------------
+# DOT (N=8, lanes=2)
 @cocotb.test()
 async def cocotb_dot_i8(dut):
     await run_dot_test(dut, "Dot", "I8", I8, lambda: get_random_vectors(8, range_val=10.0, integer=True), 8, 2, is_floatml=False)
@@ -171,7 +171,7 @@ async def cocotb_dot_i16(dut):
 async def cocotb_dot_bf16(dut):
     await run_dot_test(dut, "Dot", "BF16", BF16, lambda: get_random_vectors(8, range_val=20.0, integer=False), 8, 2, is_floatml=True)
 
-# ----------------- RUNNERS -----------------
+# RUNNERS
 def run_dot_sim(dtype_filter, testcase_name, request=None):
     toplevel = "DotTestComp"
     v_file = run_mill("spinalML.ops.DotTest", dtype_filter, toplevel)

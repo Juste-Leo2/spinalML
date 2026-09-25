@@ -11,10 +11,7 @@ from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_unary_test
 
-# =========================================================================
 # Cocotb Test Logic
-# =========================================================================
-
 # Integer tanh uses the quantized TFLite TANH convention (out scale 1/128,
 # int8 zp 0, input scale/zp default 1/0). The I8 sweep covers every ROM entry,
 # so it validates the full LUT bit-exactly.
@@ -39,10 +36,7 @@ async def cocotb_tanh_bf16(dut):
         return tanh_hw(val, BF16)
     await run_unary_test(dut, "Tanh", "BF16", BF16, [1.0, -1.0, 2.5, -2.5], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=math.tanh, edge_cases=[0.0])
 
-# =========================================================================
 # Pytest Launchers
-# =========================================================================
-
 def run_tanh_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.activations.TanhTest", dtype_filter, "TanhTestComp")
     build_dir = f"sim_build/tanh_{dtype_filter.lower()}"
@@ -65,4 +59,4 @@ def run_tanh_sim(dtype_filter, testcase_name, request=None):
 
 def test_tanh_i8(request): run_tanh_sim("I8", "cocotb_tanh_i8", request)
 def test_tanh_fp8(request): run_tanh_sim("FP8", "cocotb_tanh_fp8", request)
-def test_tanh_bf16(request): run_tanh_sim("BF16", "cocotb_tanh_bf16", request)
+def test_tanh_bf16(request): run_tanh_sim("BF16", "cocotb_tanh_bf16", request)

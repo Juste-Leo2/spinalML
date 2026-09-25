@@ -11,10 +11,7 @@ from utils.tb_utils import run_mill, copy_roms
 from utils.tb_utils import cleanup_verilog
 from utils.cocotb_helpers import run_unary_test
 
-# =========================================================================
 # Cocotb Test Logic
-# =========================================================================
-
 def true_rsqrt(val):
     if val <= 0: return 0.0
     return 1.0 / np.sqrt(val)
@@ -43,10 +40,7 @@ async def cocotb_rsqrt_bf16(dut):
         return BF16.from_float(true_rsqrt(val))
     await run_unary_test(dut, "Rsqrt", "BF16", BF16, [2.0, 100.0, -2.0], is_floatml=True, expected_bits_fn=expected_fn, true_math_fn=true_rsqrt, edge_cases=[100.0])
 
-# =========================================================================
 # Pytest Launchers
-# =========================================================================
-
 def run_rsqrt_sim(dtype_filter, testcase_name, request=None):
     v_file = run_mill("spinalML.ops.RsqrtTest", dtype_filter, "RsqrtTestComp")
     build_dir = f"sim_build/rsqrt_{dtype_filter.lower()}"

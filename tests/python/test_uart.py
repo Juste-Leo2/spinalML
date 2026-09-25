@@ -58,7 +58,7 @@ async def cocotb_uart_loopback(dut):
 
     for expected in bytes_to_test:
         t0 = cycle
-        # --- RX drive: start, 8 bits LSB-first, stop + trailing idle ---
+        # RX drive: start, 8 bits LSB-first, stop + trailing idle
         first0_edge = None  # the edge that first latches the start bit (0)
         valid_seen = None
         data_at_valid = None
@@ -90,8 +90,8 @@ async def cocotb_uart_loopback(dut):
             await tick()
             tx_samples.append(int(dut.io_txOut.value))
 
-        # --- RX timing golden (windowed: 1 cycle per DATA symbol, total
-        # ~9 bits after the start — the window stays << half a bit) ---
+        # RX timing golden (windowed: 1 cycle per DATA symbol, total
+        # ~9 bits after the start — the window stays << half a bit)
         expected_valid = first0_edge + 2 + HALF + 9 * CLK_PER_BIT
         assert abs(valid_seen - expected_valid) <= 12, (
             f"RX valid cycle {valid_seen} != expected ~{expected_valid} "
@@ -99,7 +99,7 @@ async def cocotb_uart_loopback(dut):
         assert data_at_valid == expected, (
             f"RX data {hex(data_at_valid)} != {hex(expected)}")
 
-        # --- TX golden: decode from the OBSERVED falling edge ---
+        # TX golden: decode from the OBSERVED falling edge
         rel_valid = valid_seen - t0
         s0 = None
         for i in range(len(tx_samples)):
