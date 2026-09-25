@@ -7,6 +7,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object DagHandlers {
 
+  /** Dispatch to LayerReplicas for DAG merges (Add, Concat) over node outputs. */
   def evalAdd(
     ad: Add,
     curShape: Seq[Int],

@@ -118,8 +118,8 @@ object HWArithmetic {
   def gt(a: F, b: F): Boolean = {
     val aZero = a.e == 0
     val bZero = b.e == 0
-    // NOTE (Wave 5): bare triples carry no format, so NaN cannot be detected
-    // here (E4M3 (15,7) vs a normal e=15 elsewhere). NaN-safety lives in
+    // Bare triples carry no format, so NaN cannot be detected here
+    // (E4M3 (15,7) vs a normal e=15 elsewhere). NaN-safety lives in
     // fmax below, which owns the format — mirroring RTL Mux(gt, a, b).
     if (aZero && bZero) false
     else if (aZero) b.s
@@ -130,13 +130,13 @@ object HWArithmetic {
   }
 
   def fmax(a: F, b: F, expBits: Int, mantBits: Int): F =
-    // Wave 5: mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN,
+    // Mirrors RTL Mux(gt(a, b), a, b) with gt == False on NaN,
     // i.e. the second operand wins whenever either side is NaN.
     if (isNaN(a, expBits, mantBits) || isNaN(b, expBits, mantBits)) b
     else if (gt(a, b)) a else b
 
-  /** NaN detection/payload mirroring spinalML.utils.Float (Wave 5,
-    * propagation-only). E4M3: single slot (15, 7). Other formats: all-ones
+  /** NaN detection/payload mirroring spinalML.utils.Float
+    * (propagation-only). E4M3: single slot (15, 7). Other formats: all-ones
     * exponent with nonzero mantissa (never emitted, host/DDR inputs only).
     * Sign rule: first NaN operand's sign. */
   private def isE4M3R(expBits: Int, mantBits: Int): Boolean =
@@ -153,7 +153,7 @@ object HWArithmetic {
   def nanProp(a: F, b: F, expBits: Int, mantBits: Int): F =
     nanOf(if (isNaN(a, expBits, mantBits)) a.s else b.s, expBits, mantBits)
 
-  /** Saturation encoding/predicate mirroring spinalML.utils.Float (DTYPE-07). */
+  /** Saturation encoding/predicate mirroring spinalML.utils.Float. */
   private def satFields(expBits: Int, mantBits: Int): (Int, Int) =
     spinalML.utils.Float.satEncoding(expBits, mantBits)
 
@@ -166,10 +166,10 @@ object HWArithmetic {
   /**
    * Mantissa conversion from integer, mirroring spinalML.utils.Float.fromSInt.
    *
-   * DTYPE-06: under [[Rne]] the dropped mantissa window rounds to nearest-even
+   * Under [[Rne]] the dropped mantissa window rounds to nearest-even
    * (guard + sticky on the dropped bits, increment with carry into the
    * exponent); [[Truncate]] keeps the legacy truncation bit-exact. Saturation
-   * uses the RTL encoding (DTYPE-07: E4M3 -> 448, others -> inf).
+   * uses the RTL encoding (E4M3 -> 448, others -> inf).
    */
   def fromSInt(v: Long, w: Int, expBits: Int, mantBits: Int,
                rounding: RoundingMode = RoundingConfig.current): F = {
@@ -256,7 +256,6 @@ object HWArithmetic {
     if (cur.isEmpty) PZERO else cur.head
   }
 
-  // Common precision encoders
   def bf16Fields(f: Float): F = {
     val bits = (java.lang.Float.floatToIntBits(f) >>> 16) & 0xFFFF
     F((bits >>> 15 & 1) == 1, (bits >>> 7) & 0xFF, bits & 0x7F)

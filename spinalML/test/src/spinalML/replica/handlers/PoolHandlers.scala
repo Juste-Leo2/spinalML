@@ -9,6 +9,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object PoolHandlers {
 
+  /** Dispatch to LayerReplicas for pooling (Max/Avg, 1D/2D, float + int). */
   def evalMaxPool2D(
     p: MaxPool2D,
     curTensor: ReplicaTensor,

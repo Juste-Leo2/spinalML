@@ -7,6 +7,7 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 
 object TransformHandlers {
 
+  /** Dispatch to LayerReplicas for Cast/Flatten/Requantize/Repack. */
   def evalCast(
     c: Cast,
     curTensor: ReplicaTensor,

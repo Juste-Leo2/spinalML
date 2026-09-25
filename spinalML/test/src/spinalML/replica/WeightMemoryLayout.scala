@@ -29,9 +29,9 @@ object WeightMemoryLayout {
     biasInts: Seq[Long] = Nil,
     weightDtype: HardType[Data] = null,
     biasDtype: HardType[Data] = null,
-    // S2 spill contract (docs/ddr_final_impl.md): K-slice width streamed per
-    // pass. -1 = no spill, legacy whole-transpose layout. > 0 = the weight
-    // region is slice-transposed contiguous: p*Ks*N + n*Ks + k_local.
+    // Spill contract: K-slice width streamed per pass. -1 = no spill,
+    // legacy whole-transpose layout. > 0 = the weight region is
+    // slice-transposed contiguous: p*Ks*N + n*Ks + k_local.
     spillKSlice: Int = -1,
     spillPasses: Int = 1
   )
@@ -73,8 +73,8 @@ object WeightMemoryLayout {
    * `n*K + k`. A spilling engine fetches ONE Ks-slice per pass, so the DDR
    * region must be slice-transposed contiguous:
    * `p*Ks*N + n*Ks + k_local` with `k = p*Ks + k_local`
-   * (docs/ddr_final_impl.md S2 layout contract, cf. `programmedW(ks)` in
-   * `SequentialSpillTest`). P=1 (Ks=K) degenerates to the legacy order.
+   * (S2 layout contract, cf. `programmedW(ks)` in `SequentialSpillTest`).
+   * P=1 (Ks=K) degenerates to the legacy order.
    */
   def sliceTransposeFlat[T](flat: Seq[T], k: Int, n: Int, ks: Int): Seq[T] = {
     require(k % ks == 0, s"sliceTransposeFlat: K=$k must be a multiple of Ks=$ks")
@@ -271,10 +271,9 @@ object WeightMemoryLayout {
       var wInts = Seq[Long]()
       var bInts = Seq[Long]()
 
-      // S2 spill v1 (P1: any SpillableGEMM): a spilling layer streams one
-      // Ks-slice per pass, so its weight region is emitted slice-transposed
-      // (see sliceTransposeFlat). -1 = no spill, legacy whole-transpose
-      // order, bit-identical to before.
+      // A spilling layer streams one Ks-slice per pass, so its weight
+      // region is emitted slice-transposed (see sliceTransposeFlat).
+      // -1 = no spill, legacy whole-transpose order, bit-identical to before.
       val (spillKs, spillPasses) = layer match {
         case s: SpillableGEMM if s.spilling => (s.spillKSlice, s.spillPasses)
         case _ => (-1, 1)

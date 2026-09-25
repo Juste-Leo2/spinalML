@@ -17,12 +17,10 @@ import spinalML.replica.{FloatTensor, IntTensor, LayerReplicas, ReplicaTensor}
 object AttentionHandlers {
 
   /**
-   * KV-cache slot for one attention head.
-   * KV-cache transition point: prefill builds it once from the complete K/V
-   * outputs; the future decoding stage appends one token row per generation
-   * step and drives the SAME attentionHead core (the exact integer softmax
-   * partial-sum is incremental by construction, a causal mask only zeroes
-   * not-yet-visible key rows).
+   * KV-cache slot for one attention head. Prefill builds it once from the
+   * complete K/V outputs; decoding appends one token row per step and reuses
+   * the SAME attentionHead core (softmax partial-sum is incremental, a causal
+   * mask only zeroes not-yet-visible key rows).
    */
   case class HeadKV(k: Seq[Seq[F]], v: Seq[Seq[F]])
 
