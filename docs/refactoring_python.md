@@ -65,30 +65,29 @@
 
 ## 2. Décisions verrouillées (rappel, non négociable sans re-discussion)
 
-1. **3 environnements, pas un** (décision du 22/09, remplace le « single
-   venv » initial) :
-   - **Env CLI** (`cli/requirements.txt`, strict minimum : typer, requests,
-     rich) — fait tourner la CLI, rien de plus. Rapide à installer partout,
-     toutes plateformes.
-   - **Env dev** (`/requirements.txt` racine, comme aujourd'hui + nouveaux
-     packages) — développement : CLI + tests HW (pytest, cocotb, numpy,
-     cocotb-test…) + libs LiteX (`requirements-litex.txt` inclus).
-     Installé par **`setup --dev` (conservé)** : cocotb reste opt-in car
-     c'est lui le coût (Linux-only par markers déjà en place,
-     sensible aux versions, lent). Le mettre par défaut ferait payer le
-     setup sim à tout le monde, y compris CLI-only et Windows qui n'en
-     ont aucun usage. Sur Windows, `--dev` dégrade gracieusement (les
-     markers excluent cocotb, aucun code spécial).
-   - **Env portable utilisateur** (`~/.spinalml_tools/pyenv`, géré par
-     l'installer comme oss-cad-suite/mill) — runtime minimal embarqué
-     pour l'utilisateur final au moment des binaires : exécuter les flows
-     nécessitant Python sans gérer d'env à la main. Jamais touché à la
-     main, recréé par `setup`.
-   - `setup` seul = env CLI (+ env portable si distribué) ; `setup --dev`
-     ajoute l'env dev complet. CI : jobs build → `setup`, jobs sim → 
-     `setup --dev`.
-2. **`uv 0.12.17` pinné** dans `config.json` (4 plateformes, même pattern que
-   mill) + `install_uv()` + manifest. Tag vérifié existant (18/09/2026).
+1. **2 environnements, pas 3** (décision du 24/09, remplace le « 3 envs »
+   initial dont l'env portable dupliquait dev) :
+   - **`.venv` racine, CLI-only** (`/requirements.txt` : typer, requests,
+     rich) — lance la CLI depuis les sources, rien d'autre. Le réflexe
+     `pip install -r requirements.txt` reste valide avec un résultat sûr
+     et minimal.
+   - **Env managé `~/.spinalml_tools/.venv`** (nommé `.venv`, convention
+     universelle — aucun rapport avec l'outil `pyenv` banni) : TOUS les
+     flows python. Base (`requirements/base.txt` : pytest, numpy) + DRAM
+     (`requirements/dram.txt` : migen/litex/litedram, pur Python donc
+     par défaut) ; set dev (`requirements/dev.txt` : cocotb, Linux-only)
+     uniquement avec **`setup --dev`**, car cocotb reste le seul coût à
+     confiner (VPI compilé, sensible aux versions).
+   - **Règle runtime unique** : tests et `dram-gen` spaw­nent toujours le
+     `.venv` managé en chemin absolu, sources comme exe. Le `.venv`
+     racine ne fait jamais tourner de tests.
+   - `setup` = tools + CLI + managé (base+dram, **stateless** : réinstalle
+     toujours SANS cocotb) ; `setup --dev` ajoute cocotb. CI : `setup
+     --dev` uniforme partout (un `setup` simple intercalé wiperait cocotb
+     pour les jobs suivants sur le même runner).
+2. **`uv 0.12.18` pinné** dans `config.json` (5 plateformes, même pattern
+   que oss-cad-suite) + `install_uv()` + manifest. Tag vérifié existant ;
+   `spinalml uv ...` exposé en accès direct comme verilator/mill.
 3. **`requirements.txt` gardés** + `requirements-litex.txt` nouveau
    (`migen==0.9.2`, `litex==2024.12`, `litedram==2024.12`), PyPI + `==`.
    Pas de vendoring tarball, pas de `--require-hashes` pour l'instant.
@@ -105,10 +104,14 @@
 7. **Interdit** : symlink `/usr/bin` (sudo, casse l'OS), shims PATH maison
    (pyenv-bis, ne couvre ni les chemins absolus, ni `find_libpython`, ni le
    linker, ni `PYTHONHOME`), toucher au python système.
-8. **`setup --dev`** : env sim complet via **`uv python`** (pas `pyenv` :
-   précompilé en secondes, user-local, déjà éprouvé ici — un 3.11.15
-   managé existe déjà sur la machine). 3.12 par défaut ; bascule 3.11 en
-   une ligne si le spike l'exige (voir §5).
+8. **`setup --dev`** : env sim complet via **`uv venv -p 3.12 --clear`
+   + `uv pip install -r`** (pas `pyenv`, pas de `.python-version` : `-p`
+   explicite partout, versionnée dans le code ; pas `uv pip sync` :
+   il n'installe que le set listé et droppe les transitifs — l'exactitude
+   vient de `--clear`). 3.12 par défaut ;
+   bascule 3.11 en une ligne si le spike l'exige (voir §5).
+   `find_python_interpreter` ne connaît plus aucun nom nu du PATH :
+   dev → user → erreur loud. `setup_tool_env` sanitize `PYTHONHOME`.
 
 ## 3. Plan d'exécution
 

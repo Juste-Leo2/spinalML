@@ -9,14 +9,15 @@ We use `uv` as a package and virtual environment manager for its speed and relia
 Ensure that Python 3.11+ and `uv` are installed on your system.
 
 ```bash
-# 1. Create the Python virtual environment (uses system default version)
-uv venv
+# 1. Create the CLI virtual environment (uv provisions Python 3.12 automatically)
+uv venv -p 3.12 --clear .venv
 
 # 2. Activate the environment
 source .venv/bin/activate
 
-# 3. Install dependencies (Cocotb, Pytest, Numpy, etc.)
+# 3. Install the CLI runtime, then provision the managed test env (pytest, cocotb, numpy, LiteX)
 uv pip install -r requirements.txt
+python cli/main.py setup --dev
 ```
 
 > [!NOTE]

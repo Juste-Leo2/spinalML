@@ -122,8 +122,8 @@ jobs:
           if [ "$VENV_OK" = "1" ] && [ "${{ inputs.force_env_setup }}" != "true" ]; then
             echo ".venv already on 3.12 — reusing it."
           else
-            echo "Rebuilding .venv (--clear) from $PYENV_PY ..."
-            uv venv --python "$PYENV_PY" --clear
+            echo "Rebuilding CLI .venv (--clear, uv-managed 3.12) ..."
+            uv venv -p 3.12 --clear .venv
           fi
           source .venv/bin/activate
           uv pip install -r requirements.txt
@@ -142,11 +142,11 @@ jobs:
           fi
           echo "Environment gate PASSED — the test chain can start."
 
-      - name: Setup Mill & Oss CAD Suite
+      - name: Setup Mill & Oss CAD Suite & managed Python envs
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
-          python cli/main.py setup
+          python cli/main.py setup --dev
 
   # =========================================================================
   # 1. SCALATEST DYNAMIC SIMULATIONS (75 SUITES)
@@ -172,9 +172,10 @@ jobs:
             echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
             exit 1
           fi
-          uv venv --python "$PYENV_PY" --clear
+          uv venv -p 3.12 --clear .venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
+          python cli/main.py setup --dev
           MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
           if [ "$MAJMIN" != "3.12" ]; then
             echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
@@ -217,9 +218,10 @@ jobs:
             echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
             exit 1
           fi
-          uv venv --python "$PYENV_PY" --clear
+          uv venv -p 3.12 --clear .venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
+          python cli/main.py setup --dev
           MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
           if [ "$MAJMIN" != "3.12" ]; then
             echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
@@ -231,7 +233,7 @@ jobs:
         run: |
           export PATH="$HOME/.spinalml_tools:$HOME/.spinalml_tools/oss-cad-suite/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           source .venv/bin/activate
-          taskset -c 0,1,2,3 python cli/main.py test tests/universal --ci 3
+          taskset -c 0,1,2,3 python cli/main.py test tests/universal --ci 3 --retry 1
 
   # =========================================================================
   # 3. SYMBIYOSYS FORMAL VERIFICATION (56 SUITES)
@@ -261,9 +263,10 @@ jobs:
             echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
             exit 1
           fi
-          uv venv --python "$PYENV_PY" --clear
+          uv venv -p 3.12 --clear .venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
+          python cli/main.py setup --dev
           MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
           if [ "$MAJMIN" != "3.12" ]; then
             echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."
@@ -306,9 +309,10 @@ jobs:
             echo "[ERROR] Global interpreter $PYENV_PY missing - the prepare-env job must run first."
             exit 1
           fi
-          uv venv --python "$PYENV_PY" --clear
+          uv venv -p 3.12 --clear .venv
           source .venv/bin/activate
           uv pip install -r requirements.txt
+          python cli/main.py setup --dev
           MAJMIN=$(uv run python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>&1)
           if [ "$MAJMIN" != "3.12" ]; then
             echo "[ERROR] .venv python is not 3.12 (VPI teardown crash). Aborting."

@@ -1,0 +1,5 @@
+# Base test runtime, installed into the uv-managed env (~/.spinalml_tools/.venv)
+# by `spinalml setup` (no flag needed).
+pytest==8.0.0
+pytest-cov==4.1.0
+numpy==1.26.3

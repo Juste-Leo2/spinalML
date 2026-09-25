@@ -45,7 +45,8 @@ spinalML/
 ├── CONTRIBUTING.md             # Contribution guidelines & development conventions
 ├── LICENSE                     # MIT License
 ├── CITATION.cff                # Citation metadata
-├── requirements.txt           # Python dependencies (typer, rich, cocotb, numpy, pytest)
+├── requirements.txt           # CLI runtime only (typer, rich, requests); full envs are uv-managed
+├── requirements/              # Managed env pins for `spinalml setup` (base, dram, dev)
 │
 ├── boards/                     # Hardware target definitions
 │   ├── tang-primer-20k.json    # Sipeed Tang Primer 20K (Gowin GW2A-18) configuration

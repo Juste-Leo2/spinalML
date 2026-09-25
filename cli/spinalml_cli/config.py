@@ -113,6 +113,13 @@ def get_w64devkit_url(config: dict) -> str:
         raise ValueError(f"No w64devkit build found for {os_arch}")
     return urls[os_arch]
 
+def get_uv_url(config: dict) -> str:
+    os_arch = get_os_arch()
+    urls = config["tools"].get("uv", {})
+    if os_arch not in urls:
+        raise ValueError(f"No uv build found for {os_arch}")
+    return urls[os_arch]
+
 def get_bin_path(tool_name: str) -> Path:
     """Returns the absolute path to a tool's executable."""
     import shutil
@@ -124,6 +131,14 @@ def get_bin_path(tool_name: str) -> Path:
         if tool_p.exists():
             return tool_p
         which = shutil.which("mill.bat" if is_win else "mill") or shutil.which("mill")
+        if which:
+            return Path(which)
+        return tool_p
+    elif tool_name in ("uv", "uvx"):
+        tool_p = TOOLS_DIR / (f"{tool_name}.exe" if is_win else tool_name)
+        if tool_p.exists():
+            return tool_p
+        which = shutil.which(tool_name)
         if which:
             return Path(which)
         return tool_p

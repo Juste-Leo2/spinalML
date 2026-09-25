@@ -70,7 +70,7 @@ jobs:
       # =========================================================================
       - name: Install Build Dependencies via uv
         run: |
-          uv pip install --python .venv -r cli/requirements.txt pyinstaller
+          uv pip install --python .venv -r requirements.txt pyinstaller
 
       # =========================================================================
       # 3. COMPILE STANDALONE EXECUTABLE WITH PYINSTALLER

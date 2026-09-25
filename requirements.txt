@@ -1,10 +1,8 @@
-# CLI runtime
--r cli/requirements.txt
-
-# Python co-simulations & tests (cocotb not supported on native Windows)
-pytest==8.0.0
-pytest-cov==4.1.0
-numpy==1.26.3
-cocotb==1.9.2; sys_platform != 'win32'
-cocotb-test==0.2.6; sys_platform != 'win32'
-cocotbext-axi==0.1.28; sys_platform != 'win32'
+# SpinalML CLI runtime only (typer, rich, requests).
+# This is the ONLY requirements file at the repo root, on purpose:
+# full dev/test envs (pytest, cocotb, numpy, LiteX stack) are uv-managed,
+# run `python cli/main.py setup` (or `setup --dev` for co-simulation).
+# Advanced users (IDE, custom envs) can hand-install requirements/{base,dram,dev}.txt.
+typer>=0.9.0
+requests>=2.31.0
+rich>=13.0.0

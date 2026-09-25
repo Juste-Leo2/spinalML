@@ -301,7 +301,8 @@ def cell_examples(a, b, max_examples=5):
     return out
 
 
-def analyze(ko_dir, ok_dir, labels=None):
+def _report_header(ko_dir, ok_dir, labels=None):
+    """Report title + build inventories. Returns (md_lines, metrics, ko_label, ok_label)."""
     ko_label = (labels or ("KO", "OK"))[0]
     ok_label = (labels or ("KO", "OK"))[1]
     metrics = {}
@@ -311,113 +312,115 @@ def analyze(ko_dir, ok_dir, labels=None):
         fs = sorted(p.name for p in Path(d).glob("*") if p.is_file())
         md.append(f"- **{label}** `{d}`: {', '.join(fs)}")
     md.append("")
+    return md, metrics, ko_label, ok_label
 
-    # ---- synth / pnr primitives ---------------------------------------
-    for kind in ("synth", "pnr"):
-        ko_path = Path(ko_dir) / f"{kind}.json"
-        ok_path = Path(ok_dir) / f"{kind}.json"
-        if not (ko_path.exists() and ok_path.exists()):
-            md.append(f"## {kind.upper()} — missing file, skipped\n")
-            continue
-        ko_name, ko_mod = pick_module(load_json(ko_path))
-        ok_name, ok_mod = pick_module(load_json(ok_path))
-        ko_types = type_histogram(load_json(ko_path))
-        ok_types = type_histogram(load_json(ok_path))
-        md.append(f"## {kind.upper()} (`{ko_name}` vs `{ok_name}`)")
-        md.append("")
-        md.append("| type | KO | OK | diff |")
-        md.append("|---|---:|---:|---:|")
-        type_totals = Counter()
-        for (t, _p), n in ko_types.items():
-            type_totals[t] += n
-        ok_totals = Counter()
-        for (t, _p), n in ok_types.items():
-            ok_totals[t] += n
-        for t in sorted(set(type_totals) | set(ok_totals)):
-            n_ko, n_ok = type_totals.get(t, 0), ok_totals.get(t, 0)
-            if n_ko != n_ok:
-                md.append(f"| {t} | {n_ko} | {n_ok} | {n_ok - n_ko:+d} |")
-        md.append("")
-        # parameter diffs (same type, different params)
-        param_only_ko = ko_types - ok_types
-        param_only_ok = ok_types - ko_types
-        n_param = sum(param_only_ko.values()) + sum(param_only_ok.values())
-        md.append(f"Parameter-set histogram cells only in one build: "
-                  f"**{n_param}**")
-        for k, v in param_only_ko.most_common(5):
-            if ok_totals.get(k[0], 0):
-                md.append(f"- KO only: `{k[0]}` {dict(k[1])} x{v}")
-        for k, v in param_only_ok.most_common(5):
-            if type_totals.get(k[0], 0):
-                md.append(f"- OK only: `{k[0]}` {dict(k[1])} x{v}")
-        md.append("")
 
-        prim = compare_primitives(ko_mod, ok_mod, ANCHOR_TYPES)
-        metrics[f"{kind}_anchor_params"] = len(prim["param_diff"])
-        metrics[f"{kind}_anchor_structural"] = len(prim["loose_diff"])
-        metrics[f"{kind}_anchor_moved"] = len(prim["moved"])
-        md.append("### Anchor cells (stable `hdlname`: multipliers)")
-        md.append("")
-        md.append(f"- anchors KO: **{sum(len(v) for v in collect_primitives(ko_mod, ANCHOR_TYPES).values())}**, "
-                  f"OK: **{sum(len(v) for v in collect_primitives(ok_mod, ANCHOR_TYPES).values())}**")
-        md.append(f"- keys only in KO: **{len(prim['only_ko'])}** "
-                  f"({', '.join(fmt_key(k) for k, _ in prim['only_ko'][:4])})")
-        md.append(f"- keys only in OK: **{len(prim['only_ok'])}** "
-                  f"({', '.join(fmt_key(k) for k, _ in prim['only_ok'][:4])})")
-        md.append(f"- parameter differences: **{len(prim['param_diff'])}**")
-        md.append(f"- structural connection diffs (after digit "
-                  f"canonicalisation): **{len(prim['loose_diff'])}**")
-        md.append(f"- rename-only connection diffs: "
-                  f"**{len(prim['strict_diff'])}**")
-        md.append(f"- placement (BEL) differences on anchors: "
-                  f"**{len(prim['moved'])}**")
-        md.append("")
-        for key, a, b in prim["loose_diff"][:4]:
-            md.append(f"- **structural** `{fmt_key(key)}`")
-            a_sig = next(iter(a))
-            b_sig = next(iter(b))
-            for port, na, nb in cell_examples(a_sig, b_sig):
-                md.append(f"    - `{port}`: KO {na} vs OK {nb}")
-        for key, _, _ in prim["param_diff"][:4]:
-            md.append(f"- **params** `{fmt_key(key)}`")
-        for key, a_bels, b_bels in prim["moved"][:8]:
-            md.append(f"- **moved** `{fmt_key(key)}`: KO {a_bels} vs OK {b_bels}")
-        md.append("")
+def _append_histogram(md, ko_types, ok_types):
+    """Type-count table + parameter-set diffs (same type, different params)."""
+    md.append("| type | KO | OK | diff |")
+    md.append("|---|---:|---:|---:|")
+    type_totals = Counter()
+    for (t, _p), n in ko_types.items():
+        type_totals[t] += n
+    ok_totals = Counter()
+    for (t, _p), n in ok_types.items():
+        ok_totals[t] += n
+    for t in sorted(set(type_totals) | set(ok_totals)):
+        n_ko, n_ok = type_totals.get(t, 0), ok_totals.get(t, 0)
+        if n_ko != n_ok:
+            md.append(f"| {t} | {n_ko} | {n_ok} | {n_ok - n_ko:+d} |")
+    md.append("")
+    # parameter diffs (same type, different params)
+    param_only_ko = ko_types - ok_types
+    param_only_ok = ok_types - ko_types
+    n_param = sum(param_only_ko.values()) + sum(param_only_ok.values())
+    md.append(f"Parameter-set histogram cells only in one build: "
+              f"**{n_param}**")
+    for k, v in param_only_ko.most_common(5):
+        if ok_totals.get(k[0], 0):
+            md.append(f"- KO only: `{k[0]}` {dict(k[1])} x{v}")
+    for k, v in param_only_ok.most_common(5):
+        if type_totals.get(k[0], 0):
+            md.append(f"- OK only: `{k[0]}` {dict(k[1])} x{v}")
+    md.append("")
 
-        if kind == "pnr":
-            changed, only_ko, only_ok = compare_ram_lanes(ko_mod, ok_mod)
-            metrics["ram_changed"] = len(changed)
-            metrics["ram_only_ko"] = len(only_ko)
-            metrics["ram_only_ok"] = len(only_ok)
-            md.append("### RAM lane coherence")
-            md.append("")
-            md.append(f"- shared address groups with a different "
-                      f"DI->DO lane multiset: **{len(changed)}**")
-            md.append(f"- address groups only in KO: **{len(only_ko)}**, "
-                      f"only in OK: **{len(only_ok)}**")
-            for addr, a, b in changed[:6]:
-                short = "/".join(n.split(".")[-1] for n in addr[:2])
-                md.append(f"- group `{short}`")
-                only_a = set(a) - set(b)
-                only_b = set(b) - set(a)
-                for pair in list(only_a)[:2]:
-                    md.append(f"    - KO only: DI {pair[0]} -> DO {pair[1]}")
-                for pair in list(only_b)[:2]:
-                    md.append(f"    - OK only: DI {pair[0]} -> DO {pair[1]}")
-            md.append("")
-            changed, examples = compare_routing(
-                ko_mod, ok_mod, ANCHOR_TYPES, max_examples=3)
-            md.append("### Anchor routing (informational: placement moved)")
-            md.append("")
-            for t, n in changed.most_common():
-                md.append(f"- {t}: **{n}** nets re-routed")
-            for key, port, na, nb, ra, rb in examples:
-                md.append(f"- `{fmt_key(key)}.{port}` {na} -> {nb}")
-                md.append(f"    - KO route: `{ra}`")
-                md.append(f"    - OK route: `{rb}`")
-            md.append("")
 
-    # ---- Yosys logs ----------------------------------------------------
+def _append_anchors(md, metrics, kind, ko_mod, ok_mod):
+    """Anchor cells (stable hdlname multipliers): params, structure, placement."""
+    prim = compare_primitives(ko_mod, ok_mod, ANCHOR_TYPES)
+    metrics[f"{kind}_anchor_params"] = len(prim["param_diff"])
+    metrics[f"{kind}_anchor_structural"] = len(prim["loose_diff"])
+    metrics[f"{kind}_anchor_moved"] = len(prim["moved"])
+    md.append("### Anchor cells (stable `hdlname`: multipliers)")
+    md.append("")
+    md.append(f"- anchors KO: **{sum(len(v) for v in collect_primitives(ko_mod, ANCHOR_TYPES).values())}**, "
+              f"OK: **{sum(len(v) for v in collect_primitives(ok_mod, ANCHOR_TYPES).values())}**")
+    md.append(f"- keys only in KO: **{len(prim['only_ko'])}** "
+              f"({', '.join(fmt_key(k) for k, _ in prim['only_ko'][:4])})")
+    md.append(f"- keys only in OK: **{len(prim['only_ok'])}** "
+              f"({', '.join(fmt_key(k) for k, _ in prim['only_ok'][:4])})")
+    md.append(f"- parameter differences: **{len(prim['param_diff'])}**")
+    md.append(f"- structural connection diffs (after digit "
+              f"canonicalisation): **{len(prim['loose_diff'])}**")
+    md.append(f"- rename-only connection diffs: "
+              f"**{len(prim['strict_diff'])}**")
+    md.append(f"- placement (BEL) differences on anchors: "
+              f"**{len(prim['moved'])}**")
+    md.append("")
+    for key, a, b in prim["loose_diff"][:4]:
+        md.append(f"- **structural** `{fmt_key(key)}`")
+        a_sig = next(iter(a))
+        b_sig = next(iter(b))
+        for port, na, nb in cell_examples(a_sig, b_sig):
+            md.append(f"    - `{port}`: KO {na} vs OK {nb}")
+    for key, _, _ in prim["param_diff"][:4]:
+        md.append(f"- **params** `{fmt_key(key)}`")
+    for key, a_bels, b_bels in prim["moved"][:8]:
+        md.append(f"- **moved** `{fmt_key(key)}`: KO {a_bels} vs OK {b_bels}")
+    md.append("")
+
+
+def _append_ram_lanes(md, metrics, ko_mod, ok_mod):
+    """RAM lane coherence (pnr only)."""
+    changed, only_ko, only_ok = compare_ram_lanes(ko_mod, ok_mod)
+    metrics["ram_changed"] = len(changed)
+    metrics["ram_only_ko"] = len(only_ko)
+    metrics["ram_only_ok"] = len(only_ok)
+    md.append("### RAM lane coherence")
+    md.append("")
+    md.append(f"- shared address groups with a different "
+              f"DI->DO lane multiset: **{len(changed)}**")
+    md.append(f"- address groups only in KO: **{len(only_ko)}**, "
+              f"only in OK: **{len(only_ok)}**")
+    for addr, a, b in changed[:6]:
+        short = "/".join(n.split(".")[-1] for n in addr[:2])
+        md.append(f"- group `{short}`")
+        only_a = set(a) - set(b)
+        only_b = set(b) - set(a)
+        for pair in list(only_a)[:2]:
+            md.append(f"    - KO only: DI {pair[0]} -> DO {pair[1]}")
+        for pair in list(only_b)[:2]:
+            md.append(f"    - OK only: DI {pair[0]} -> DO {pair[1]}")
+    md.append("")
+
+
+def _append_routing(md, ko_mod, ok_mod):
+    """Anchor routing (pnr only, informational)."""
+    changed, examples = compare_routing(
+        ko_mod, ok_mod, ANCHOR_TYPES, max_examples=3)
+    md.append("### Anchor routing (informational: placement moved)")
+    md.append("")
+    for t, n in changed.most_common():
+        md.append(f"- {t}: **{n}** nets re-routed")
+    for key, port, na, nb, ra, rb in examples:
+        md.append(f"- `{fmt_key(key)}.{port}` {na} -> {nb}")
+        md.append(f"    - KO route: `{ra}`")
+        md.append(f"    - OK route: `{rb}`")
+    md.append("")
+
+
+def _append_yosys_logs(md, metrics, ko_dir, ok_dir):
+    """Yosys pass sequence + warning diffs."""
     ko_log = find_log(Path(ko_dir), Path(ko_dir).name)
     ok_log = find_log(Path(ok_dir), Path(ok_dir).name)
     _, ko_passes, ko_warns = parse_yosys_log(ko_log)
@@ -446,6 +449,33 @@ def analyze(ko_dir, ok_dir, labels=None):
         ko_passes and ok_passes and ko_passes == ok_passes)
     metrics["warnings_ko"] = ko_w_tot
     metrics["warnings_ok"] = ok_w_tot
+
+
+def analyze(ko_dir, ok_dir, labels=None):
+    md, metrics, ko_label, ok_label = _report_header(ko_dir, ok_dir, labels)
+
+    # ---- synth / pnr primitives ---------------------------------------
+    for kind in ("synth", "pnr"):
+        ko_path = Path(ko_dir) / f"{kind}.json"
+        ok_path = Path(ok_dir) / f"{kind}.json"
+        if not (ko_path.exists() and ok_path.exists()):
+            md.append(f"## {kind.upper()} — missing file, skipped\n")
+            continue
+        ko_name, ko_mod = pick_module(load_json(ko_path))
+        ok_name, ok_mod = pick_module(load_json(ok_path))
+        md.append(f"## {kind.upper()} (`{ko_name}` vs `{ok_name}`)")
+        md.append("")
+        ko_types = type_histogram(load_json(ko_path))
+        ok_types = type_histogram(load_json(ok_path))
+        _append_histogram(md, ko_types, ok_types)
+        _append_anchors(md, metrics, kind, ko_mod, ok_mod)
+
+        if kind == "pnr":
+            _append_ram_lanes(md, metrics, ko_mod, ok_mod)
+            _append_routing(md, ko_mod, ok_mod)
+
+    # ---- Yosys logs ----------------------------------------------------
+    _append_yosys_logs(md, metrics, ko_dir, ok_dir)
     return "\n".join(md), metrics
 
 
