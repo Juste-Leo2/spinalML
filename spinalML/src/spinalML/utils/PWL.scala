@@ -11,10 +11,10 @@ import spinalML.{RoundingConfig, RoundingMode}
 object PWLLUTs {
   // Generates ROM for slopes (a) and intercepts (b)
   // segmentFn(i) should return a tuple of Double (a, b) for the i-th segment.
-  // Option B (switch-aware): the coefficient encoding follows `rounding`
-  // (half-even vs legacy half-up); the segment fits themselves are rounding-
-  // free (pure Double pairs), so createSegmentFn/createConstantSegmentFn
-  // take no rounding parameter.
+  // The coefficient encoding follows `rounding` (half-even vs legacy
+  // half-up); the segment fits themselves are rounding-free (pure Double
+  // pairs), so createSegmentFn/createConstantSegmentFn take no rounding
+  // parameter.
   def generateROMs[T <: Data](numSegments: Int, segmentFn: Int => (Double, Double), dataType: HardType[T],
                               rounding: RoundingMode = RoundingConfig.current): (Mem[Bits], Mem[Bits]) = {
     val bitWidth = dataType.getBitsWidth
@@ -105,7 +105,7 @@ case class UnaryPWLOp[T <: Data](
   numSegments: Int,
   segmentIndexFn: T => UInt, // Extracts the ROM index from the input value
   segmentFn: Int => (Double, Double), // Returns (slope a, intercept b) for a segment
-  // Option B: forwarded to generateROMs (sole caller) so PWL coefficient
+  // Forwarded to generateROMs (sole caller) so PWL coefficient
   // ROMs follow the elaboration rounding mode like every LUT ROM.
   rounding: RoundingMode = RoundingConfig.current
 ) extends Component {
@@ -119,8 +119,7 @@ case class UnaryPWLOp[T <: Data](
   val roms = for (i <- 0 until lanes) yield {
     PWLLUTs.generateROMs(numSegments, segmentFn, dataType, rounding)
   }
-  
-  // Pipeline signals
+
   val stage1_valid = RegInit(False)
   val stage1_x = Reg(Vec(dataType, lanes))
   
@@ -143,10 +142,9 @@ case class UnaryPWLOp[T <: Data](
     val bCoef = dataType()
     bCoef.assignFromBits(readB)
     
-    // stage1_x contains x aligned with the readSync result
+    // x delayed one stage to align with the readSync result
     val xDelayed = stage1_x(i)
-    
-    // y = a * x + b
+
     (xDelayed, aCoef) match {
       case (vx: SInt, va: SInt) => 
         val p = (vx * va).resized

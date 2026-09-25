@@ -88,9 +88,33 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
 - **E4 port docs** : rôles non-évidents gardés (lanes=1, accType,
   reArm), paraphrases (`Input Sequence`, `Kernel Weights`…) dehors.
 
+## Dérivation `src` restant (zone 4f, validée)
+
+- **F1 golden-mirror** (`utils/Float`, `PWL`, `math_luts`, narrow-float
+  softmax) : contrats bit-exact, formules, RNE guard/sticky, slots E4M3
+  gardés ; tags `Wave 4/5`, `DTYPE-06/07`, `docs/rounding_policy.md`
+  unwrappés ; steps numérotés → titres nus.
+- **F2 bug IDs test-anchored** : `ACT-01/03` (poolings), `OPS-07`
+  (attention/matmul), `OPS-10` (casts) gardés comme `BUG-DDR-*`
+  (repris par les noms de tests) ; explications gardées.
+- **F3 switch Rne/Truncate** : mentions `[[Rne]]`/`[[Truncate]]` (code)
+  gardées ; `Option B`, `switch-aware` dehors ; leçon en clair.
+- **F4 examples/templates** : bannières → titres nus ; shapes, domaines
+  (int vs float), contrats API gardés ; `Generate the Verilog` dehors ;
+  `M2/M3` unwrappés (leçons `copy()`, LUT pole, chunk fold gardées).
+- **F5 SoC/IO** : miroirs `top.v`/Verilog gardés ; `Phase-N` unwrappé ;
+  pointeurs `docs/` → essentiel inliné ; TODO contextuels gardés.
+- **F6 V1** : `V1` en clair dans les commentaires ; strings
+  `require`/messages runtime intouchés.
+- **Exclusions** : `Target.scala` (clean), `SpinalMLConfig` (string
+  généré), tables de poids `Mnist*` (seuls les tags bougent),
+  fichiers Copyright-only (`dsp`, `primitives`, `MemLayout`, `SimLog`,
+  `UartTx`, `UartChainGen`, `AxiReadMem`, `UartSoCGen`,
+  `QuantActivation`).
+
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
-- **4f `src` restant** (`attention`/`dtypes`/`utils`/`activations`/…) : à définir.
+- **4f `src` restant** : fait (F1-F6 ci-dessus).
 - **4g tests Scala restants** (`test/ops`, `test/layers`, `harness`, …) : à définir.
 - **4h Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
 - **4i Python `scripts/` + `tests/python`** : à définir.

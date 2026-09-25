@@ -9,11 +9,10 @@ import spinalML.{RoundingConfig, RoundingMode}
 
 object MathLUTs {
   /**
-   * Elaboration-time round-to-nearest-even (Wave 4 `SemanticsRounding`).
+   * Elaboration-time round-to-nearest-even.
    * Bit-exact counterpart of Python `round()` / numpy / torch (half-to-even),
    * unlike `Math.round` (half-up). Intended for LUT/ROM constant generation
-   * (mantissa ROMs, `intEncodeFn`); call sites switch over in the Wave 4
-   * commits that own their re-baseline (one semantic per commit).
+   * (mantissa ROMs, `intEncodeFn`).
    */
   def roundRNE(x: Double): Long =
     BigDecimal(x).setScale(0, BigDecimal.RoundingMode.HALF_EVEN).toLongExact
@@ -30,9 +29,9 @@ object MathLUTs {
   }
 
   // Generates a ROM specifically for FloatML mantissa fraction processing (Algebraic Separation).
-  // Option B (switch-aware): under [[Rne]] the output quantizes half-even
-  // via [[roundRNE]]; [[Truncate]] keeps the legacy `Math.round` (half-up)
-  // bit-exact. Elaboration-only switch.
+  // Under [[Rne]] the output quantizes half-even via [[roundRNE]];
+  // [[Truncate]] keeps the legacy `Math.round` (half-up) bit-exact.
+  // Elaboration-only switch.
   def generateFloatMantissaROM(inBits: Int, outBits: Int, mathFn: Double => Double,
                                rounding: RoundingMode = RoundingConfig.current): Mem[Bits] = {
     val states = 1 << inBits
@@ -49,8 +48,8 @@ object MathLUTs {
     Mem(Bits(outBits bits), initialContent = romContent)
   }
 
-  // Integer codecs (2's complement). Same Option B switch on the rounding
-  // of the clamped value (half-even vs legacy half-up).
+  // Integer codecs (2's complement). The clamped value rounds half-even
+  // under [[Rne]] vs legacy half-up under [[Truncate]] (cf. uintEncodeFn).
   def intValFn(bitWidth: Int): Int => Double = i => {
     val maxVal = 1 << bitWidth
     val halfVal = 1 << (bitWidth - 1)
@@ -60,7 +59,7 @@ object MathLUTs {
   /** Unsigned code -> real (identity): the code IS the value. */
   def uintValFn(bitWidth: Int): Int => Double = i => i.toDouble
 
-  /** Real -> unsigned code with the switch-aware rounding, saturating to [0, 2^w-1]. */
+  /** Real -> unsigned code with Rne/Truncate rounding, saturating to [0, 2^w-1]. */
   def uintEncodeFn(bitWidth: Int,
                    rounding: RoundingMode = RoundingConfig.current): Double => BigInt = y => {
     val maxVal = (1 << bitWidth) - 1
@@ -118,8 +117,7 @@ object MathLUTs {
       var mant = (absY / Math.pow(2.0, exp)) - 1.0
       
       var expEnc = exp + bias
-      // Option B switch: half-even (RNE) vs legacy half-up; the rounding-
-      // overflow carry below is kept in both modes (ties can round up).
+      // The rounding-overflow carry below is kept in both modes (ties can round up).
       var mantEnc = (if (rounding == RoundingMode.Rne) roundRNE(mant * (1 << mantBits))
                      else Math.round(mant * (1 << mantBits))).toInt
       

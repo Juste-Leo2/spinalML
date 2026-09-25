@@ -65,7 +65,6 @@ case class SigmoidOp[T <: Data](
   }
 
   private def floatDatapath(): Unit = {
-    // 1. Negation: flip the sign bit (FloatML)
     val negStream = Stream(Vec(dataType, lanes))
     val negPayload = Vec(dataType, lanes)
 
@@ -83,13 +82,12 @@ case class SigmoidOp[T <: Data](
     negStream.payload := negPayload
     io.a.stream.ready := negStream.ready
 
-    // 2. Exp: e^(-x)
+    // e^(-x)
     val expComp = ExpOp(dataType, shape, lanes)
     expComp.io.a.stream << negStream
     val expOutStream = expComp.io.c.stream
     val expOutVec = expOutStream.payload
 
-    // 3. +1
     val addOneStream = Stream(Vec(dataType, lanes))
     val addOnePayload = Vec(dataType, lanes)
 
@@ -109,7 +107,7 @@ case class SigmoidOp[T <: Data](
     addOneStream.payload := addOnePayload
     expOutStream.ready := addOneStream.ready
 
-    // 4. Reciprocal: 1 / (1 + e^(-x))
+    // 1 / (1 + e^(-x))
     val recipComp = ReciprocalOp(dataType, shape, lanes)
     recipComp.io.a.stream << addOneStream
     io.c.stream << recipComp.io.c.stream

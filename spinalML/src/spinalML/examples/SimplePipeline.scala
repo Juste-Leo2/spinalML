@@ -28,11 +28,9 @@ case class SimplePipeline[T <: Data](dataType: HardType[T], lanes: Int = 2) exte
     val y = master(Tensor(dataType, Seq(M, 1), lanes = 1))
   }
   
-  // 1. Element-wise Addition: sum = A + B
   val sum = add(io.a, io.b)
-  
-  // 2. Matmul
-  // Note: The `lanes` parameter (degree of parallelism) is automatically inferred
+
+  // Note: `lanes` (degree of parallelism) is automatically inferred
   // from the input Tensor object (sum.lanes). There is no need to pass it manually.
   io.y <> matmul(sum, io.w, parallelN = false)
 }

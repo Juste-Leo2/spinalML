@@ -27,21 +27,18 @@ case class DMATemplate(dataType: HardType[Data]) extends Component {
   val dmaAxiConfig = axiConfig.copy(idWidth = 2)
 
   val io = new Bundle {
-    val start = slave(Event) // Standard stream event
+    val start = slave(Event)
     val imgAddr = in UInt(32 bits)
     val weightAddr = in UInt(32 bits)
     val biasAddr = in UInt(32 bits)
-    
+
     val axiMaster = master(Axi4ReadOnly(axiConfig))
     val outStream = master(Tensor(dataType, Seq(36, 1), lanes = 1)) // 8x8 image, 3x3 kernel => 6x6 out = 36
   }
 
-  // Fork the start event into 3 synchronized start triggers
   val startTriggers = StreamFork(io.start, 3)
 
-  // ==========================================
   // 1. DMA for Image (8x8)
-  // ==========================================
   val dmaImg = DMAReader2D(dataType, Seq(8, 8), outLanes = 1, dmaAxiConfig)
   dmaImg.io.cmd.valid := startTriggers(0).valid
   startTriggers(0).ready := dmaImg.io.cmd.ready
@@ -50,9 +47,7 @@ case class DMATemplate(dataType: HardType[Data]) extends Component {
   dmaImg.io.cmd.patchWidth := (8 / (64 / dataType.getBitsWidth)) - 1
   dmaImg.io.cmd.patchHeight := 8
 
-  // ==========================================
   // 2. DMA for Weights (3x3 = 9 elements)
-  // ==========================================
   val dmaWeights = DMAReader(dataType, Seq(9, 1), outLanes = 9, dmaAxiConfig)
   val reqWeights = Stream(FetchRequest(32))
   reqWeights.valid := startTriggers(1).valid
@@ -61,9 +56,7 @@ case class DMATemplate(dataType: HardType[Data]) extends Component {
   reqWeights.length := 2 // 3 beats total
   dmaWeights.io.cmd << reqWeights
 
-  // ==========================================
   // 3. DMA for Bias (1 element)
-  // ==========================================
   val dmaBias = DMAReader(dataType, Seq(1, 1), outLanes = 1, dmaAxiConfig)
   val reqBias = Stream(FetchRequest(32))
   reqBias.valid := startTriggers(2).valid
@@ -72,18 +65,14 @@ case class DMATemplate(dataType: HardType[Data]) extends Component {
   reqBias.length := 0 // 1 beat
   dmaBias.io.cmd << reqBias
 
-  // ==========================================
   // 4. AXI4 Arbiter (Memory Multiplexer)
-  // ==========================================
   val arbiter = Axi4ReadOnlyArbiter(axiConfig, 3)
   arbiter.io.inputs(0) <> dmaImg.io.axiMaster
   arbiter.io.inputs(1) <> dmaWeights.io.axiMaster
   arbiter.io.inputs(2) <> dmaBias.io.axiMaster
   io.axiMaster <> arbiter.io.output
 
-  // ==========================================
   // 5. Math Layer (Conv2D) with FIFOs to avoid AXI deadlock
-  // ==========================================
   // If the AXI Arbiter sends Weights data but Conv2D is waiting for Image data,
   // it would block the entire AXI bus. We add queues to absorb the fetched data.
   val imgQueue = Tensor(dataType, Seq(8, 8), 1)

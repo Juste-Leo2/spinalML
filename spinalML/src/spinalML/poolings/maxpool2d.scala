@@ -73,7 +73,6 @@ case class MaxPool2DOp[T <: Data](dataType: HardType[T], H: Int, W: Int, C: Int,
     }
   }
 
-  // Combinatorial max computation (Max-Tree), per channel, over the K*K window
   def buildMaxTree(nodes: Seq[T]): T = {
     if (nodes.length == 1) return nodes.head
     val nextLevel = nodes.grouped(2).map {

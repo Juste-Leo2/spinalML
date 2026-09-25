@@ -29,7 +29,6 @@ case class SequentialCNN(override val axiConfig: Axi4Config = Axi4Config(address
 )
 
 
-// Generate the Verilog for the FPGA
 object SequentialCNNVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   SpinalVerilog(SequentialCNN(axiConfig))

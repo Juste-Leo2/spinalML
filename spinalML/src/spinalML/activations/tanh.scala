@@ -66,7 +66,6 @@ case class TanhOp[T <: Data](
   }
 
   private def floatDatapath(): Unit = {
-    // 1. Literal stream of 2.0
     val twoStream = Stream(Vec(dataType, lanes))
     val twoPayload = Vec(dataType, lanes)
 
@@ -83,18 +82,17 @@ case class TanhOp[T <: Data](
     twoStream.valid := io.a.stream.valid
     twoStream.payload := twoPayload
 
-    // 2. x2 = 2 * x
+    // x2 = 2 * x
     val mulComp = MulOp(dataType, shape, lanes)
     mulComp.io.a.stream << io.a.stream
     mulComp.io.b.stream << twoStream
     val x2Stream = mulComp.io.c.stream
 
-    // 3. Sigmoid(2x)
     val sigComp = SigmoidOp(dataType, shape, lanes)
     sigComp.io.a.stream << x2Stream
     val sigStream = sigComp.io.c.stream
 
-    // 4. y = 2 * sigmoid(2x) - 1 (combinational, like Softmax1D's final multiply)
+    // y = 2 * sigmoid(2x) - 1 (combinational, like Softmax1D's final multiply)
     val outPayload = Vec(dataType, lanes)
 
     for (i <- 0 until lanes) {

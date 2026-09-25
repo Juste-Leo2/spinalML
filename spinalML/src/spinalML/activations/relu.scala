@@ -12,7 +12,6 @@ case class ReLUOp[T <: Data](dataType: HardType[T], shape: Seq[Int], lanes: Int)
     val y = master(Tensor(dataType, shape, lanes))
   }
   
-  // Pass through the stream control signals
   io.y.stream.arbitrationFrom(io.x.stream)
   
   for (i <- 0 until lanes) {

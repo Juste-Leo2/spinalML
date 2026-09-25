@@ -3,11 +3,11 @@
 package spinalML
 
 /**
- * Rounding policy for narrowing operations (Wave 4 `SemanticsRounding`).
+ * Rounding policy for narrowing operations.
  *
  *  - [[Rne]] (default): round-to-nearest-even, unbiased, aligned with
- *    numpy/PyTorch. See `docs/rounding_policy.md`.
- *  - [[Truncate]]: legacy truncation, bit-exact with the pre-Wave-4 hardware.
+ *    numpy/PyTorch.
+ *  - [[Truncate]]: legacy truncation, bit-exact with the original hardware.
  *
  * Elaboration-only parameter: in [[Truncate]] mode the RNE datapath is not
  * elaborated, so 0 LUT is added. It must never become a runtime signal.

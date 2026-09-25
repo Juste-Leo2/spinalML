@@ -18,29 +18,25 @@ case class HighLevelTemplate(override val axiConfig: Axi4Config = Axi4Config(add
   dataType = I8(),            // Global quantization format for the network
   inputShape = Seq(28, 1),    // The expected shape of the input tensor (e.g. 1D signal of length 28)
   
-  // ==========================================
-  // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
-  // ==========================================
+  // Define your neural network topology here
   modelSpec = Seq(
-    // 1. Compute Conv1D in I32 to prevent overflow
+    // Conv1D in I32 to prevent overflow
     Conv1D(inChannels = 1, outChannels = 4, kernelSize = 3, customType = Some(I32())),
-    
-    // 2. Requantize the I32 output back to I8 for the rest of the network
+
+    // Requantize the I32 output back to I8 for the rest of the network
     Requantize(shift = 4, targetType = I8()),
-    
+
     ReLU(),
     MaxPool1D(poolSize = 2, stride = 2),
     Flatten(),
-    
-    // 3. Do the same for the final dense layer
+
     Linear(inFeatures = 52, outFeatures = 10, customType = Some(I32())),
     Requantize(shift = 4, targetType = I8())
   ),
-  
+
   axiConfig = axiConfig
 )
 
-// Generate the Verilog for the FPGA
 object HighLevelTemplateVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   SpinalVerilog(HighLevelTemplate(axiConfig))

@@ -28,9 +28,7 @@ case class ResidualMLPTemplate(override val axiConfig: Axi4Config = Axi4Config(a
   dataType = BF16(),
   inputShape = Seq(2, 4),
 
-  // ==========================================
-  // DEFINE YOUR NEURAL NETWORK TOPOLOGY HERE
-  // ==========================================
+  // Define your neural network topology here
   modelSpec = Seq(
     Linear(inFeatures = 4, outFeatures = 4),
     ReLU(),
@@ -42,7 +40,6 @@ case class ResidualMLPTemplate(override val axiConfig: Axi4Config = Axi4Config(a
   axiConfig = axiConfig
 )
 
-// Generate the Verilog for the FPGA
 object ResidualMLPTemplateVerilog extends App {
   val axiConfig = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
   SpinalVerilog(ResidualMLPTemplate(axiConfig))
