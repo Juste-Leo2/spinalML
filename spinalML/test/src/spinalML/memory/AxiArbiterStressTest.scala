@@ -28,7 +28,6 @@ class AxiArbiterStressTest extends AnyFunSuite {
     SimConfig.withWave.compile(AxiArbiterTestComp(numInputs, config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize inputs
       for (i <- 0 until numInputs) {
         dut.io.inputs(i).ar.valid #= false
         dut.io.inputs(i).r.ready #= false

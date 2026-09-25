@@ -10,7 +10,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component (lanes = 1, scalar bias)
+// lanes = 1, scalar bias
 case class BiasAddTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 1), lanes = 1))
@@ -20,7 +20,7 @@ case class BiasAddTestComp[T <: Data](dataType: HardType[T]) extends Component {
   io.c <> bias_add(io.a, io.b)
 }
 
-// Wrapper component (lanes = 2, 2-column bias broadcast)
+// lanes = 2, 2-column bias broadcast
 case class BiasAddTestComp2[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 2), lanes = 2))
@@ -41,13 +41,13 @@ class BiasAddTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: Send the bias
+      // Send the bias
       dut.io.b.stream.valid #= true
       dut.io.b.stream.payload(0) #= 2
       dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
       dut.io.b.stream.valid #= false
       
-      // Step 2: Send the 4 elements of A
+      // Send the 4 elements of A
       val inputs = Seq(1, -3, 3, -4)
       var expectedOutputs = inputs.map(_ + 2)
       

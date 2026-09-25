@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing dot product: two 8-element vectors streamed on 2 lanes
 case class DotTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(8), lanes = 2))
@@ -31,7 +30,7 @@ class DotTest extends AnyFunSuite {
 
       dut.clockDomain.waitSampling()
 
-      // Step 1: Load vector B into the internal buffer
+      // Load vector B into the internal buffer
       // B = [1, 2, 3, 4, 5, 6, 7, 8]
       dut.io.b.stream.valid #= true
       dut.io.b.stream.payload(0) #= 1
@@ -48,7 +47,7 @@ class DotTest extends AnyFunSuite {
       dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
       dut.io.b.stream.valid #= false
 
-      // Step 2: Stream vector A to compute
+      // Stream vector A to compute
       // A = [1, 1, 1, 1, 1, 1, 1, 1]
       dut.io.a.stream.valid #= true
       dut.io.a.stream.payload(0) #= 1
@@ -65,7 +64,7 @@ class DotTest extends AnyFunSuite {
       dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
       dut.io.a.stream.valid #= false
 
-      // Step 3: Wait for the scalar output C
+      // Wait for the scalar output C
       // 1*1 + 2*1 + ... + 8*1 = 36
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean)
       assert(dut.io.c.stream.payload(0).toInt == 36)

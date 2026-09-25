@@ -54,9 +54,7 @@ class AxiReadMemFormal extends Component {
 
   assumeInitial(clockDomain.isResetActive)
 
-  // ==========================================
   // ENVIRONMENT ASSUMPTIONS
-  // ==========================================
   // AR channel stability when stalled
   when(pastValid() && past(dut.io.axi.ar.valid) && !past(dut.io.axi.ar.ready)) {
     assume(dut.io.axi.ar.valid)
@@ -80,15 +78,11 @@ class AxiReadMemFormal extends Component {
   dut.io.axi.w.payload.assignDontCare()
   dut.io.axi.b.ready := True
 
-  // ==========================================
   // 1. READY GUARD
-  // ==========================================
   assert(dut.io.axi.ar.ready === !dut.io.axi.r.valid,
     "ar.ready must be strictly !r.valid")
 
-  // ==========================================
   // 2. STALL STABILITY (AXI4 Specification)
-  // ==========================================
   when(pastValid() && !clockDomain.isResetActive) {
     when(past(dut.io.axi.r.valid) && !past(dut.io.axi.r.ready)) {
       assert(dut.io.axi.r.valid, "r.valid dropped while stalled by master")
@@ -101,9 +95,7 @@ class AxiReadMemFormal extends Component {
     }
   }
 
-  // ==========================================
   // 3. BURST BEAT COUNTING & RLAST INTEGRITY
-  // ==========================================
   val busy         = RegInit(False)
   val expectedLen  = Reg(UInt(8 bits)) init 0
   val beatsDeliv   = Reg(UInt(8 bits)) init 0
@@ -128,9 +120,7 @@ class AxiReadMemFormal extends Component {
     assert(busy, "r.valid asserted without an active burst")
   }
 
-  // ==========================================
   // 4. COVER PROPERTIES (REACHABILITY)
-  // ==========================================
   // Single beat read
   cover(dut.io.axi.ar.fire && (dut.io.axi.ar.payload.len === 0))
   // Multi beat read completion

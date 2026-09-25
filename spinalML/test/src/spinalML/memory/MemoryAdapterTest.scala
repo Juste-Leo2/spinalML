@@ -57,7 +57,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.r.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // 1. Write two words: one in image region, one in weight region
+      // Write two words: one in image region, one in weight region
       dut.io.wrEnable #= true
       dut.io.wrAddr #= 0x1000 // imgBase
       dut.io.wrData #= BigInt(0x1122334455667788L)
@@ -70,7 +70,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.wrEnable #= false
       dut.clockDomain.waitSampling()
 
-      // 2. Read back image region
+      // Read back image region
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x1000
       dut.io.axi.ar.payload.len #= 0
@@ -84,7 +84,7 @@ class MemoryAdapterTest extends AnyFunSuite {
 
       dut.clockDomain.waitSampling(2)
 
-      // 3. Read back weight region
+      // Read back weight region
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x2000
       dut.io.axi.ar.payload.len #= 0
@@ -138,7 +138,7 @@ class MemoryAdapterTest extends AnyFunSuite {
 
   test("BUG-DDR-09: AXI4 write response B.ID must reflect AW.ID in BramAdapter and SramAsicAdapter") {
     val words = 64
-    // 1. Check BramAdapter
+    // Check BramAdapter
     SimConfig.compile(new BramAdapter(axiConfig, memoryWords = words, imgBase = 0x1000, weightBase = 0x2000)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
 
@@ -169,7 +169,7 @@ class MemoryAdapterTest extends AnyFunSuite {
         s"BramAdapter B.ID was ${dut.io.axi.b.payload.id.toLong}, expected $testId (AXI4 violation)")
     }
 
-    // 2. Check SramAsicAdapter
+    // Check SramAsicAdapter
     SimConfig.compile(new SramAsicAdapter(axiConfig, memoryWords = words, imgBase = 0x1000, weightBase = 0x2000, pdk = PdkFamily.Sky130)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
 
@@ -329,7 +329,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.extIo.ddrMaster.ar.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // 1. Accelerator initiates a burst write (e.g. accumulator spill in Wave 6 P1)
+      // Accelerator initiates a burst write (e.g. accumulator spill)
       dut.io.axi.aw.valid #= true
       dut.io.axi.aw.payload.addr #= 0x4000
       dut.io.axi.aw.payload.len #= 1 // 2 beats
@@ -337,7 +337,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.aw.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 2. While write is in-flight (accAwPending), an AXI read request arrives (e.g. next pass)
+      // While write is in-flight (accAwPending), an AXI read request arrives (e.g. next pass)
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x4000
       dut.clockDomain.waitSampling()
@@ -348,7 +348,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       assert(!dut.io.axi.ar.ready.toBoolean,
         "RAW Hazard: io.axi.ar.ready must backpressure read master while write is in-flight!")
 
-      // 3. Complete AW handshake on DDR master -> transitions to accStreaming
+      // Complete AW handshake on DDR master -> transitions to accStreaming
       dut.extIo.ddrMaster.aw.ready #= true
       dut.clockDomain.waitSampling()
       dut.extIo.ddrMaster.aw.ready #= false
@@ -358,7 +358,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       assert(!dut.extIo.ddrMaster.ar.valid.toBoolean, "ar.valid must remain low during write streaming")
       assert(!dut.io.axi.ar.ready.toBoolean, "ar.ready must remain low during write streaming")
 
-      // 4. Stream write beats
+      // Stream write beats
       dut.io.axi.w.valid #= true
       dut.io.axi.w.payload.data #= BigInt("1111222233334444", 16)
       dut.extIo.ddrMaster.w.ready #= true
@@ -369,18 +369,18 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.extIo.ddrMaster.w.ready #= false
       dut.clockDomain.waitSampling()
 
-      // 5. Now in accWaitB state: waiting for DDR write response
+      // Now in accWaitB state: waiting for DDR write response
       assert(!dut.extIo.ddrMaster.ar.valid.toBoolean, "ar.valid must remain low while waiting for B response")
       assert(!dut.io.axi.ar.ready.toBoolean, "ar.ready must remain low while waiting for B response")
 
-      // 6. DDR controller returns B response
+      // DDR controller returns B response
       dut.extIo.ddrMaster.b.valid #= true
       dut.extIo.ddrMaster.b.payload.resp #= 0
       dut.clockDomain.waitSampling()
       dut.extIo.ddrMaster.b.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 7. Write is completed: RAW barrier releases the read request!
+      // Write is completed: RAW barrier releases the read request!
       assert(dut.extIo.ddrMaster.ar.valid.toBoolean, "ar.valid must be released once write is complete")
       assert(dut.io.axi.ar.ready.toBoolean, "ar.ready must be released once write is complete")
       dut.io.axi.ar.valid #= false
@@ -406,7 +406,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.extIo.ddrMaster.ar.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // 1. Accelerator burst write to the spill region 0x4000 (2 beats).
+      // Accelerator burst write to the spill region 0x4000 (2 beats).
       dut.io.axi.aw.valid #= true
       dut.io.axi.aw.payload.addr #= 0x4000
       dut.io.axi.aw.payload.len #= 1
@@ -414,7 +414,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.aw.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 2. Read from a disjoint region (weights at 0x20000) must be forwarded
+      // Read from a disjoint region (weights at 0x20000) must be forwarded
       // immediately even though the write is in flight.
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x20000
@@ -427,7 +427,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.ar.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 3. Overlapping read (inside 0x4000-0x400F) must still stall (RAW).
+      // Overlapping read (inside 0x4000-0x400F) must still stall (RAW).
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x4008
       dut.io.axi.ar.payload.len #= 0
@@ -438,7 +438,7 @@ class MemoryAdapterTest extends AnyFunSuite {
         "overlapping read must see backpressure while the write burst is in flight")
       dut.io.axi.ar.valid #= false
 
-      // 4. Drain the write burst, then the overlapping read is released.
+      // Drain the write burst, then the overlapping read is released.
       dut.extIo.ddrMaster.aw.ready #= true
       dut.clockDomain.waitSampling()
       dut.extIo.ddrMaster.aw.ready #= false
@@ -481,7 +481,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.extIo.ddrMaster.ar.ready #= true
       dut.clockDomain.waitSampling(5)
 
-      // 1. Open a long read burst at 0x20000 and hold its data (in flight).
+      // Open a long read burst at 0x20000 and hold its data (in flight).
       dut.io.axi.ar.valid #= true
       dut.io.axi.ar.payload.addr #= 0x20000
       dut.io.axi.ar.payload.len #= 7
@@ -490,7 +490,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.ar.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 2. Overlapping AW (inside the read range) must stall.
+      // Overlapping AW (inside the read range) must stall.
       dut.io.axi.aw.valid #= true
       dut.io.axi.aw.payload.addr #= 0x20010
       dut.io.axi.aw.payload.len #= 0
@@ -498,7 +498,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       assert(!dut.io.axi.aw.ready.toBoolean,
         "AW overlapping an in-flight read must stall (WAR)")
 
-      // 3. Disjoint AW (spill region) must be accepted concurrently.
+      // Disjoint AW (spill region) must be accepted concurrently.
       dut.io.axi.aw.payload.addr #= 0x4000
       dut.clockDomain.waitSampling()
       assert(dut.io.axi.aw.ready.toBoolean,
@@ -506,7 +506,7 @@ class MemoryAdapterTest extends AnyFunSuite {
       dut.io.axi.aw.valid #= false
       dut.clockDomain.waitSampling()
 
-      // 4. Drain the accepted spill write, then complete the read: the
+      // Drain the accepted spill write, then complete the read: the
       // overlapping AW is accepted once no read is in flight.
       dut.extIo.ddrMaster.aw.ready #= true
       dut.clockDomain.waitSampling()

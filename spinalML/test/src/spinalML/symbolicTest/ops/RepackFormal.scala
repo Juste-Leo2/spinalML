@@ -10,9 +10,9 @@ import spinalML.ops.{RepackTestComp, repack}
 import spinalML.tensors.Tensor
 
 /**
- * M1 étape B (docs/open-mysteries.md): formal identity proofs for the lane
- * gearbox under FREE handshakes (anyseq valid/ready — no stall-free assume,
- * unlike the original eager RepackFormal spec below).
+ * Formal identity proofs for the lane gearbox under FREE handshakes
+ * (anyseq valid/ready — no stall-free assume, unlike the original eager
+ * RepackFormal spec below).
  *
  * Spec 1 — flushable AGGREGATE 2→4 (I8): a sliding 2-beat window records the
  * accepted input beats; every emission must present exactly wB##wA, and a
@@ -23,11 +23,10 @@ import spinalML.tensors.Tensor
  * Three recorded input beats form a 96-bit flat stream; each of the four
  * 3-byte output groups must equal its static slice of that stream.
  *
- * SPLIT direction stays simulation-covered (RepackStallDiffTest) — noted in
- * open-mysteries M1.
+ * SPLIT direction stays simulation-covered (RepackStallDiffTest).
  */
 
-// ---- Spec 2 DUT: non-multiple chain through lanes=1 -----------------------
+// Spec 2 DUT: non-multiple chain through lanes=1
 case class RepackChainComp() extends Component {
   val io = new Bundle {
     val a = slave(Tensor(I8(), Seq(12), lanes = 4))
@@ -56,8 +55,7 @@ class RepackStallAggregateFormal extends Component {
   val wB = Reg(Bits(16 bits))
 
   // The two fires are mutually exclusive by construction (ready = !full,
-  // valid = full): formalizes the paper argument recorded in
-  // docs/open-mysteries.md M1.2-1.
+  // valid = full).
   assert(!(inF && outF), "input and output fired simultaneously")
 
   // A partial group must never be exposed on the output.

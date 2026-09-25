@@ -44,9 +44,7 @@ class DMAReaderFormal extends Component {
 
   assumeInitial(clockDomain.isResetActive)
 
-  // ==========================================
   // ENVIRONMENT ASSUMPTIONS
-  // ==========================================
   // AXI4 requires INCR burst start addresses to be aligned to the transfer
   // size (ar.size); Sequential only ever issues beat-aligned region offsets.
   assume(dut.io.cmd.payload.address(0, 2 bits) === 0)
@@ -64,9 +62,7 @@ class DMAReaderFormal extends Component {
     assume(dut.io.axiMaster.r.payload === past(dut.io.axiMaster.r.payload))
   }
 
-  // ==========================================
   // 1. STRUCTURAL PROPERTIES
-  // ==========================================
   when(pastValid()) {
     assert(dut.io.cmd.ready === ((remaining === 0) && (burstRemain === 0)))
     assert(dut.io.axiMaster.ar.valid === ((remaining =/= 0) && (burstRemain === 0)))
@@ -77,9 +73,7 @@ class DMAReaderFormal extends Component {
     }
   }
 
-  // ==========================================
   // 2. BURST LEGALITY
-  // ==========================================
   when(dut.io.axiMaster.ar.valid) {
     assert(dut.io.axiMaster.ar.addr === addrRegH)
     assert(dut.io.axiMaster.ar.len === (burstLen - 1).resize(8 bits))
@@ -89,9 +83,7 @@ class DMAReaderFormal extends Component {
     assert((dut.io.axiMaster.ar.len.expand + 1) <= beatsToBnd)
   }
 
-  // ==========================================
   // 3. CHAINED-BURST CONTIGUITY
-  // ==========================================
   val arIdx = Reg(UInt(8 bits)) init (0)
   when(dut.io.cmd.fire) {
     arIdx := 0
@@ -104,9 +96,7 @@ class DMAReaderFormal extends Component {
     assert(dut.io.axiMaster.ar.addr === (prevAddr + prevBeats * 4).resized)
   }
 
-  // ==========================================
   // 4. BEAT-COUNTING INTEGRITY (per command)
-  // ==========================================
   val busy   = RegInit(False)
   val expect = Reg(UInt(17 bits)) init (0)
   val got    = Reg(UInt(17 bits)) init (0)

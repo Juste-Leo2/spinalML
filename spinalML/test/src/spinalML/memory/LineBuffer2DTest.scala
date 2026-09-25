@@ -79,7 +79,6 @@ class LineBuffer2DTest extends AnyFunSuite {
         if (pushActive) {
           dut.io.push.payload #= testValues(inIdx)
         } else if (inIdx >= numInputs) {
-          // Flush with valid cycles
           dut.io.push.valid #= true
           dut.io.push.payload #= 0
         }

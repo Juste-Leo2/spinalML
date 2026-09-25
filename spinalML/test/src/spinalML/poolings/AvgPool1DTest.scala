@@ -11,7 +11,6 @@ import spinalML.dtypes.{I8, U8, FP8_E4M3, I16, BF16}
 import spinalML.{RoundingConfig, RoundingMode}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing the AvgPool1D operation
 case class AvgPool1DTestComp[T <: Data](dataType: HardType[T], rounding: RoundingMode = RoundingConfig.current) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
@@ -38,7 +37,6 @@ class AvgPool1DTest extends AnyFunSuite {
     SimConfig.withWave.compile(AvgPool1DTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize Stream signals
       dut.io.a.stream.valid #= false
       dut.io.c.stream.ready #= true
       
@@ -49,7 +47,6 @@ class AvgPool1DTest extends AnyFunSuite {
       val seq1 = Array(8, 4, 2, 6)
       var i = 0
       
-      // Feed data
       fork {
         while (i < 4) {
           dut.io.a.stream.valid #= true
@@ -61,7 +58,6 @@ class AvgPool1DTest extends AnyFunSuite {
         dut.io.a.stream.valid #= false
       }
       
-      // Check results
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean && dut.io.c.stream.ready.toBoolean)
       // avg(5, 9) = 7, avg(8, 4) = 6
       assert(dut.io.c.stream.payload(0).toInt == 7)

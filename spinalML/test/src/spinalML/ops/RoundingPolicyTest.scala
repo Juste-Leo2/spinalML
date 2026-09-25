@@ -11,7 +11,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I32, I8}
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Requantize topologies parameterized by rounding mode (Wave 4 commit 0). */
+/** Requantize topologies parameterized by rounding mode. */
 case class RequantizeRoundingTestComp(shift: Int, rounding: RoundingMode) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(I32(), Seq(4), lanes = 4))

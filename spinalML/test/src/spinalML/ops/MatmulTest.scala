@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing matmul: Matrix A [1, 2] x Vector B [2, 1]
 case class MatmulTest_Vector[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(1, 2), lanes = 2))
@@ -20,7 +19,6 @@ case class MatmulTest_Vector[T <: Data](dataType: HardType[T]) extends Component
   io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
 }
 
-// Component for testing GEMM Parallel: A[2, 4] x B[4, 2]
 case class MatmulTest_GEMM_Parallel[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
@@ -30,7 +28,6 @@ case class MatmulTest_GEMM_Parallel[T <: Data](dataType: HardType[T]) extends Co
   io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = true)
 }
 
-// Component for testing GEMM Sequential: A[2, 4] x B[4, 2]
 case class MatmulTest_GEMM_Sequential[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 4), lanes = 2))
@@ -40,7 +37,6 @@ case class MatmulTest_GEMM_Sequential[T <: Data](dataType: HardType[T]) extends 
   io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
 }
 
-// Component for testing Dynamic Padding: A[1, 3] x B[3, 1] with lanes=2
 case class MatmulTest_DynamicPadding[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(1, 3), lanes = 2))
@@ -60,7 +56,6 @@ case class MatmulTest_DynamicPaddingWide[T <: Data](dataType: HardType[T]) exten
   io.c <> spinalML.ops.matmul(io.a, io.b, parallelN = false)
 }
 
-// Component for testing Batched Matmul: A[2, 1, 2] x B[2, 2, 1]
 case class MatmulTest_Batched[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 1, 2), lanes = 2))
@@ -81,7 +76,7 @@ class MatmulTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: Load matrix B into internal SRAM
+      // Load matrix B into internal SRAM
       // B = [3, -2]T
       dut.io.b.stream.valid #= true
       dut.io.b.stream.payload(0) #= 3
@@ -90,7 +85,7 @@ class MatmulTest extends AnyFunSuite {
       
       dut.io.b.stream.valid #= false
       
-      // Step 2: Stream Matrix A to compute
+      // Stream matrix A to compute
       // Row 0: [2, 1]
       dut.io.a.stream.valid #= true
       dut.io.a.stream.payload(0) #= 2
@@ -99,7 +94,7 @@ class MatmulTest extends AnyFunSuite {
       
       dut.io.a.stream.valid #= false
       
-      // Step 3: Wait for output C
+      // Wait for output C
       // 2*3 + 1*(-2) = 6 - 2 = 4
       dut.clockDomain.waitSamplingWhere(dut.io.c.stream.valid.toBoolean)
       assert(dut.io.c.stream.payload(0).toInt == 4)

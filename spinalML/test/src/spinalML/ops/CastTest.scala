@@ -248,7 +248,6 @@ class CastTest extends AnyFunSuite {
       var outputIndex = 0
       val numExpectedOutputs = inputData.length
       
-      // Monitor output
       fork {
         while (outputIndex < numExpectedOutputs) {
           dut.clockDomain.waitSampling()
@@ -274,7 +273,6 @@ class CastTest extends AnyFunSuite {
         }
       }
       
-      // Drive inputs
       for (i <- 0 until inputData.length) {
         dut.io.a.stream.valid #= true
         for (lane <- 0 until 4) {
@@ -283,11 +281,9 @@ class CastTest extends AnyFunSuite {
         
         dut.clockDomain.waitSamplingWhere(dut.io.a.stream.ready.toBoolean)
         dut.io.a.stream.valid #= false
-        // Random wait between beats
         dut.clockDomain.waitSampling(scala.util.Random.nextInt(5))
       }
       
-      // Wait for all outputs to be checked
       dut.clockDomain.waitSamplingWhere(outputIndex == numExpectedOutputs)
       dut.clockDomain.waitSampling(5)
     }

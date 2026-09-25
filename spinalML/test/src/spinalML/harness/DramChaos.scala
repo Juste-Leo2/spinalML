@@ -26,7 +26,7 @@ trait ChaosDut {
 }
 
 /**
- * DRAM chaos model (Phase A, docs/ddr_stress.md) — TEST-ONLY interposer.
+ * DRAM chaos model — TEST-ONLY interposer.
  *
  * Sits between `dut.io.axiMaster` and the functional memory model
  * (`AxiMemorySim`) and injects DRAM-class timing pressure while preserving

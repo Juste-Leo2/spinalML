@@ -11,13 +11,13 @@ import spinalML.replica.HWArithmetic._
 import spinalML.replica.LayerReplicas
 import org.scalatest.funsuite.AnyFunSuite
 
-// S1 compute-side spill (docs/ddr_final_impl.md): the MatmulOp slice engine
-// runs one K-slice per pass (each pass looks like a self-contained GEMM over
-// the slice geometry, chained by the spill streams). The S2 pass controller
-// is modeled here by the testbench: levels + reArm pulse + slice re-fire per
-// pass, spilled partials looped back in software (exact DDR model).
+// Compute-side spill: the MatmulOp slice engine runs one K-slice per pass
+// (each pass looks like a self-contained GEMM over the slice geometry,
+// chained by the spill streams). The pass controller is modeled here by the
+// testbench: levels + reArm pulse + slice re-fire per pass, spilled partials
+// looped back in software (exact DDR model).
 // Geometry shared by all spill tests: full K=8 split in P=2 slices of Ks=4,
-// M=2, N=3, lanes=2 (slice multiple of lanes, cf. S0 requires).
+// M=2, N=3, lanes=2 (slice multiple of lanes).
 //
 // Bench discipline — DETERMINISTIC settle-then-transfer driving (the only
 // rule that survived contact with the Verilator backend: a poke becomes
@@ -63,7 +63,7 @@ case class MatmulSpillComp[T <: Data, TAcc <: Data](
     spillSource = Some(io.spillIn), spillSink = Some(io.spillOut), passDone = Some(io.passDone))
 }
 
-// S1 bias-zero gate vehicle: BiasAddOp fed with an all-zero bias must be an
+// Bias-zero gate vehicle: BiasAddOp fed with an all-zero bias must be an
 // exact passthrough (per dtype). On failure the fallback is a BiasAddOp
 // bypass on non-final passes (see LinearLayer).
 // NOTE: BiasAddOp is a combinational passthrough (no output parking), so its
@@ -83,7 +83,7 @@ case class BiasZeroComp[T <: Data](dataType: HardType[T]) extends Component {
   io.c.stream << fifo.io.pop
 }
 
-// S1 LinearLayer spill smoke: slice engine + bias-zero mux + passDone
+// LinearLayer spill smoke: slice engine + bias-zero mux + passDone
 // threading, I8.
 case class LinearSpillComp() extends Component {
   val io = new Bundle {
@@ -240,7 +240,7 @@ class MatmulSpillTest extends AnyFunSuite {
         got.toSeq
       }
 
-      // ---- Pass 0 (first, non-final): seed zeros, drain partials ---------
+      // Pass 0 (first, non-final): seed zeros, drain partials
       // io.c.ready stays False: a drain to io.c would stall (trap), not alias.
       firePass(first = true, last = false)
       pushB(bBeats(0))
@@ -257,7 +257,7 @@ class MatmulSpillTest extends AnyFunSuite {
       settle(2)
       assert(doneEdges == 1, s"expected 1 passDone edge after pass 0, got $doneEdges")
 
-      // ---- Pass 1 (non-first, final): seed P0 rows, drain full GEMM -------
+      // Pass 1 (non-first, final): seed pass-0 rows, drain full GEMM
       // spillOut.ready stays False: a drain to spill would stall (trap).
       doneEdges = 0
       firePass(first = false, last = true)
@@ -409,7 +409,7 @@ class MatmulSpillTest extends AnyFunSuite {
         got.toSeq
       }
 
-      // ---- Pass 0: partials must match the replica chunk order ------------
+      // Pass 0: partials must match the replica chunk order
       firePass(first = true, last = false)
       pushBF(bBeatsF(0))
       dut.io.spillOut.stream.ready #= true
@@ -421,7 +421,7 @@ class MatmulSpillTest extends AnyFunSuite {
       val expP0 = partialF(0).map(triple)
       assert((p0r0 ++ p0r1) == expP0, s"pass-0 partials ${p0r0 ++ p0r1} != $expP0")
 
-      // ---- Pass 1: seed P0 rows, drain full result vs replica --------------
+      // Pass 1: seed pass-0 rows, drain full result vs replica
       firePass(first = false, last = true)
       pushBF(bBeatsF(1))
       pushSpillRowF(partialF(0).slice(0, N))
@@ -708,7 +708,7 @@ class MatmulSpillTest extends AnyFunSuite {
         got.toSeq
       }
 
-      // ---- Pass 0: garbage on io.b must be IGNORED (zeros selected) -------
+      // Pass 0: garbage on io.b must be IGNORED (zeros selected)
       // io.b.valid=True with 77: the mux must never raise ready.
       firePass(first = true, last = false)
       pushW(bBeats(0))
@@ -733,7 +733,7 @@ class MatmulSpillTest extends AnyFunSuite {
       settle(2)
       assert(doneEdges == 1, s"expected 1 passDone edge after pass 0, got $doneEdges")
 
-      // ---- Pass 1: seed P0 rows, real bias once, y == full linear + bias --
+      // Pass 1: seed pass-0 rows, real bias once, y == full linear + bias
       doneEdges = 0
       yValidSeen = false
       firePass(first = false, last = true)

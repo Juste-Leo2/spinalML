@@ -10,7 +10,7 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing Transpose 2x3 -> 3x2
+// Transpose 2x3 -> 3x2
 case class TransposeTestComp_2x3[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(2, 3), lanes = 1))
@@ -19,7 +19,7 @@ case class TransposeTestComp_2x3[T <: Data](dataType: HardType[T]) extends Compo
   io.c <> spinalML.ops.transpose(io.a)
 }
 
-// Component for testing Transpose 4x4 -> 4x4
+// Transpose 4x4 -> 4x4
 case class TransposeTestComp_4x4[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 4), lanes = 1))

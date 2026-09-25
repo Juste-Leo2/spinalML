@@ -36,10 +36,7 @@ class MLAcceleratorFormal extends Component {
     assume(dut.io.axisInB.payload.last === past(dut.io.axisInB.payload.last))
   }
 
-  // ==========================================
   // SAFETY PROPERTIES (Protocol Compliance)
-  // ==========================================
-
   // 1. Reset cleanliness: during reset, axisOut must never assert valid
   when(clockDomain.isResetActive) {
     assert(!dut.io.axisOut.valid, "axisOut.valid asserted while in reset")
@@ -52,10 +49,7 @@ class MLAcceleratorFormal extends Component {
     assert(dut.io.axisOut.payload.last === past(dut.io.axisOut.payload.last), "axisOut mutated last under backpressure")
   }
 
-  // ==========================================
   // REACHABILITY (Liveness / No deadlock)
-  // ==========================================
-
   // 1. Output can fire
   cover(dut.io.axisOut.fire)
 

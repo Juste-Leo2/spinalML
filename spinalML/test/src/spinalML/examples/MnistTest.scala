@@ -77,9 +77,7 @@ class MnistTest extends AnyFunSuite {
     java.lang.Float.intBitsToFloat(bits << 16)
   }
 
-  // ------------------------------------------------------------------
   // Dynamic input selection
-  // ------------------------------------------------------------------
   case class Tc(image: Seq[String], label: Option[Int], name: String)
 
   def buildCases(): Seq[Tc] = {

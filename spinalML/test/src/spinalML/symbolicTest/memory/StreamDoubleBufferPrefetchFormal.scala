@@ -8,7 +8,7 @@ import spinal.lib._
 import spinalML.memory.StreamDoubleBuffer
 
 /**
- * Formal verification of the Phase-2b prefetch staging & governed swap FSM
+ * Formal verification of the prefetch staging & governed swap FSM
  * in StreamDoubleBuffer.
  *
  * In resident mode (`residentHold` asserted), normal `nextTile` pulses are
@@ -48,9 +48,7 @@ class StreamDoubleBufferPrefetchFormal extends Component {
   val allowFlip = dut.allowFlip.pull()
   val tileFilled = dut.tileFilled.pull()
 
-  // ==========================================
   // 1. SAFETY & BACKPRESSURE
-  // ==========================================
   // Never accept data when both banks are full
   assert(!(pingFull && pongFull && dut.io.streamIn.ready))
 
@@ -62,9 +60,7 @@ class StreamDoubleBufferPrefetchFormal extends Component {
   val expectedCanAccept = (loadBank === False) ? !pingFull | !pongFull
   assert(dut.io.loadCanAccept === expectedCanAccept)
 
-  // ==========================================
   // 2. GOVERNED FLIP & STAGING CONTRACT
-  // ==========================================
   // allowFlip is True iff residentHold is False OR switchArmed is True
   assert(allowFlip === (!dut.freezeNow || switchArmed))
 
@@ -103,9 +99,7 @@ class StreamDoubleBufferPrefetchFormal extends Component {
     }
   }
 
-  // ==========================================
   // 3. REACHABILITY COVERS
-  // ==========================================
   // 1. Idle tile landing under hold
   cover(dut.freezeNow && dut.io.tileFilled)
 

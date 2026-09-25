@@ -26,10 +26,7 @@ class StreamDoubleBufferFormal extends Component {
   val computeBank = dut.computeBank.pull()
   val loadCounterValue = dut.loadCounter.value.pull()
   
-  // ==========================================
   // SAFETY PROPERTIES (No data loss or corruption)
-  // ==========================================
-  
   // 1. Backpressure Check: If both banks are full, the stream must NOT be ready to accept data.
   // This prevents overwriting data that hasn't been consumed.
   assert(!(pingFull && pongFull && dut.io.streamIn.ready))
@@ -40,10 +37,7 @@ class StreamDoubleBufferFormal extends Component {
   
   // 3. (Removed tautological bounds check, Counter(4) is natively 2-bits and cannot exceed 3).
   
-  // ==========================================
   // REACHABILITY (Liveness / No deadlock)
-  // ==========================================
-  
   // 1. Can we reach a state where both banks are full? (Meaning the stream can run ahead of compute)
   cover(pingFull && pongFull)
   
@@ -65,7 +59,7 @@ object StreamDoubleBufferFormal {
 }
 
 /**
- * Phase-2a weight-residency proof: the optional `residentHold` input must
+ * Weight-residency proof: the optional `residentHold` input must
  * NEUTRALISE nextTile — while held, consuming a tile may neither clear the
  * consumed bank's full flag nor flip the compute pointer, so the tile stays
  * visible forever (zero-DDR re-diffusion contract). Everything unrelated to

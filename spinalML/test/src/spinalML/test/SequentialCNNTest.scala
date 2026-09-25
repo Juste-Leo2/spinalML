@@ -16,7 +16,7 @@ object SequentialCNNTest {
   SimConfig.withWave.compile(SequentialCNN(axiConfig)).doSim { dut =>
     dut.clockDomain.forkStimulus(10)
     
-    // Setup AXI Memory Sim (our virtual DDR)
+    // Virtual DDR
     val memorySim = AxiMemorySim(
       axi = dut.io.axiMaster,
       clockDomain = dut.clockDomain,
@@ -24,7 +24,7 @@ object SequentialCNNTest {
     )
     memorySim.start()
     
-    // Fill memory with dummy data (e.g., 1s everywhere)
+    // Dummy data (1s everywhere)
     val imgBase = 0x1000
     val weightBase = 0x2000
     
@@ -40,7 +40,6 @@ object SequentialCNNTest {
       memorySim.memory.writeBigInt(weightBase + i * 8, BigInt("0001000100010001", 16), 8)
     }
     
-    // Helper function to write to AXI4-Lite
     def writeAxiLite(addr: BigInt, data: BigInt) = {
       dut.io.ctrlBus.aw.valid #= true
       dut.io.ctrlBus.aw.payload.addr #= addr
@@ -57,7 +56,6 @@ object SequentialCNNTest {
       dut.clockDomain.waitSampling()
     }
     
-    // Init control bus
     dut.io.ctrlBus.aw.valid #= false
     dut.io.ctrlBus.w.valid #= false
     dut.io.ctrlBus.ar.valid #= false
@@ -67,16 +65,16 @@ object SequentialCNNTest {
     
     dut.clockDomain.waitSampling(5)
     
-    // Configure Addresses via AXI-Lite
+    // Addresses via AXI-Lite
     writeAxiLite(0x08, imgBase)    // Image Base Address
     writeAxiLite(0x0C, weightBase) // Weights Base Address
     
-    // Fire the start signal via AXI-Lite
+    // Start via AXI-Lite
     writeAxiLite(0x00, 1)
     
     var validCount = 0
     var timeout = 0
-    // Wait for the single output from the Linear layer
+    // Single output from the Linear layer
     while (validCount < 1 && timeout < 20000) {
       if (dut.io.outStream.stream.valid.toBoolean && dut.io.outStream.stream.ready.toBoolean) {
         validCount += 1

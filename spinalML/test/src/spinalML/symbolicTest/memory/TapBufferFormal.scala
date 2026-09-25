@@ -64,9 +64,7 @@ class TapBufferFormal extends Component {
   val pushFire   = dut.fifo.io.push.fire
   val tapFire    = dut.io.tapOut.fire
 
-  // ==========================================
   // 1. HANDSHAKE ATOMICITY & BACKPRESSURE (M3.5 Invariants)
-  // ==========================================
   // Invariant M3.5: The FIFO push fires if and only if the input stream fires.
   // (fifo.io.push.valid is gated on io.streamIn.ready, preventing duplicate captures under stalls).
   assert(pushFire === inFire, "fifo push fire must strictly equal streamIn fire (M3.5 root cause invariant)")
@@ -93,9 +91,7 @@ class TapBufferFormal extends Component {
   assert(dut.io.tapOut.valid === fifoPopValid, "tapOut.valid must match fifo.pop.valid")
   assert(fifoPopReady === dut.io.tapOut.ready, "fifo.pop.ready must match tapOut.ready")
 
-  // ==========================================
   // 2. FIFO SAFETY & NO OVERFLOW
-  // ==========================================
   // FIFO push valid must only be asserted when streamIn fires
   assert(fifoPushValid === inFire, "FIFO push valid must only be asserted on atomic streamIn fire")
 
@@ -112,9 +108,7 @@ class TapBufferFormal extends Component {
     assert(!fifoPushReady, "fifoPushReady must be False when occupancy reaches entries")
   }
 
-  // ==========================================
   // 3. DATA INTEGRITY
-  // ==========================================
   // Direct branch delivers streamIn payload transparently
   when(dut.io.directOut.valid) {
     assert(dut.io.directOut.payload(0) === dut.io.streamIn.payload(0),
@@ -133,9 +127,7 @@ class TapBufferFormal extends Component {
       "tapOut payload does not match fifo pop payload")
   }
 
-  // ==========================================
   // 4. REACHABILITY / LIVENESS COVERS
-  // ==========================================
   // 1. Direct stream handshake
   cover(inFire)
 

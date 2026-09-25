@@ -11,8 +11,8 @@ import spinalML.ops.{RepackOp, repack}
 import spinalML.tensors.Tensor
 
 /**
- * M1 étape A (docs/open-mysteries.md): differential stall harness for the
- * dual-mode lane gearbox (ops/repack.scala).
+ * Differential stall harness for the dual-mode lane gearbox
+ * (ops/repack.scala).
  *
  * Unlike the earlier eager micro-probes (and the original RepackFormal whose
  * assumes pin valid/ready HIGH), this suite drives INDEPENDENT random
@@ -22,7 +22,7 @@ import spinalML.tensors.Tensor
  * (j mod lanesOut)-th slice of group j/lanesOut, whatever pacing the
  * environment chooses.
  *
- * Closure criterion of M1: this file is a PERMANENT regression test.
+ * This file is a PERMANENT regression test.
  */
 class RepackStallDiffTest extends AnyFunSuite {
 
@@ -98,7 +98,7 @@ class RepackStallDiffTest extends AnyFunSuite {
 
       dut.clockDomain.onSamplings {
         if (!done) {
-          // ---- 1) observe the transfers committed at this edge ----
+          // 1) observe the transfers committed at this edge
           if (dut.io.a.valid.toBoolean && dut.io.a.ready.toBoolean) sent += 1
           if (dut.io.c.valid.toBoolean && dut.io.c.ready.toBoolean) {
             val cmd = recv / groupsOut
@@ -112,7 +112,7 @@ class RepackStallDiffTest extends AnyFunSuite {
             recv += 1
           }
 
-          // ---- 2) prepare the drivers for the next edge ----
+          // 2) prepare the drivers for the next edge
           if (recv >= nCmds * groupsOut) {
             done = true
             dut.io.a.valid #= false
@@ -164,10 +164,8 @@ class RepackStallDiffTest extends AnyFunSuite {
     }
   }
 
-  // ------------------------------------------------------------------
   // The exact ResidualMLP-image configuration that failed during the
   // re-arm session (BF16 4→1 split), now under aggressive stalls:
-  // ------------------------------------------------------------------
   test("M1-A split BF16 4-to-1 flushable - random stalls") {
     runSession("bf16_4to1_p50_p50", BF16(), 16, 256, 4, 1, withFlush = true, 0.5, 0.5, seed = 7)
   }

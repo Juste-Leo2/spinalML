@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I4, I8, I16, FP8_E4M3, BF16, I32}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Wrapper component
 case class Conv2DTestComp[T <: Data, TAcc <: Data](dataType: HardType[T], accType: HardType[TAcc]) extends Component {
   val io = new Bundle {
     val x = slave(Tensor(dataType, Seq(3, 3), lanes = 1)) // 3x3 Image
@@ -47,7 +46,7 @@ class Conv2DTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // 1. Send Weights W = [1, 0, 0, 1] (Identity-like matrix to trace easily)
+      // Send Weights W = [1, 0, 0, 1] (Identity-like matrix to trace easily)
       dut.io.w.stream.valid #= true
       dut.io.w.stream.payload(0) #= 1
       dut.io.w.stream.payload(1) #= 0
@@ -56,13 +55,13 @@ class Conv2DTest extends AnyFunSuite {
       dut.clockDomain.waitSamplingWhere(dut.io.w.stream.ready.toBoolean)
       dut.io.w.stream.valid #= false
       
-      // 2. Send Bias b = 2
+      // Send Bias b = 2
       dut.io.b.stream.valid #= true
       dut.io.b.stream.payload(0) #= 2
       dut.clockDomain.waitSamplingWhere(dut.io.b.stream.ready.toBoolean)
       dut.io.b.stream.valid #= false
       
-      // 3. Send Input X = [-4..4] -> [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+      // Send Input X = [-4..4] -> [-4, -3, -2, -1, 0, 1, 2, 3, 4]
       val inputs = Seq(-4, -3, -2, -1, 0, 1, 2, 3, 4)
       // windows are:
       // w1: [-4, -3, -1, 0] -> -4*1 + 0*1 + 2 = -2
@@ -82,7 +81,7 @@ class Conv2DTest extends AnyFunSuite {
         dut.io.x.stream.valid #= false
       }
       
-      // 4. Verify Output Y
+      // Verify Output Y
       var i = 0
       while (i < 4) {
         dut.clockDomain.waitSampling()

@@ -66,7 +66,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
   anyseq(dut.io.axiMaster.r.payload)
   anyseq(dut.io.outStream.stream.ready)
 
-  // ---- Pulled state: REGISTERS only (see style note) ----
+  // Pulled state: REGISTERS only (see style note)
   val state           = dut.fsm.stateReg.pull().asBits.asUInt
   val currentRow      = dut.currentRow.pull()
   val currentAddress  = dut.currentAddress.pull()
@@ -87,9 +87,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
   // side DOWN to elemCnt's own (config-dependent) width.
   val eC = elemCnt.resize(12 bits)
 
-  // ==========================================
   // ENVIRONMENT ASSUMPTIONS
-  // ==========================================
   assumeInitial(clockDomain.isResetActive)
   assume(dut.io.cmd.patchHeight > 0)
 
@@ -115,9 +113,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
     assume(dut.io.axiMaster.r.payload === past(dut.io.axiMaster.r.payload))
   }
 
-  // ==========================================
   // 1. STRUCTURAL / ADDRESSING PROPERTIES
-  // ==========================================
   // While issuing a row command, rows stay in order under the height bound.
   when(pastValid() && fetching) {
     assert(currentRow < cmdHeight, "row command outside commanded height")
@@ -151,9 +147,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
     assert(currentRow === cmdHeight - 1, "completion row counter off")
   }
 
-  // ==========================================
   // 2. BEAT ACCOUNTING PER COMMAND (no loss, order preserved)
-  // ==========================================
   val keptThisCmd = Reg(UInt(20 bits)) init (0)
   val sawKept     = RegInit(False)
   val prevElemCnt = Reg(UInt(6 bits)) init (0)
@@ -188,9 +182,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
     assert(delivered === (cmdHeight * U(KEEPS, 20 bits)).resized, "beat count mismatch over command")
   }
 
-  // ==========================================
   // 3. STATE INTEGRITY INVARIANTS
-  // ==========================================
   when(pastValid()) {
     // Meaningful once the row geometry is latched (DRAIN): during FETCH
     // rowWords still holds the PREVIOUS row's budget, so the bound below
@@ -201,9 +193,7 @@ class DMAReader2DFormal(lanes: Int = 1, alignedRowsOnly: Boolean = false) extend
     assert(currentRow <= cmdHeight, "row counter exceeded height")
   }
 
-  // ==========================================
   // 4. REACHABILITY COVERS
-  // ==========================================
   val cmdCount = Reg(UInt(4 bits)) init (0)
   when(cmdFire) { cmdCount := cmdCount + 1 }
 

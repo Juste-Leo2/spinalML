@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, I16, FP8_E4M3, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing the CumSum operation
 case class CumsumTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     // 3 rows (L=3), 2 cols (C=2). Data streams 2 elements per cycle (lanes=2)
@@ -42,18 +41,18 @@ class CumsumTest extends AnyFunSuite {
       
       dut.clockDomain.waitSampling()
       
-      // Step 1: L=0, (1, 2)
+      // L=0, (1, 2)
       dut.io.in.stream.valid #= true
       dut.io.in.stream.payload(0) #= 1
       dut.io.in.stream.payload(1) #= 2
       dut.clockDomain.waitSamplingWhere(dut.io.in.stream.ready.toBoolean)
       
-      // Step 2: L=1, (3, 4)
+      // L=1, (3, 4)
       dut.io.in.stream.payload(0) #= 3
       dut.io.in.stream.payload(1) #= 4
       dut.clockDomain.waitSamplingWhere(dut.io.in.stream.ready.toBoolean)
       
-      // Step 3: L=2, (5, 6)
+      // L=2, (5, 6)
       dut.io.in.stream.payload(0) #= 5
       dut.io.in.stream.payload(1) #= 6
       dut.clockDomain.waitSamplingWhere(dut.io.in.stream.ready.toBoolean)

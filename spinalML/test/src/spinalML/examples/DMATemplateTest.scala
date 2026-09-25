@@ -11,7 +11,7 @@ import spinalML.dtypes.I8 // Using SInt/I8 for easy simulation read
 
 object DMATemplateTest {
   def main(args: Array[String]): Unit = {
-    // 1. Configs
+    // Configs
     val axiDataWidth = 64
     val axiConfig = Axi4Config(addressWidth = 32, dataWidth = axiDataWidth, idWidth = 4)
     
@@ -50,7 +50,6 @@ object DMATemplateTest {
     }.doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize inputs
       dut.io.start.valid #= false
       dut.io.imgAddr #= 0x1000
       dut.io.weightAddr #= 0x2000
@@ -63,20 +62,18 @@ object DMATemplateTest {
         config = AxiMemorySimConfig(maxOutstandingReads = 8)
       )
       
-      // Write data to memory
-      // We are writing 16-bit values, but AxiMemorySim writes in bytes (width=8)
-      // It's easier to write 64-bit BigInts (4 values of 16-bit at a time)
+      // AxiMemorySim writes bytes: pack four 16-bit values per 64-bit BigInt
       
       // Image: 8x8 = 64 elements = 16 beats of 64 bits
       val imgBase = 0x1000
       for (i <- 0 until 16) {
-        // We write 0x0001000100010001 everywhere (all 1s)
+        // 0x0001000100010001 everywhere (all 1s)
         memorySim.memory.writeBigInt(imgBase + i * 8, BigInt("0001000100010001", 16), 8)
       }
       
       // Weights: 3x3 = 9 elements = 3 beats
       val weightBase = 0x2000
-      // We write 0x0001000100010001 (all 1s)
+      // 0x0001000100010001 (all 1s)
       for (i <- 0 until 3) {
         memorySim.memory.writeBigInt(weightBase + i * 8, BigInt("0001000100010001", 16), 8)
       }
@@ -89,7 +86,7 @@ object DMATemplateTest {
       
       dut.clockDomain.waitSampling(5)
       
-      // Trigger the DMA fetch command! We wait for ready to be asserted.
+      // Trigger the DMA fetch command (wait for ready)
       dut.io.start.valid #= true
       dut.clockDomain.waitSamplingWhere(dut.io.start.ready.toBoolean)
       dut.io.start.valid #= false

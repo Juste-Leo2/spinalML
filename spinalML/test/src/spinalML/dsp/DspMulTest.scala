@@ -7,7 +7,6 @@ import spinal.core._
 import spinal.core.sim._
 import spinalML.dtypes.{I8, I16, U8}
 
-// Test harness for SInt multiplier
 case class DspMulSIntComp(wIn: Int, wAcc: Int, latency: Int, cfg: DspConfig) extends Component {
   val io = new Bundle {
     val a = in SInt(wIn bits)
@@ -18,7 +17,6 @@ case class DspMulSIntComp(wIn: Int, wAcc: Int, latency: Int, cfg: DspConfig) ext
   io.result := DspMul(io.a, io.b, enable = io.enable, accType = HardType(SInt(wAcc bits)), latency = latency, dspConfig = cfg)
 }
 
-// Test harness for UInt multiplier
 case class DspMulUIntComp(wIn: Int, wAcc: Int, latency: Int, cfg: DspConfig) extends Component {
   val io = new Bundle {
     val a = in UInt(wIn bits)

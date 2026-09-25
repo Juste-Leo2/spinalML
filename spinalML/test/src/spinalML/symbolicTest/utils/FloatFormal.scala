@@ -34,7 +34,7 @@ class FloatFormal extends Component {
   assert(dut.io.c_float === expected_float, "Float.fromSInt mismatch")
   assert(dut.io.c_zero === expected_zero, "Float.zero mismatch")
 
-  // DTYPE-07: E4M3 saturation never emits the NaN slot (exp 15, mant 7);
+  // E4M3 saturation never emits the NaN slot (exp 15, mant 7);
   // past-the-max saturates to exactly +/-448.
   assert(!(dut.io.c_float.exponent === U(15, 4 bits) && dut.io.c_float.mantissa === U(7, 3 bits)),
     "E4M3 emitted the NaN pattern (15, 7)")

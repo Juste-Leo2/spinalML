@@ -46,9 +46,7 @@ class DMAWriterFormal extends Component {
 
   assumeInitial(clockDomain.isResetActive)
 
-  // ==========================================
   // ENVIRONMENT ASSUMPTIONS
-  // ==========================================
   // AXI4 requires INCR burst start addresses to be beat-aligned
   assume(dut.io.cmd.payload.address(0, 2 bits) === 0)
 
@@ -67,9 +65,7 @@ class DMAWriterFormal extends Component {
     assume(dut.io.inStream.stream.payload === past(dut.io.inStream.stream.payload))
   }
 
-  // ==========================================
   // 1. STRUCTURAL PROPERTIES
-  // ==========================================
   when(pastValid()) {
     assert(dut.io.cmd.ready === ((remaining === 0) && (burstRemain === 0) && (pendingB === 0)))
     assert(dut.io.axiMaster.aw.valid === ((remaining =/= 0) && (burstRemain === 0)))
@@ -83,9 +79,7 @@ class DMAWriterFormal extends Component {
     }
   }
 
-  // ==========================================
   // 2. BURST LEGALITY
-  // ==========================================
   when(dut.io.axiMaster.aw.valid) {
     assert(dut.io.axiMaster.aw.addr === addrRegH)
     assert(dut.io.axiMaster.aw.len === (burstLen - 1).resize(8 bits))
@@ -95,16 +89,12 @@ class DMAWriterFormal extends Component {
     assert((dut.io.axiMaster.aw.len.expand + 1) <= beatsToBnd)
   }
 
-  // ==========================================
   // 3. W.LAST ASSERTION
-  // ==========================================
   when(dut.io.axiMaster.w.valid) {
     assert(dut.io.axiMaster.w.last === (burstRemain === 1))
   }
 
-  // ==========================================
   // 4. CHAINED-BURST CONTIGUITY
-  // ==========================================
   val awIdx = Reg(UInt(8 bits)) init (0)
   when(dut.io.cmd.fire) {
     awIdx := 0
@@ -117,9 +107,7 @@ class DMAWriterFormal extends Component {
     assert(dut.io.axiMaster.aw.addr === (prevAddr + prevBeats * 4).resized)
   }
 
-  // ==========================================
   // 5. RESPONSE ACCOUNTING
-  // ==========================================
   // Independent B counter: pendingB must always equal (accepted AWs - received
   // Bs) for the current command. This catches the simultaneous AW/B collision
   // class of bug that the response assumption above would otherwise mask (a

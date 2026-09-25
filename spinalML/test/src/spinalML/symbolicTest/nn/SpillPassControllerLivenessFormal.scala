@@ -7,8 +7,7 @@ import spinal.core.formal._
 import spinalML.nn.SpillPassController
 
 /**
- * S2d bounded-liveness companion of `SpillPassControllerFormal`
- * (docs/ddr_final_impl.md §S2, docs/ddr_impl.md §5.3).
+ * Bounded-liveness companion of `SpillPassControllerFormal`.
  *
  * The safety harness proves the controller can never do the wrong thing; this
  * one proves it cannot hang doing the right thing: from an accepted START,
@@ -46,7 +45,7 @@ class SpillPassControllerLivenessFormal extends Component {
     assume(!dut.io.start)
   }
 
-  // ---- State handles ---------------------------------------------------
+  // State handles
   val state = dut.state.pull().asBits.asUInt
   val stW = state.getWidth bits
   val sIdle      = U(dut.State.sIdle.position, stW)
@@ -54,7 +53,7 @@ class SpillPassControllerLivenessFormal extends Component {
   val sWaitPass  = U(dut.State.sWaitPass.position, stW)
   val sWaitFence = U(dut.State.sWaitFence.position, stW)
 
-  // ---- Bounded fairness assumptions (K = 3 cycles after first waiting) --
+  // Bounded fairness assumptions (K = 3 cycles after first waiting)
   val fetchWait = Reg(UInt(3 bits)) init(0)
   when(dut.io.refetchW) { fetchWait := fetchWait + 1 } otherwise { fetchWait := 0 }
   assume(dut.io.wFetchFire || !dut.io.refetchW || fetchWait < U(3, 3 bits))
@@ -75,7 +74,7 @@ class SpillPassControllerLivenessFormal extends Component {
   when(dut.io.writerCmd.valid && !dut.io.writerCmd.ready) { wWait := wWait + 1 } otherwise { wWait := 0 }
   assume(!dut.io.writerCmd.valid || dut.io.writerCmd.ready || wWait < U(3, 3 bits))
 
-  // ---- Completion deadline --------------------------------------------
+  // Completion deadline
   val started  = RegInit(False)
   val doneSeen = RegInit(False)
   val elapsed  = Reg(UInt(7 bits)) init(0)

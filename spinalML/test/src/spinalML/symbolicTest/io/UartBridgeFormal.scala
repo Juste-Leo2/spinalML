@@ -65,9 +65,7 @@ class UartBridgeFormal extends Component {
 
   assumeInitial(clockDomain.isResetActive)
 
-  // ==========================================
   // ENVIRONMENT ASSUMPTIONS
-  // ==========================================
   // outStream stability under backpressure
   when(pastValid() && past(dut.io.outStream.valid) && !past(dut.io.outStream.ready)) {
     assume(dut.io.outStream.valid)
@@ -82,9 +80,7 @@ class UartBridgeFormal extends Component {
     assume(dut.io.csr.b.valid)
   }
 
-  // ==========================================
   // 1. AXI-LITE PROTOCOL PROPERTIES
-  // ==========================================
   // Read channels are never used
   assert(!dut.io.csr.ar.valid, "csr.ar.valid must never be asserted")
   assert(!dut.io.csr.r.ready, "csr.r.ready must never be asserted")
@@ -106,9 +102,7 @@ class UartBridgeFormal extends Component {
     }
   }
 
-  // ==========================================
   // 2. STREAM FLOW CONTROL & BACKPRESSURE
-  // ==========================================
   // outStream.ready must be asserted ONLY when in R_WAIT state and tx is ready
   assert(dut.io.outStream.ready === ((dut.state === dut.R_WAIT) && dut.io.tx.ready),
     "outStream.ready must be strictly ((state === R_WAIT) && tx.ready)")
@@ -122,9 +116,7 @@ class UartBridgeFormal extends Component {
     }
   }
 
-  // ==========================================
   // 3. BRAM WRITE & ADDRESS INCREMENT
-  // ==========================================
   when(pastValid() && !clockDomain.isResetActive) {
     when(dut.io.wrEnable) {
       assert(!past(dut.io.wrEnable), "wrEnable must not pulse consecutively")
@@ -135,9 +127,7 @@ class UartBridgeFormal extends Component {
     }
   }
 
-  // ==========================================
   // 4. REACHABILITY / COVER PROPERTIES
-  // ==========================================
   // Cover Version response
   cover(dut.state === dut.S_SEND && (dut.io.tx.payload === version))
 

@@ -78,10 +78,7 @@ class AcceleratorFormal extends Component {
   // AcceleratorFormal verifies the standard read-only inference control plane
   assume(!writeToDdr)
 
-  // ==========================================
   // SAFETY PROPERTIES (SoC Control Contracts)
-  // ==========================================
-
   // 1. DDR Read-Only Invariant: AW and W channels must NEVER be active in read-only mode
   when(!writeToDdr) {
     assert(dut.io.axiMaster.aw.valid === False, "Accelerator illegally attempted DDR write address")
@@ -121,10 +118,7 @@ class AcceleratorFormal extends Component {
     assert(modelBusy, "model busy dropped after an accepted START (NN-02)")
   }
 
-  // ==========================================
   // REACHABILITY (Liveness / Cover)
-  // ==========================================
-
   // 1. Start event can fire
   cover(startEventFire)
 

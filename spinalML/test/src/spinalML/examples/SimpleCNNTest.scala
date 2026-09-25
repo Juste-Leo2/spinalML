@@ -7,7 +7,7 @@ import spinalML.dtypes.FloatML
 
 object SimpleCNNTest {
   def main(args: Array[String]): Unit = {
-    // SimpleCNN uses BF16 by default for this example test
+    // SimpleCNN under test uses BF16
     import spinal.core.sim._
 
     SimConfig.withVerilator.withWave.workspacePath("sim_build").compile({

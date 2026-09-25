@@ -112,9 +112,24 @@ contrat, unités, edge case). **Ce qui est déjà bon ne se réécrit pas**
   `UartTx`, `UartChainGen`, `AxiReadMem`, `UartSoCGen`,
   `QuantActivation`).
 
+## Dérivation tests Scala restants (zone 4g, validée)
+
+- **G1 oracles** : expected values/géométrie inline gardés (preuves) ;
+  `Step N:` dehors ; `Component for testing X` → géométrie 1 ligne.
+- **G2 labels test-anchored gardés** : `OPS-02/04/05/07/10`, `DTYPE-06`,
+  `ACT-01/03` (noms de tests) ; tags `Wave N`, `DTYPE-07`, `M1/M2/M3`,
+  `S1/S2`, `P0`, `Phase-*` unwrappés — noms de tests et strings
+  `require`/`assert`/`SimConfig.withWave` intouchés (code).
+- **G3 formal** : class-docs ≤ 5 lignes ; pointeurs `docs/` → essentiel
+  inliné ; `mirrors <Op>.<fn>` gardés ; FR traduit.
+- **G4 harness** : markers TEST-ONLY gardés ; `Phase-*`/`docs/`
+  unwrappés.
+- **G5 structure** : bannières `----`/`===` → titres nus ; bench
+  discipline (bounded waits, watchdogs) gardée.
+
 ## Dérivations à venir (définies à la lecture de chaque zone)
 
 - **4f `src` restant** : fait (F1-F6 ci-dessus).
-- **4g tests Scala restants** (`test/ops`, `test/layers`, `harness`, …) : à définir.
+- **4g tests Scala restants** : fait (G1-G5 ci-dessus).
 - **4h Python CLI (`cli/`)** : à définir (même esprit, syntaxe `#`).
 - **4i Python `scripts/` + `tests/python`** : à définir.

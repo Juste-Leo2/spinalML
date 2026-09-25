@@ -10,7 +10,6 @@ import spinalML.tensors.Tensor
 import spinalML.dtypes.{I8, FP8_E4M3, I16, BF16}
 import org.scalatest.funsuite.AnyFunSuite
 
-// Component for testing the MaxPool1D operation
 case class MaxPool1DTestComp[T <: Data](dataType: HardType[T]) extends Component {
   val io = new Bundle {
     val a = slave(Tensor(dataType, Seq(4, 2), lanes = 2))
@@ -37,7 +36,6 @@ class MaxPool1DTest extends AnyFunSuite {
     SimConfig.withWave.compile(MaxPool1DTestComp(I8())).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       
-      // Initialize Stream signals
       dut.io.a.stream.valid #= false
       dut.io.c.stream.ready #= true
       
