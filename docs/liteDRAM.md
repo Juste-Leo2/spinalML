@@ -186,22 +186,33 @@ Le modèle MNIST w4a8 reste le poste dominant (DSP 52%).
 - Fichiers de debug (hors repo) : `/tmp/dram_soc_synth.json`,
   `/tmp/ddrprobe/pnr_full*.log`, `/tmp/ddrprobe/ddr_pins.cst`.
 
-## 7. P3 prévu (approuvé) : hooks CLI `--dram`
+## 7. P3 FAIT (26/09) : hooks CLI `--dram`
 
-- `spinalml dram-gen --board tang-primer-20k` : wrapper fin (pas d'import litex
-  dans le CLI !) → subprocess `managed_python dram/gen/gowin_gen.py`.
-- `compile --dram` : après `collect_artifacts`, lance `dram-gen` (défaut off →
-  non-régression totale).
-- `build --dram` : accepte dir / `.v` / `.scala` (auto-compile) ; inclut
-  `dram/out/*.v` + `dram/prims/gowin_bb.v` avant Yosys ; adapte le `.cst`
-  (pins DDR à ajouter à `boards/constraints/tang-primer-20k.cst`, table §2).
-- `detect_top_module` : priorité `DramSoCTop`.
+- `spinalml dram-gen --board tang-primer-20k` (nouveau, `cli/spinalml_cli/dram_cmd.py`,
+  wrapper fin sans import litex → subprocess managed python) : validate + gen OK.
+- `compile --dram` (`compile_flow.py`) : implique `--soc` pour les Accelerator,
+  AutoRunner émet `DramSoCTop` au lieu de `UartSoC` ; `dram-gen` tourne après
+  l'élaboration. Vérifié : `compile examples/Mnist/Model.scala --dram` →
+  `DramSoCTop.v` + `Model.v`. Legacy sans `--dram` inchangé (`UartSoC.v`).
+- `build --dram` (`build_runner.py`) : forward `dram` à `compile` pour les
+  sources `.scala`, `dram-gen` + ajout `dram/out/litedram_core.v` et
+  `dram/prims/gowin_bb.v` à la liste Yosys, top défaut `DramSoCTop`.
+- E2E : `build examples/Mnist/Model.scala --dram --synth-only` → Yosys 33s,
+  **LUT 7661 (37%), FF 6942 (45%), BSRAM 0, DSP 25 (52%)** (modèle MNIST CNN
+  complet, cf. §5 pour la taxe iso-modèle).
+- `.cst` : pins DDR ajoutés à `boards/constraints/tang-primer-20k.cst`
+  (signaux `ddram_*`, SSTL15/SSTL15D) ; `adapt_constraints_for_ports` étendu
+  (expansion des bus per-bit, résolu par nom de base + alias — legacy
+  clk/uart identique). `pins.cst` adapté vérifié : 52 IO_LOC, bons IO_TYPE.
+- Reste (silicium/P4) : le PnR bute toujours sur `OSER4_MEM` (cf. §6) ;
+  le flow `--dram` est complet et valide jusqu'à la synthèse.
 
 ## 8. Journal des patches
 
 | # | Fichier | Cible | Raison | Condition de retrait |
 |---|---|---|---|---|
 | D1 | `dram/prims/gowin_bb.v` | Yosys `synth_gowin` | `DLL`/`IODELAY`/`ELVDS_IOBUF` absents de `cells_sim.v` (pas de modèle, pas d'erreur de principe côté PnR — prouvé §3) | Yosys modélise ces cellules Gowin (vérifier à chaque bump oss-cad-suite) |
+| D2 | `filter_unique_verilog_files` (`build_runner.py`) | build `--dram` | la regex `^\s*module` ratait `` (* blackbox *) module DLL`` → `gowin_bb.v` droppé comme « redondant » → `hierarchy -check` KO | upstream Yosys (pas lié aux versions) : garder tant que des stubs à attributs existent |
 | — | `cli/spinalml_cli/patches/` (existant) | apicula/nextpnr | Mécanisme prévu si §6 exige un contournement (ex. mapping DHCEN/OSER) | Chaque patch porte sa condition (convention du dossier) |
 
 ## 9. Commandes utiles (session)

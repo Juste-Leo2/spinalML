@@ -98,7 +98,10 @@ def filter_unique_verilog_files(v_files: List[Path], top_module: str) -> List[Pa
     if len(v_files) <= 1:
         return v_files
 
-    module_regex = re.compile(r'^\s*module\s+(\w+)', re.MULTILINE)
+    # Tolerates Verilog attributes before the keyword (e.g. blackbox stubs:
+    # `(* blackbox *) module DLL`), otherwise such files look module-less
+    # and get wrongly filtered out as redundant.
+    module_regex = re.compile(r'^\s*(?:\(\*.*?\*\)\s*)?module\s+(\w+)', re.MULTILINE)
     file_modules: Dict[Path, List[str]] = {}
 
     for vf in v_files:
@@ -250,12 +253,25 @@ def _alias_variants(port: str):
         yield k[2:]
 
 
+def _signal_base(sig: str) -> str:
+    """Strips a trailing bus index: ddram_a[3] -> ddram_a."""
+    return re.sub(r"\[\d+\]$", "", sig)
+
+
+def _signal_index(sig: str) -> Optional[int]:
+    """Returns the bus index of ddram_a[3] (None for scalar signals)."""
+    m = re.search(r"\[(\d+)\]$", sig)
+    return int(m.group(1)) if m else None
+
+
 def adapt_constraints_for_ports(original_cst: Optional[Path], ports: List[str], target_cst: Path):
     """Generic engine: adapts the BOARD .cst to the top module's actual port names.
 
     Data (pins, IO_TYPE, pull) comes from the board .cst itself; only name
     resolution is conventional (exact match first, then alias key: io_-prefix
     and case/underscore agnostic, e.g. io_uartRx -> uart_rx). No hardcoded pins.
+    - Bus ports expand per bit when the board .cst holds indexed entries
+      (ddram_a[0..13]); scalar signals keep the legacy single-line form.
     - Every top port resolving to a board signal is emitted with the board's pin+attrs.
     - Top ports with no board signal: loud warning (left unconstrained, as before).
     - No top port resolving to the board clock: loud error (unbuildable).
@@ -271,6 +287,28 @@ def adapt_constraints_for_ports(original_cst: Optional[Path], ports: List[str], 
     by_alias: Dict[str, str] = {}
     for sig in board_pins:
         by_alias.setdefault(_alias_key(sig), sig)
+    # Indexed entries grouped by base signal: ddram_a -> [(0, ddram_a[0]), ...].
+    by_base_alias: Dict[str, str] = {}
+    indexed: Dict[str, list] = {}
+    for sig in board_pins:
+        idx = _signal_index(sig)
+        if idx is not None:
+            base = _signal_base(sig)
+            by_base_alias.setdefault(_alias_key(base), base)
+            indexed.setdefault(base, []).append((idx, sig))
+    for base in indexed:
+        indexed[base].sort()
+
+    def resolve_base(port: str) -> Optional[str]:
+        if port in board_pins and _signal_index(port) is None:
+            return port
+        for variant in _alias_variants(_signal_base(port)):
+            if variant in by_base_alias:
+                return by_base_alias[variant]
+        for variant in _alias_variants(port):
+            if variant in by_alias:
+                return _signal_base(by_alias[variant])
+        return None
 
     adapted_lines = [
         "// Auto-adapted physical constraints for top module ports",
@@ -279,23 +317,27 @@ def adapt_constraints_for_ports(original_cst: Optional[Path], ports: List[str], 
     unmapped: List[str] = []
     clk_mapped = False
     for port in ports:
-        sig = port if port in board_pins else None
-        if sig is None:
-            for variant in _alias_variants(port):
-                if variant in by_alias:
-                    sig = by_alias[variant]
-                    break
-        if sig is not None and _alias_key(port) != _alias_key(sig):
-            console.print(f"[dim]CST alias: top port '{port}' -> board signal '{sig}'[/dim]")
-        if sig is None:
+        base = resolve_base(port)
+        if base is None:
             unmapped.append(port)
             continue
-        pin = board_pins[sig]["pin"]
-        attrs = board_pins[sig].get("attrs", "")
-        adapted_lines.append(f'IO_LOC "{port}" {pin};')
-        if attrs:
-            adapted_lines.append(f'IO_PORT "{port}" {attrs};')
-        if _alias_key(sig) == "clk":
+        if _alias_key(port) != _alias_key(base):
+            console.print(f"[dim]CST alias: top port '{port}' -> board signal '{base}'[/dim]")
+        if base in indexed:
+            for idx, sig in indexed[base]:
+                pin = board_pins[sig]["pin"]
+                attrs = board_pins[sig].get("attrs", "")
+                adapted_lines.append(f'IO_LOC "{port}[{idx}]" {pin};')
+                if attrs:
+                    adapted_lines.append(f'IO_PORT "{port}[{idx}]" {attrs};')
+        else:
+            sig = port if port in board_pins else base
+            pin = board_pins[sig]["pin"]
+            attrs = board_pins[sig].get("attrs", "")
+            adapted_lines.append(f'IO_LOC "{port}" {pin};')
+            if attrs:
+                adapted_lines.append(f'IO_PORT "{port}" {attrs};')
+        if _alias_key(base) == "clk":
             clk_mapped = True
 
     if unmapped:
@@ -423,6 +465,7 @@ def _prepare_sources_and_constraints(
     top_name: Optional[str],
     cst_override: Optional[Path],
     log_file: Any,
+    dram: bool = False,
 ) -> Tuple[Optional[List[Path]], Optional[str], Optional[Path]]:
     """Resolves source files, compiles .scala if needed, detects top module and adapts CST constraints."""
     if src is not None:
@@ -446,6 +489,8 @@ def _prepare_sources_and_constraints(
             border_style="cyan"
         ))
         console.print("\n[bold cyan] Step 0: Compiling Scala model to Verilog (turnkey UartSoC)...[/bold cyan]")
+        if dram:
+            console.print("[bold cyan] DRAM backing enabled: SoC top will be DramSoCTop + LiteDRAM core.[/bold cyan]")
         from .cli import compile as compile_cmd
         rtl_dir = project_root / "rtl"
         rtl_dir.mkdir(parents=True, exist_ok=True)
@@ -468,7 +513,8 @@ def _prepare_sources_and_constraints(
                 word_width=None,
                 bram_words=None,
                 no_dsp=no_dsp,
-                rounding=rounding
+                rounding=rounding,
+                dram=dram
             )
         except typer.Exit as te:
             if te.exit_code != 0:
@@ -490,6 +536,27 @@ def _prepare_sources_and_constraints(
     if not v_files:
         console.print(f"[bold red]Error: No .v files found in directory {src_p}[/bold red]")
         return None, None, None
+
+    if dram:
+        from .dram_cmd import dram_out_dir, dram_prims, run_dram_gen
+        from rich.console import Console as _Console
+        try:
+            rc = run_dram_gen(board=board, console=_Console())
+        except (FileNotFoundError, RuntimeError) as e:
+            console.print(f"[bold red]Error: {e}[/bold red]")
+            return None, None, None
+        if rc != 0:
+            console.print(f"[bold red]dram-gen failed with code {rc}[/bold red]")
+            return None, None, None
+        for extra in (dram_out_dir() / "litedram_core.v", dram_prims()):
+            if not extra.is_file():
+                console.print(f"[bold red]Error: DRAM file missing: {extra}[/bold red]")
+                return None, None, None
+            if extra not in v_files:
+                v_files.append(extra)
+        log_file.write(f"DRAM backing enabled: appended {[f.name for f in v_files[-2:]]}\n")
+        if top_name is None:
+            top_name = "DramSoCTop"
 
     actual_top, ports = detect_top_module(v_files, top_name)
 
@@ -753,11 +820,12 @@ def run_build(
     pnr_only: bool = False,
     clk_override: Optional[str] = None,
     no_dsp: bool = False,
-    rounding: Optional[str] = None
+    rounding: Optional[str] = None,
+    dram: bool = False
 ) -> int:
     """
     Orchestrates the entire hardware build pipeline:
-    1. Optional compilation of .scala model -> Verilog
+    1. Optional compilation of .scala model -> Verilog (+ LiteDRAM core with --dram)
     2. Yosys RTL Elaboration & Technology Mapping
     3. nextpnr Placement & Routing
     4. Bitstream Packaging (gowin_pack)
@@ -799,7 +867,8 @@ def run_build(
         rounding=rounding,
         top_name=top_name,
         cst_override=cst_override,
-        log_file=log_file
+        log_file=log_file,
+        dram=dram
     )
     if v_files is None or actual_top is None or adapted_cst is None:
         log_file.close()
