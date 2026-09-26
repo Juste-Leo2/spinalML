@@ -47,7 +47,7 @@ def resolve_rounding(rounding: Optional[str]) -> Tuple[Optional[str], str]:
 
 
 def unwrap_options(file, out, chain, soc, board, clk, baud, out_count,
-                   word_width, bram_words, no_dsp, rounding) -> dict:
+                   word_width, bram_words, no_dsp, rounding, dram=False) -> dict:
     """Unwraps typer options (supports programmatic OptionInfo values) + file/out setup."""
     opts = {
         "file": _unwrap(file),
@@ -62,6 +62,7 @@ def unwrap_options(file, out, chain, soc, board, clk, baud, out_count,
         "bram_words": _unwrap(bram_words, None),
         "no_dsp": _unwrap(no_dsp, False),
         "rounding": _unwrap(rounding, None),
+        "dram": _unwrap(dram, False),
     }
     if not opts["file"].exists():
         typer.echo(f"Error: File {file} does not exist.", err=True)
@@ -161,8 +162,10 @@ def build_autorunner(opts: dict, tgt: dict, entry: dict, workspace_src: Path) ->
     final_clk, final_baud = tgt["final_clk"], tgt["final_baud"]
     final_out_count, final_word_width, final_bram_words = tgt["final_out_count"], tgt["final_word_width"], tgt["final_bram_words"]
 
-    # If --soc is requested and an Accelerator is present, or if no App entrypoint exists, use AutoRunner
-    use_autorunner = (opts["soc"] and entry["is_accelerator"]) or not entry["app_match"]
+    # --dram implies --soc for Accelerator models (the DRAM top replaces UartSoC).
+    want_soc = opts["soc"] or opts["dram"]
+    # If --soc/--dram is requested and an Accelerator is present, or if no App entrypoint exists, use AutoRunner
+    use_autorunner = (want_soc and entry["is_accelerator"]) or not entry["app_match"]
 
     if not use_autorunner and entry["app_match"]:
         main_class = entry["app_match"].group(1)
@@ -178,7 +181,19 @@ def build_autorunner(opts: dict, tgt: dict, entry: dict, workspace_src: Path) ->
     import_stmt = f"import {entry['pkg']}.{comp_name}" if entry["pkg"] else ""
 
     soc_snippet = ""
-    if opts["soc"] and entry["is_accelerator"]:
+    if want_soc and entry["is_accelerator"] and opts["dram"]:
+        soc_snippet = f"""
+  println(s"[AutoRunner] Generating DRAM-backed DramSoCTop top-level in '{target_dir}'...")
+  val cfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
+  spinalConfig.generateVerilog(new spinalML.io.DramSoCTop(
+    acceleratorFactory = () => new {comp_name}(),
+    clkFreq = BigInt({final_clk}),
+    baudRate = BigInt({final_baud}),
+    axiConfig = cfg,
+    outCount = {final_out_count}
+  ))
+"""
+    elif want_soc and entry["is_accelerator"]:
         soc_snippet = f"""
   println(s"[AutoRunner] Generating complete turnkey UartSoC top-level in '{target_dir}'...")
   val cfg = spinal.lib.bus.amba4.axi.Axi4Config(addressWidth = 32, dataWidth = {final_word_width}, idWidth = 4)
@@ -191,8 +206,8 @@ def build_autorunner(opts: dict, tgt: dict, entry: dict, workspace_src: Path) ->
     outCount = {final_out_count}
   ))
 """
-    elif opts["soc"] and not entry["is_accelerator"]:
-        typer.echo(f"[Notice] --soc requested, but {comp_name} does not extend Accelerator. Skipping UartSoC top-level.")
+    elif want_soc and not entry["is_accelerator"]:
+        typer.echo(f"[Notice] --soc/--dram requested, but {comp_name} does not extend Accelerator. Skipping SoC top-level.")
 
     chain_snippet = ""
     if opts["chain"]:
@@ -302,11 +317,14 @@ def run_compile(file: Path,
                 bram_words: Optional[int],
                 no_dsp: bool,
                 rounding: Optional[str],
-                run_tool: Callable[[str, List[str]], int]) -> None:
+                run_tool: Callable[[str, List[str]], int],
+                dram: bool = False) -> None:
     """Full `spinalml compile` flow (raises typer.Exit on failure)."""
     opts = unwrap_options(file, out, chain, soc, board, clk, baud, out_count,
-                          word_width, bram_words, no_dsp, rounding)
+                          word_width, bram_words, no_dsp, rounding, dram)
     tgt = resolve_target(opts)
+    if opts["dram"]:
+        typer.echo("DRAM backing   : LiteDRAM core (generated, --dram)")
     workspace_src, _ = prepare_workspace(opts)
     entry = detect_entrypoint(opts)
     full_main, auto_generated = build_autorunner(opts, tgt, entry, workspace_src)
@@ -317,4 +335,20 @@ def run_compile(file: Path,
     run_elaboration(opts, full_main, auto_generated, workspace_src, run_tool)
     collect_artifacts(project_root, opts["out"], start_time)
     run_chain_step(opts, tgt, auto_generated, run_tool)
+    if opts["dram"]:
+        run_dram_step(opts)
     print_summary(opts["out"])
+
+
+def run_dram_step(opts: dict) -> None:
+    """Generates the LiteDRAM core Verilog (raises typer.Exit on failure)."""
+    from .dram_cmd import run_dram_gen
+    from rich.console import Console
+    try:
+        rc = run_dram_gen(board=opts["board"], console=Console())
+    except (FileNotFoundError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if rc != 0:
+        typer.echo(f"Error: dram-gen failed with code {rc}.", err=True)
+        raise typer.Exit(code=rc)

@@ -10,6 +10,8 @@ out_verilog/
 *.vcd
 *.bin
 unnamed.*
+# Exception: hand-written Gowin blackbox stubs (flow glue, not generated RTL).
+!dram/prims/gowin_bb.v
 
 # SpinalHDL Formal (SymbiYosys workspace at repo root)
 /formal/

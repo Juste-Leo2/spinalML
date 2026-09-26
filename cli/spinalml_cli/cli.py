@@ -183,7 +183,8 @@ def compile(
     word_width: Optional[int] = typer.Option(None, "--word-width", help="AXI data bus width in bits (auto-detected from model if omitted)"),
     bram_words: Optional[int] = typer.Option(None, "--bram-words", help="BRAM capacity in 64-bit words (default: from board or 4096)"),
     no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference (forces all arithmetic to LUTs)"),
-    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE")
+    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE"),
+    dram: bool = typer.Option(False, "--dram", help="DRAM backing: wrap Accelerator in DramSoCTop and generate the LiteDRAM core (implies --soc for Accelerator models)"),
 ):
     """
     Compile a Scala file into Verilog by running it within the workspace module,
@@ -192,7 +193,29 @@ def compile(
     """
     from .compile_flow import run_compile
     run_compile(file, out, chain, soc, board, clk, baud, out_count,
-                word_width, bram_words, no_dsp, rounding, run_tool)
+                word_width, bram_words, no_dsp, rounding, run_tool, dram)
+
+@app.command(name="dram-gen")
+def dram_gen(
+    board: str = typer.Option("tang-primer-20k", "--board", help="Target FPGA board profile (needs dram/configs/<board>.yml)"),
+    out: Optional[Path] = typer.Option(None, "-o", "--out", help="Output directory for litedram_core.v [default: dram/out/]"),
+    name: str = typer.Option("litedram_core", "--name", help="Top module name for the generated core"),
+    debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs"),
+):
+    """
+    Validate the board DRAM config and generate the LiteDRAM core Verilog
+    (Gowin GW2A, CPU-free) with the managed Python env.
+    """
+    from .dram_cmd import run_dram_gen
+    from rich.console import Console
+    try:
+        code = run_dram_gen(board=board, out_dir=out, name=name,
+                            console=Console(), debug=debug)
+    except (FileNotFoundError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 def _run_single_test_file(
@@ -624,12 +647,13 @@ def build(
     out: Optional[Path] = typer.Option(None, "-o", "--out", help="Output directory for build artifacts [default: hw_build/<board>/]"),
     board: str = typer.Option("tang-primer-20k", "--board", help="Target FPGA board profile from boards/*.json"),
     cst: Optional[Path] = typer.Option(None, "--cst", "--constraints", help="Custom physical constraints file override (.cst)"),
-    top: Optional[str] = typer.Option(None, "--top", help="Top-level module name (auto-detected if omitted: UartSoC, top)"),
+    top: Optional[str] = typer.Option(None, "--top", help="Top-level module name (auto-detected if omitted: DramSoCTop with --dram, else UartSoC, top)"),
     synth_only: bool = typer.Option(False, "--synth-only", "--yosys", help="Stop after Yosys synthesis (quick resource check)"),
     pnr_only: bool = typer.Option(False, "--pnr-only", "--nextpnr", help="Stop after nextpnr place-and-route (skip bitstream pack)"),
     clk: Optional[str] = typer.Option(None, "--clk", help="Clock frequency override (e.g. '27MHz', '50MHz', '100MHz')"),
     no_dsp: bool = typer.Option(False, "--no-dsp", help="Disable hardware DSP block inference in synthesis (forces all arithmetic to LUTs)"),
-    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE")
+    rounding: Optional[str] = typer.Option(None, "--rounding", help="Narrowing rounding policy for elaboration: 'rne' (default, unbiased) or 'trunc' (legacy bit-exact). If omitted, SPINALML_ROUNDING is kept, then RNE"),
+    dram: bool = typer.Option(False, "--dram", help="DRAM backing: generate the LiteDRAM core and include it in synthesis (top auto-detects DramSoCTop; .scala sources are compiled with --dram)"),
 ):
     """
     Synthesize, place & route and package FPGA bitstream (Yosys -> nextpnr -> gowin_pack).
@@ -651,7 +675,8 @@ def build(
         pnr_only=pnr_only,
         clk_override=clk,
         no_dsp=no_dsp,
-        rounding=rounding
+        rounding=rounding,
+        dram=dram
     )
     if code != 0:
         raise typer.Exit(code=code)

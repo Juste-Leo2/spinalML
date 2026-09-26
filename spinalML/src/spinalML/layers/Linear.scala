@@ -63,6 +63,11 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
     val passFirst = if (spill) Some(in Bool()) else None
     val passLast = if (spill) Some(in Bool()) else None
     val passDone = if (spill) Some(out Bool()) else None
+    // Debug taps (spill-only, zero behavior change): matmul->bias_add
+    // handshake (final-pass EmitRow stall triage: c valid without ready =
+    // bias_add backpressure, c invalid = engine pre-Emit).
+    val cMonV = if (spill) Some(out Bool()) else None
+    val cMonR = if (spill) Some(out Bool()) else None
   }
   
   // Weight-only quantization path: SInt weights feeding a FloatML activation
@@ -82,6 +87,9 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
   val matmulResult = matmul(io.a, wForMatmul, accType, parallelN = parallelN, reArm = Some(io.reArm), temporal = temporal,
     spill = spill, passFirst = io.passFirst, passLast = io.passLast,
     spillSource = io.spillIn, spillSink = io.spillOut, passDone = io.passDone, spillPadElems = spillPadElems)
+  // Debug taps: pure observers of the matmul->bias_add stream.
+  io.cMonV.foreach(_ := matmulResult.stream.valid)
+  io.cMonR.foreach(_ := matmulResult.stream.ready)
 
   // Bias-zero mux: BiasAddOp always consumes exactly N beats per pass
   // (its FSM is untouched), but on non-final passes the beats come from an
@@ -102,7 +110,14 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
       bMux.stream.payload := io.b.stream.payload
       io.b.stream.ready := bMux.stream.ready
     } otherwise {
-      bMux.stream.valid := zeroRemain =/= 0
+      // reArm/fire race guard (same family as the BiasAddOp LoadBias guard):
+      // the zeroRemain reset below runs last-assignment-wins against the
+      // decrement, so a zero offered on the reArm cycle would be consumed
+      // yet the reset lost (or vice versa), desyncing the zero count from
+      // the bias-cache reload. Bubbling valid on reArm keeps the count
+      // clean; the N zeros flow right after. One elastic cycle, no contract
+      // change (still exactly N beats per pass).
+      bMux.stream.valid := zeroRemain =/= 0 && !io.biasReArm
       bMux.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
       io.b.stream.ready := False
       when(bMux.stream.fire) {

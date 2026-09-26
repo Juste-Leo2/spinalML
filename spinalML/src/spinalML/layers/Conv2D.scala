@@ -137,7 +137,10 @@ case class Conv2DLayer[T <: Data, TAcc <: Data](
       bMux.stream.payload := io.b.stream.payload
       io.b.stream.ready := bMux.stream.ready
     } otherwise {
-      bMux.stream.valid := zeroRemain =/= 0
+      // reArm/fire race guard (same family as the LinearLayer/BiasAddOp
+      // guards): bubble the zero offer on the reArm cycle so the reset and
+      // the decrement can never collide on one beat.
+      bMux.stream.valid := zeroRemain =/= 0 && !io.biasReArm
       bMux.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
       io.b.stream.ready := False
       when(bMux.stream.fire) {
