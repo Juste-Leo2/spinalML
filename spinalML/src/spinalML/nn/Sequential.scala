@@ -261,6 +261,38 @@ case class Sequential(
   // stream beats each pass consumed.
   val spillWinLoOf = scala.collection.mutable.Map[Int, UInt]()
   val spillABeatOf = scala.collection.mutable.Map[Int, UInt]()
+  // Engine-side spill handshake levels per spilling layer (debug, zero
+  // behavior change): seed/drain valid/ready + engine passDone, sampled by
+  // spill benches with spaced sampling to locate multi-beat stalls without
+  // per-cycle probing overhead. Taps only (no assignment to RTL signals).
+  val spillSeedVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillSeedRdyOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillDrainVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillDrainRdyOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillPassDoneOf = scala.collection.mutable.Map[Int, Bool]()
+  // A/W-side liveness per spilling layer (debug, zero behavior change):
+  // engine A valid/ready (LoadA progress), W-slice valid/ready (WaitTile
+  // progress). Taps only.
+  val spillAVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillARdyOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillWVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillWRdyOf = scala.collection.mutable.Map[Int, Bool]()
+  // Bias/output-side liveness per spilling layer (debug, zero behavior
+  // change): real-bias port valid/ready (final-pass bias starvation triage)
+  // + layer y valid/ready (bias_add/output-path triage). Taps only.
+  val spillBiasVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillBiasRdyOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillYVldOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillYRdyOf = scala.collection.mutable.Map[Int, Bool]()
+  // Matmul->bias_add handshake per spilling layer (debug, zero behavior
+  // change). Taps only.
+  val spillCMonVOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillCMonROf = scala.collection.mutable.Map[Int, Bool]()
+  // reArm levels per spilling layer (debug, zero behavior change): engine
+  // reArm (pass-fire) + bias reArm (bias reload). Spurious extra pulses
+  // return BiasAddOp to LoadBias with a dry bias buffer (final-pass stall).
+  val spillEngReArmOf = scala.collection.mutable.Map[Int, Bool]()
+  val spillBiasReArmOf = scala.collection.mutable.Map[Int, Bool]()
   // Single shared pass controller (v1 = one spilling layer, pinned by
   // spillLayerIdx above), hoisted before the fetch plane: the W-slice
   // refetch (per-iteration fetch site below) AND the image re-fire
@@ -368,6 +400,7 @@ case class Sequential(
   val bandIdxW = log2Up(nBands) max 1
   val imgBandIdx = Reg(UInt(bandIdxW bits)) init(0)
   val imgBandActive = RegInit(False)
+  imgBandActive.simPublic()
   dmaImg.io.cmd.valid := imgBandActive
   dmaImg.io.cmd.baseAddress := (io.imgBaseAddress + (U(bandBytes, axiConfig.addressWidth bits) * imgBandIdx)).resize(axiConfig.addressWidth bits)
   dmaImg.io.cmd.stride := U(strideBytesImg, axiConfig.addressWidth bits)
@@ -1166,6 +1199,53 @@ case class Sequential(
           // The pass index follows the controller (single source of
           // truth for the slice addressing in the fetch plane above).
           spillPassIdxOf(i) := ctrl.io.passIdx
+          // Engine-side spill handshake taps (debug, zero behavior change):
+          // seed/drain valid/ready + engine passDone for multi-beat stall
+          // triage (reader wedged vs engine waiting A vs drain backpressure).
+          val seedV = spillReader.io.outStream.stream.valid
+          val seedR = spillReader.io.outStream.stream.ready
+          val drainV = linComp.io.spillOut.get.stream.valid
+          val drainR = linComp.io.spillOut.get.stream.ready
+          val engDone = linComp.io.passDone.get
+          seedV.simPublic(); seedR.simPublic()
+          drainV.simPublic(); drainR.simPublic(); engDone.simPublic()
+          spillSeedVldOf(i) = seedV
+          spillSeedRdyOf(i) = seedR
+          spillDrainVldOf(i) = drainV
+          spillDrainRdyOf(i) = drainR
+          spillPassDoneOf(i) = engDone
+          // A/W liveness taps (WaitTile vs LoadA triage).
+          val aV = linComp.io.a.stream.valid
+          val aR = linComp.io.a.stream.ready
+          val wV = layerWeights.stream.valid
+          val wR = layerWeights.stream.ready
+          aV.simPublic(); aR.simPublic(); wV.simPublic(); wR.simPublic()
+          spillAVldOf(i) = aV
+          spillARdyOf(i) = aR
+          spillWVldOf(i) = wV
+          spillWRdyOf(i) = wR
+          // Bias/output liveness taps (final-pass EmitRow stall triage).
+          val bV = linComp.io.b.stream.valid
+          val bR = linComp.io.b.stream.ready
+          val yV = linComp.io.y.stream.valid
+          val yR = linComp.io.y.stream.ready
+          bV.simPublic(); bR.simPublic(); yV.simPublic(); yR.simPublic()
+          spillBiasVldOf(i) = bV
+          spillBiasRdyOf(i) = bR
+          spillYVldOf(i) = yV
+          spillYRdyOf(i) = yR
+          // Matmul->bias_add taps (final-pass EmitRow stall triage).
+          val cV = linComp.io.cMonV.get
+          val cR = linComp.io.cMonR.get
+          cV.simPublic(); cR.simPublic()
+          spillCMonVOf(i) = cV
+          spillCMonROf(i) = cR
+          // reArm level taps (spurious-pulse triage).
+          val eR = linComp.io.reArm
+          val bRe = linComp.io.biasReArm
+          eR.simPublic(); bRe.simPublic()
+          spillEngReArmOf(i) = eR
+          spillBiasReArmOf(i) = bRe
           linComp.io.y
         } else layerWeights.dataType() match {
           case _: SInt =>
