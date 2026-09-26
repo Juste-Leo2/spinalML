@@ -61,34 +61,39 @@ class DramSoCTop[T <: Data](
     val ddram_reset_n = out Bool()
   }
 
-  // Root board clock: only a ClockDomain constructor can adopt the
-  // ambient `clockDomain.clock` wire; a BlackBox port must be driven from
-  // the adopted domain object (`cd.clock`), never from a raw read.
+  // FPGA-only top: LiteDRAM has no ASIC mapping, and Gowin BOOT power-on
+  // reset has no ASIC equivalent (same rationale as UartSoC).
+  require(!target.isAsic, "DramSoCTop is FPGA-only (LiteDRAM core targets Gowin GW2A)")
 
-  // DRAM init status, synchronized into the board clock domain first so it
-  // can safely join the reset tree (reset deassertion stays synchronous).
-  // These registers live in the ROOT domain (POR-only): they must progress
-  // while `cd` is still held in reset, otherwise reset never releases.
-  val initSync0 = Reg(Bool()) init(False)
-  val initSync1 = RegNext(initSync0) init(False)
+  // Forward declaration: driven from the SoC area below, sampled here.
+  val initDoneRaw = Bool()
 
-  // Power-On Reset: same boot behaviour as UartSoC on FPGA.
-  val reset = if (!target.isAsic) {
-    val bootClockDomain = ClockDomain(
-      clock = clockDomain.clock,
-      config = ClockDomainConfig(resetKind = BOOT)
-    )
-    val porActive = new ClockingArea(bootClockDomain) {
-      val counter = Reg(UInt(8 bits)) init(0)
-      val active = counter =/= 255
-      when(active) {
-        counter := counter + 1
-      }
-    }.active
-    porActive || !io.resetN || !initSync1
-  } else {
-    !io.resetN || !initSync1
-  }
+  // Power-On Reset + DRAM-init sampling, both in a BOOT domain (no reset
+  // input port). The init flops MUST NOT live in `cd`: they have to
+  // progress while `cd` is still held in reset, otherwise reset never
+  // releases (deadlock). BOOT also keeps the top-level port list minimal
+  // (clk / resetN / uart / ddram_* only, no extra reset pin).
+  val bootClockDomain = ClockDomain(
+    clock = clockDomain.clock,
+    config = ClockDomainConfig(resetKind = BOOT)
+  )
+  val porActive = new ClockingArea(bootClockDomain) {
+    val counter = Reg(UInt(8 bits)) init(0)
+    val active = counter =/= 255
+    when(active) {
+      counter := counter + 1
+    }
+  }.active
+  // init_done is quasi-static: double-flopped into the board domain before
+  // joining the reset tree (reset deassertion stays synchronous).
+  val initSync1 = new ClockingArea(bootClockDomain) {
+    val s0 = Reg(Bool()) init(False)
+    val s1 = Reg(Bool()) init(False)
+    s0 := initDoneRaw
+    s1 := s0
+  }.s1
+
+  val reset = porActive || !io.resetN || !initSync1
 
   val cd = ClockDomain(
     clock = clockDomain.clock,
@@ -205,5 +210,5 @@ class DramSoCTop[T <: Data](
   }
 
   // Root-domain sampling of the DRAM init flag (see note above).
-  initSync0 := soc.dram.io.init_done
+  initDoneRaw := soc.dram.io.init_done
 }

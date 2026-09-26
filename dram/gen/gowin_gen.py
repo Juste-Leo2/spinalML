@@ -148,11 +148,13 @@ class GowinDramCRG(Module):
         # LiteX platform (see sys reset below); fast-domain reset is built
         # explicitly instead.
         pll.create_clkout(self.cd_sys2x_i, 2*sys_clk_freq, with_reset=False)
+        # NB: no DHCEN gate on sys2x (the litex-boards CRG gates it with a
+        # `stop` tied to the PHY init sequencer). One DHCEN is one of only
+        # 24 such BELs on GW2A-18 and the DDR output path already needs
+        # them all (see docs/liteDRAM.md §6); sys2x runs free, the DDRDLLA
+        # freeze sequencing does not need a fabric clock gate at 54MHz.
+        self.comb += self.cd_sys2x.clk.eq(self.cd_sys2x_i.clk)
         self.specials += [
-            Instance("DHCEN",
-                i_CLKIN  = self.cd_sys2x_i.clk,
-                i_CE     = self.stop,
-                o_CLKOUT = self.cd_sys2x.clk),
             Instance("CLKDIV",
                 p_DIV_MODE = "2",
                 i_CALIB    = 0,
