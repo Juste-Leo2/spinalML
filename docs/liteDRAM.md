@@ -171,20 +171,37 @@ Le modèle MNIST w4a8 reste le poste dominant (DSP 52%).
   `IO_LOC`). Corrigé en sonde (`IO_PORT "io_ddram_dq[0]" IO_TYPE=SSTL15;`) :
   0 « not found », mais chiffres PnR **identiques**. Piste écartée comme cause
   racine (reste à faire proprement en P3 dans le `.cst` board).
-- **RESTE : `OSER4_MEM_9` — `no BELs remaining`.** État des lieux :
-  - `pack_iologic()` de nextpnr-himbaechel traite `ODDR/OSER4/OSER8/IDDR/IDES4…`
-    mais **pas les variantes `_MEM`** (vérifié dans les sources upstream
-    `pack_iologic.cc`) : les 20 `OSER4_MEM` + 16 `IDES4_MEM` de LiteDRAM
-    restent abstraits et le placeur échoue au 10ème (`_9`).
-  - Le pinout est pourtant prouvé en flow vendeur (cible litex-boards,
-    doc Gowin TN662 : chaque bank GW2A a des ressources DQ) → **gap de
-    modélisation apicula/nextpnr probable, pas bug de notre design**.
-  - Pistes restantes : (a) consommation de BELs IOLOGIC par les dummies
-    `create_aux_iologic_cell` ; (b) remonter upstream (issue nextpnr) ;
-    (c) contournement via `cli/spinalml_cli/patches/` si une règle de
-    placement simple émerge (jamais de fork LiteDRAM).
-- Fichiers de debug (hors repo) : `/tmp/dram_soc_synth.json`,
-  `/tmp/ddrprobe/pnr_full*.log`, `/tmp/ddrprobe/ddr_pins.cst`.
+- **RESTE : `OSER4_MEM_9` — CAUSE RACINE PROUVÉE le 26/09 (pas une hypothèse).**
+  Lecture des sources nextpnr-himbaechel courantes (`pack_iologic.cc`,
+  `gowin.h:51-61`, `gowin.cc:1071`) :
+  - `type_is_iologico` = {ODDR, ODDRC, OSER4, OSER8, OSER10, OVIDEO, EMPTY} et
+    `type_is_iologici` = {IDDR, IDDRC, IDES4, IDES8, IDES10, IVIDEO, EMPTY} :
+    les variantes **`_MEM` n'y figurent pas** et `pack_iologic()` ne les traite
+    pas → les 20 `OSER4_MEM` + 16 `IDES4_MEM` de LiteDRAM restent des cellules
+    abstraites sans bucket BEL → `no BELs remaining` (au 10ème par ordre du
+    placeur, les 9 premiers n'étant pas vraiment placés non plus).
+  - Même constat pour **`DQS` (×2) et `DLL` (×1)** : aucune occurrence dans
+    tout `himbaechel/uarch/gowin/` → échoueraient juste après. Gérés : IODELAY
+    (`pack_iodelay` ✓), rPLL/CLKDIV/DHCEN ✓, IOBUF/diff ✓.
+  - C'est donc un **gap upstream nextpnr/apicula** (le support « I/O DDR »
+    annoncé couvre ODDR/OSER plain, pas le chemin `_MEM`+DQS+DLL des PHY
+    DDR type LiteDRAM), pas un bug de notre design : pinout prouvé en flow
+    vendeur (cible litex-boards, Gowin TN662).
+- **Option « techmap `_MEM` → `OSER4`/`IDES4` plain » ÉTUDIÉE ET REJETÉE** :
+  électriquement invalide. Le `_MEM` porte l'alignement DQS (TCLK DQSW270,
+  CALIB) ; en plain OSER, DQS et DQ sortent sur les mêmes fronts FCLK
+  (skew ≈ 0) → tDS/tDH côté écriture et capture côté lecture violés
+  (DDR3 veut DQS centré à 90°, pas coïncident). Un décalage d'un tick FCLK
+  en fabric recréerait les 90° à 54MHz, mais ça exige de modifier le PHY
+  (fork LiteDRAM — interdit). Pas de patch repo possible sans casser le lien.
+- **Action** : dossier technique complet dans `docs/nextpnr-ddr-gap.md`
+  (erreurs exactes, inventaire des 4 types manquants avec refs sources,
+  repro, contournement rejeté, analyse du commit `c4fbb55`) ; brouillon
+  d'issue bilingue dans `docs/issuePNR.md` (texte anglais prêt à poster +
+  explications) ; plan silicium vendeur dans `docs/plan-eda.md` ; plan
+  reverse différé dans `docs/plan-reverse.md`. Aucun contournement
+  dans `cli/spinalml_cli/patches/` à ce stade — le mécanisme reste disponible
+  si une règle de placement simple émerge côté upstream.
 
 ## 7. P3 FAIT (26/09) : hooks CLI `--dram`
 
