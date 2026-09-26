@@ -12,7 +12,13 @@
 #   only geometry/timings come from dram/gen/sdram_modules.py.
 sys_clk_freq: 27000000.0
 device: "GW2A-18"
-devicename: "GW2A-LV18PG256C8/I7"
+# NB (silicon EDA, 26/09): devicename feeds the rPLL DEVICE parameter
+# verbatim (LiteX GW1NPLL.do_finalize: p_DEVICE = devicename). Gowin EDA
+# only accepts model + die revision here: the full part number
+# ("GW2A-LV18PG256C8/I7") is rejected (EX0206), the PLL clock dies and
+# synthesis sweeps the whole design (31 LUT left). Keep the full part
+# number out of this key; pinout is unaffected (separate .cst).
+devicename: "GW2A-18C"
 sdram_module: "H5TC1G63EFR"
 size_bytes: 134217728
 axi_data_width: 64
