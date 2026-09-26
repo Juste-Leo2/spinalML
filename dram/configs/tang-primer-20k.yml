@@ -1,0 +1,19 @@
+# LiteDRAM config: Sipeed Tang Primer 20K (Gowin GW2A-18).
+#
+# Deliberate v1 choices:
+# - sys_clk_freq 27MHz = board clock, same domain as the SpinalHDL SoC, so
+#   the AXI link needs no clock-domain crossing. DDR runs at 2x sys
+#   (54MHz): slow for DDR3 but wide margins and enough for weight
+#   streaming. Raise later with a CDC bridge on the SpinalHDL side.
+# - DLL-off mode is automatic at this speed (2*sys <= 125MHz, same rule as
+#   the litex-boards target): CL=CWL=6, no DLL lock dependency.
+# - H5TC1G63EFR fitted on this board revision (1Gb, 64Mx16, 128MiB).
+#   Same x16 footprint as the IMD part of other revisions: pins unchanged,
+#   only geometry/timings come from dram/gen/sdram_modules.py.
+sys_clk_freq: 27000000.0
+device: "GW2A-18"
+devicename: "GW2A-LV18PG256C8/I7"
+sdram_module: "H5TC1G63EFR"
+size_bytes: 134217728
+axi_data_width: 64
+axi_id_width: 4

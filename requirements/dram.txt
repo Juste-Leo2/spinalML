@@ -1,6 +1,14 @@
-# LiteX / LiteDRAM code-generation stack (PyPI, exact pins).
-# Installed into the uv-managed env (~/.spinalml_tools/.venv) by `spinalml setup`.
-# migen 0.9.2 matches the version vendored by oss-cad-suite: same bits both sides.
-migen==0.9.2
-litex==2024.12
-litedram==2024.12
+# LiteX / LiteDRAM code-generation stack (managed env, via `spinalml setup`).
+# Frozen git pins (bit-exact reproducibility):
+# - migen: no upstream PyPI release anymore, development lives on git.m-labs.hk;
+#   frozen on beffe831bf (full SHA below, = master as of 2026-09).
+#   Any migen vendored by oss-cad-suite only serves the suite's internal tools
+#   (never imported by our flows: PYTHONHOME is sanitized, see
+#   cli/spinalml_cli/runners/env.py) — verify at setup time with
+#   `ls ~/.spinalml_tools/oss-cad-suite/lib/python*/site-packages/ | grep -i migen`.
+# - litex + litedram: 2026.08 tags verified to exist, pinned together
+#   (litedram/setup.py depends on unbounded litex: the explicit pin avoids
+#   silent drift between two `setup` runs).
+migen @ git+https://git.m-labs.hk/M-Labs/migen.git@beffe831bf1a691eaebf9ddbb4660f8b3e7fd964
+litex @ git+https://github.com/enjoy-digital/litex.git@2026.08
+litedram @ git+https://github.com/enjoy-digital/litedram.git@2026.08
