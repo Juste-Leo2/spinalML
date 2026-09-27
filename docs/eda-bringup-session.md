@@ -172,6 +172,67 @@ carte exacte en EDA, 1377 LE, `/tmp/opencode/ddr3-ref`) :
 - Prochaine étape : run complet top=`DramSoCTop` (théorie : le cascade
   NL0002 venait du core mort qui tenait le reset ; core vivant → SoC vivant).
 
+## 12. Full SoC vivant + conflit de bank (27/09 soir)
+
+- Top=`DramSoCTop` : **8360 LUT / 4765 reg / 43 BSRAM, ZÉRO NL0002**.
+  `soc_acc` 4246 LUT, `soc_dram/core` 1907 reg/3513 LUT (le core keepé),
+  UART/bridge/DMA tous vivants. Théorie confirmée : le cascade venait du
+  core mort qui tenait le reset global.
+- Reste : `CV0017 io_ddram_dqs_n unused` (copie EDA, disparaîtra à la
+  recompile Spinal), BSRAM 43/46 = 94% (tendu mais tient).
+- PnR bloqué : `CT1136 Bank 4 vccio(3.3) locké` vs SSTL15 DDR. Cause :
+  mon move `io_resetN`→T2 avait mis du LVCMOS33 dans la bank 1.5V DDR
+  (banks DDR = 4/5/6 d'après `PBGA256.json` ; T2 = bank 4). Fix : reset
+  virtuel sur **A6 (bank 2, 3.3V, pull-up, POR fait le job)** — pas T2
+  (3.3V bouton dans bank 1.5V = surtension). Vérifié : T13/M11 bank 2,
+  H11 bank 0, plus aucun LVCMOS en 4/5/6.
+- A6 = TDI (JTAG) → re-fix **M10** (bank 2, plain GPIO, CFG vide).
+  Source `boards/constraints/tang-primer-20k.cst` mise à jour aussi
+  (M10 + suppression `dqs_n`).
+
+## 13. Bitstream + validation (27/09 soir)
+
+- PnR **PASS** : 8360 LUT / 4765 reg / 43 BSRAM / 8 DSP, CLS 64%.
+  **IOLOGIC : 16 IDES4_MEM + 20 OSER4_MEM + 25 OSER4 + 25 IODELAY,
+  DLL 1/4, DQS 2/9, rPLL 1/4** — tout le kit DDR durci est placé
+  (le gap nextpnr `_MEM` est contourné par le flow vendeur).
+  DQS auto-pairing confirmé : `G3 = dqs_p[0](n)` sans contrainte N.
+  `DRAM.fs` (7.2 Mo) + `DRAM.bin` générés. BSRAM 94% (3 libres).
+  LUT Yosys (~9-13k pré-pack) vs Gowin (8360 post-pack + 1297 ALU) :
+  compteurs différents, même design, 49% d'utilisation.
+- Timing non contraint (pas de `.sdc`, TA1132 bénin) : la preuve =
+  l'UART, pas le rapport.
+- Le bitstream embarque **UniversalScaleDemo** (Linear I8 1024→64,
+  64 sorties), pas MNIST — `DramSoCGen` dit Mnistw4a8 mais le
+  `DramSoCTop.v` synthétisé est l'ancien (à recompiler avant la release).
+- Validation : `examples/UniversalScale/silicon_validate.py`
+  (terminal, protocole repris d'`inference.py`, oracle NumPy vérifié
+  bit-exact vs sim : first3 [7,7,-42] last3 [-25,-46,10]).
+  `--ping-only` prouve à lui seul clk + reset-release + init_done DRAM.
+
+## 14. A/B silicium : UART OK, DRAM muet (27/09 soir)
+
+- Flash OK (`Finished`, 8s). Cable-setting à re-pointer après
+  déplacement (location 289/290 → 0) ; Zadig WinUSB sur Interface 0
+  pour openFPGALoader (Interface 1 = UART, ne pas toucher).
+- **Contrôle `examples/Mnist/top.fs` : PASS sur COM8** (ping V,
+  upload poids, inférence, HW==NumPy agree, non-bit-exact attendu RNE).
+  Carte + USB-UART + H11 + protocole + outils = prouvés.
+- **`DRAM.fs` : muet** (aucun port ne répond V). Suspect #1 : reset tenu
+  par `init_done=0` (init JEDEC jamais finie) ; #2 : `pll_locked=0`
+  (rPLL ne locke pas → sys_rst tenu → initseq ne tourne pas) ;
+  #3 : M10 (resetN) à 0 sur PCB malgré pull-up → reset tenu.
+- Plan : multimètre sur M10 (3.3V attendu) ; sinon GaAnalyzer sur
+  `{pll_locked, init_done, reset, uart_tx}` (noms préservés par syn_keep,
+  navigateur de signaux GAO) ; audit unités des waits init en parallèle.
+- GAO **bloqué** : trigger à 0 comme à 1 = chargement infini, pas de
+  Force Trigger trouvé. Même signature que les échecs de flash
+  (descripteurs illisibles, bulk write failed) → couche USB marginale,
+  pas l'IDE. Levier #1 = stabiliser l'USB (câble DATA + port direct),
+  puis re-tenter GAO (zéro rebuild). Fallback = bitstream debug UART
+  (blink-codes, flow OSS, JTAG-indépendant). Apicula non pertinent ici
+  (fuses ≠ état vivant).
+
 ## 9. Logs et pièces
 
 - `E:\spinalML\out\scale-*.log` (sim scale bit-exact 30350 cyc, build Yosys

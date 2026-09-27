@@ -8,8 +8,10 @@
 IO_LOC "clk" H11;
 IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 
-// Pushbutton S1 (Active Low Reset)
-IO_LOC "reset_n" T10;
+// Pushbutton S1 (Active Low Reset). NB: T10 is SSPI-dedicated (PR2017) and
+// T2 sits in the 1.5V DDR bank 4 (CT1136); M10 is a plain bank-2 GPIO on the
+// 3.3V uart rail. Virtual reset (pull-up, on-chip POR does the job).
+IO_LOC "reset_n" M10;
 IO_PORT "reset_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 
 // USB-UART Interface (pins routed to onboard FTDI debugger)
@@ -106,12 +108,10 @@ IO_LOC "ddram_dq[15]" M2;
 IO_PORT "ddram_dq[15]" IO_TYPE=SSTL15;
 IO_LOC "ddram_dqs_p[0]" G2;
 IO_PORT "ddram_dqs_p[0]" IO_TYPE=SSTL15D;
-IO_LOC "ddram_dqs_n[0]" G3;
-IO_PORT "ddram_dqs_n[0]" IO_TYPE=SSTL15D;
+// NB: no ddram_dqs_n — Gowin SSTL15D generates N from the P tile (proven by
+// PnR auto-pairing G3/K6); ELVDS_IOBUF is rejected by synthesis (CK0021).
 IO_LOC "ddram_dqs_p[1]" J5;
 IO_PORT "ddram_dqs_p[1]" IO_TYPE=SSTL15D;
-IO_LOC "ddram_dqs_n[1]" K6;
-IO_PORT "ddram_dqs_n[1]" IO_TYPE=SSTL15D;
 IO_LOC "ddram_clk_p" J1;
 IO_PORT "ddram_clk_p" IO_TYPE=SSTL15D;
 IO_LOC "ddram_clk_n" J3;
