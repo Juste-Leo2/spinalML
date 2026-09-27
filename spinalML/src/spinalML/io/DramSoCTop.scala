@@ -53,7 +53,7 @@ class DramSoCTop[T <: Data](
     val ddram_dm      = out Bits(2 bits)
     val ddram_dq      = inout(Analog(Bits(16 bits)))
     val ddram_dqs_p   = inout(Analog(Bits(2 bits)))
-    val ddram_dqs_n   = inout(Analog(Bits(2 bits)))
+    // NB: no ddram_dqs_n (SSTL15D tile generates N, cf. LiteDramCore).
     val ddram_clk_p   = out Bool()
     val ddram_clk_n   = out Bool()
     val ddram_cke     = out Bool()
@@ -164,7 +164,6 @@ class DramSoCTop[T <: Data](
     io.ddram_dm := dram.io.dm
     io.ddram_dq := dram.io.dq
     io.ddram_dqs_p := dram.io.dqs_p
-    io.ddram_dqs_n := dram.io.dqs_n
     io.ddram_clk_p := dram.io.clk_p
     io.ddram_clk_n := dram.io.clk_n
     io.ddram_cke := dram.io.cke

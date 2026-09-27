@@ -91,8 +91,10 @@ class TangPrimer20KDDRPads:
         self.reset_n = Signal()
 
     def ios(self):
+        # NB: dqs_n excluded on purpose (see _patch_elvds_iobuf below):
+        # Gowin SSTL15D drives N from the P tile, fabric only drives P.
         return [self.a, self.ba, self.ras_n, self.cas_n, self.we_n, self.cs_n,
-                self.dm, self.dq, self.dqs_p, self.dqs_n, self.clk_p, self.clk_n,
+                self.dm, self.dq, self.dqs_p, self.clk_p, self.clk_n,
                 self.cke, self.odt, self.reset_n]
 
 
@@ -389,6 +391,79 @@ class LiteDramGowinTop(Module):
         return set(ios)
 
 
+# Post-generation patch ------------------------------------------------------------
+
+import re
+
+_ELVDS_IOBUF_RE = re.compile(
+    r"ELVDS_IOBUF\s+\w+\(\s*"
+    r"\.I\(\s*(?P<i>[^)]+?)\s*\),\s*"
+    r"\.OEN\(\s*(?P<oen>[^)]+?)\s*\),\s*"
+    r"\.IO\(\s*(?P<io>[^)]+?)\s*\),\s*"
+    r"\.IOB\(\s*(?P<iob>[^)]+?)\s*\),\s*"
+    r"\.O\(\s*(?P<o>[^)]+?)\s*\)\s*\)\s*;",
+    re.DOTALL,
+)
+
+
+def _patch_elvds_iobuf(src):
+    """Replace ELVDS_IOBUF (DQS pairs) with ref-style tristate assigns.
+
+    GowinSynthesis rejects ``OSER4_MEM -> ELVDS_IOBUF`` (``CK0021``:
+    the instance lowers to single-ended OBUF which an OSER may not
+    drive). The silicon-proven ``nand2mario/ddr3-tang-primer-20k`` design
+    drives DQS with a plain tristate assign and lets the tool infer the
+    buffers, so we do the same: fabric drives P single-ended, the
+    ``SSTL15D`` tile generates N (``dqs_n`` pad left undriven/Hi-Z and
+    dropped from ``ios`` + constraints).
+    """
+    def _repl(m):
+        i, oen, io, o = m.group("i"), m.group("oen"), m.group("io"), m.group("o")
+        return (
+            "// Patched (was ELVDS_IOBUF on %s/%s): Gowin CK0021 forbids\n"
+            "// OSER4_MEM -> ELVDS_IOBUF; ref-style tristate, N from SSTL15D tile.\n"
+            "assign %s = %s ? 1'bz : %s;\n"
+            "assign %s = %s;"
+            % (io, m.group("iob"), io, oen, i, o, io)
+        )
+    src, n = _ELVDS_IOBUF_RE.subn(_repl, src)
+    if n != 2:
+        raise SystemExit("expected 2 ELVDS_IOBUF (DQS bytes), found %d" % n)
+    return src
+
+
+_DECL_KEEP_RE = re.compile(r"^(\s*)(wire|reg)\b(.*?);\s*$")
+
+
+def _apply_syn_keep(src):
+    """Tag every internal wire/reg with ``/* synthesis syn_keep=1 */``.
+
+    GowinSynthesis' device-independent optimizer unsoundly folds live
+    Migen logic to ~31 LUT (see docs/eda-bringup-session.md §10-11);
+    keeping every net recovers the full design (1915 regs / 3588 LUT /
+    5 BSRAM / 53 SSRAM, same scale as Yosys). Vendor-supported attribute
+    (SUG550 §5.8), ignored by Yosys/nextpnr. Revisit if the root
+    construct is ever identified (then minimize the keep set).
+    """
+    n = 0
+    out = []
+    for ln in src.splitlines(keepends=True):
+        m = _DECL_KEEP_RE.match(ln)
+        if m and "syn_keep" not in ln:
+            indent, kind, rest = m.group(1), m.group(2), m.group(3)
+            if "=" in rest:
+                head, init = rest.split("=", 1)
+                ln = "%s%s%s /* synthesis syn_keep=1 */ =%s;\n" % (
+                    indent, kind, head.rstrip(), init.rstrip())
+            else:
+                ln = "%s%s%s /* synthesis syn_keep=1 */;\n" % (
+                    indent, kind, rest.rstrip())
+            n += 1
+        out.append(ln)
+    print("syn_keep tags: %d" % n)
+    return "".join(out)
+
+
 # Main -------------------------------------------------------------------------
 
 def main():
@@ -413,8 +488,10 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     v = verilog.convert(top, name=args.name, ios=top.ios())
+    src = _patch_elvds_iobuf(str(v))
+    src = _apply_syn_keep(src)
     out_path = out_dir / (args.name + ".v")
-    out_path.write_text(str(v), encoding="utf-8")
+    out_path.write_text(src, encoding="utf-8")
     print("Wrote %s" % out_path)
 
 

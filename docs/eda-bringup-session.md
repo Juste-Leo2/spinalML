@@ -122,6 +122,56 @@ carte exacte en EDA, 1377 LE, `/tmp/opencode/ddr3-ref`) :
 5. Doc : consigner la version EDA exacte + archiver le `.fs` qui marche +
    `gowin_unpack` pour le dossier nextpnr (`docs/plan-reverse.md`).
 
+## 10. Voie B : dissection par sous-blocs (27/09, dans la foulée)
+
+- Migen aplatit tout (`verilog.convert` : même un parent/enfant trivial →
+  1 module). Donc `dram/gen/hier_subblocks.py` : `convert` fragment par
+  fragment (`list_signals` + `list_special_ios` comme ports) →
+  `dram/out/hier/sub_{crg,ddrphy,core,initseq,axi2native}.v` →
+  `GOWIN-PROJECT/src/` + `.gprj`. Leçon : lister les signaux par attributs
+  rate les signaux statement-locaux (ex. `ext_dfi` d'initseq) ; le fragment
+  est la source vérité (`Module.get_fragment()` = usage unique !).
+- Résultats UI (Verilog-2001, CST désactivé pour les runs partiels) :
+  `sub_crg` 25 logic/20 reg, `sub_initseq` 68 LUT/24 reg,
+  `sub_axi2native` 696 logic/268 reg/10 BSRAM, **`sub_core` 3549 logic /
+  1462 reg** — tout est SAIN sauf **`sub_ddrphy` : erreur dure `CK0021 :
+  OSER4_MEM cannot drive OBUF (dqs_o)`**, pas de rapport.
+- Racine : le `GW2DDRPHY` Migen drive chaque paire DQS via `ELVDS_IOBUF`
+  (2 instances), que GowinSynthesis abaisse en OBUF single-ended —
+  topologie illégale après un OSER. La réf prouvée-silicium fait
+  `assign DDR3_DQS = oen ? 1'bz : buf;` + `SSTL15D` en paire sur un seul
+  port logique (`tang20k.cst:91-94`).
+- Fix (dans le flow, pas dans le venv) : `gowin_gen.py` post-passe
+  `_patch_elvds_iobuf` (2 instances → tristate + lecture ref-style),
+  `dqs_n` sorti des `ios` (N généré par la tuile SSTL15D), `pins.cst`
+  (2 copies) : lignes `dqs_n` supprimées, `dqs_p` seul en SSTL15D.
+  Regen via `cli/main.py dram-gen`, Yosys `read_verilog + hierarchy
+  -check` vert, recopié EDA.
+- À valider : top=`litedram_core` → ~4k LUT attendus, zéro CK0021.
+- Collatéral : `PA2122` (BSRAM WRITE_MODE DPB, étape PnR sur axi2native),
+  `PA2024` (port-count, artefact du montage standalone), à traiter après.
+
+## 11. Cure syn_keep + headless (27/09 après-midi)
+
+- SUG550 §5.8 : `/* synthesis syn_keep=1 */` supporté. Test headless
+  (`GowinSynthesis.exe -prj`, `.prj` calqué sur `impl/gwsynthesis/DRAM.prj`,
+  runs dans `out/gsruns/`) : base = 32 reg/31 LUT reproduit hors GUI ;
+  avec keeps sur les 2357 nets internes → **1915 reg / 3588 LUT / 5 BSRAM /
+  53 SSRAM, zéro erreur**. L'optimizer repliait du vivant ; les keeps le
+  bloquent. Échelle cohérente avec Yosys (~3k LUT).
+- Fix intégré au flow (`gowin_gen.py` : `_apply_syn_keep` default-on après
+  `_patch_elvds_iobuf`, regen via `cli/main.py dram-gen`, 516 KiB), ignoré
+  par Yosys/nextpnr. Minimisation du keep-set = polish ultérieur.
+- `io_resetN` T10 → **T2** (2 copies CST, pin du bouton ref nand2mario).
+- Clock report du run 31 LUT : rPLL/CLKOUT* + CLKDIV présents, mais Fmax
+  seulement sur `clk27` (276 MHz) et CLKDIV — que le résidu était horlogé.
+- Pistes abandonnées (avec raison) : wrapper hiérarchique (namespaces par
+  fragment divergents : `por_clk_1` ≠ `por_clk` entre sub-files, bridges
+  infidèles), scan multi-drivers textuel (faux positifs Migen), keeps
+  ciblés horloges/resets (un keep ne rend pas un constant dynamique).
+- Prochaine étape : run complet top=`DramSoCTop` (théorie : le cascade
+  NL0002 venait du core mort qui tenait le reset ; core vivant → SoC vivant).
+
 ## 9. Logs et pièces
 
 - `E:\spinalML\out\scale-*.log` (sim scale bit-exact 30350 cyc, build Yosys

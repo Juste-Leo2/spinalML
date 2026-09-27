@@ -46,7 +46,7 @@ class LiteDramAxiBridge(
     val dm        = out Bits(2 bits)
     val dq        = inout(Analog(Bits(16 bits)))
     val dqs_p     = inout(Analog(Bits(2 bits)))
-    val dqs_n     = inout(Analog(Bits(2 bits)))
+    // NB: no dqs_n (SSTL15D tile generates N, cf. LiteDramCore).
     val clk_p     = out Bool()
     val clk_n     = out Bool()
     val cke       = out Bool()
@@ -71,7 +71,6 @@ class LiteDramAxiBridge(
   io.dm := core.io.dm
   io.dq := core.io.dq
   io.dqs_p := core.io.dqs_p
-  io.dqs_n := core.io.dqs_n
   io.clk_p := core.io.clk_p
   io.clk_n := core.io.clk_n
   io.cke := core.io.cke

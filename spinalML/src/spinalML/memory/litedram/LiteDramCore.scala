@@ -41,7 +41,9 @@ class LiteDramCore(
     val dm      = out Bits(2 bits)
     val dq      = inout(Analog(Bits(16 bits)))
     val dqs_p   = inout(Analog(Bits(2 bits)))
-    val dqs_n   = inout(Analog(Bits(2 bits)))
+    // NB: no dqs_n — Gowin SSTL15D generates N from the P tile, fabric
+    // drives P only (CK0021 forbids OSER4_MEM -> ELVDS_IOBUF, see
+    // docs/eda-bringup-session.md §10).
     val clk_p   = out Bool()
     val clk_n   = out Bool()
     val cke     = out Bool()
