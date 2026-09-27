@@ -152,6 +152,17 @@ def main():
         csr(ser, 0x00, 0x01)
         print("triggered, waiting for spill inference (DRAM P=4)...")
         time.sleep(2.0)
+        for i in range(3):
+            ser.write(bytes([CMD_STATUS]))
+            ser.flush()
+            st = ser.read(1)
+            if st:
+                b = st[0]
+                print(f"poll S[{i}]: 0x{b:02X} outValid={bool(b&8)} "
+                      f"accDone={bool(b&4)} accBusy={bool(b&2)}")
+            else:
+                print(f"poll S[{i}]: TIMEOUT")
+            time.sleep(0.5)
         ser.write(bytes([CMD_READ_LOGITS]))
         ser.flush()
         got = ser.read(OUT_COUNT)
