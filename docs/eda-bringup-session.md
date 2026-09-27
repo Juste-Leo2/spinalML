@@ -233,6 +233,22 @@ carte exacte en EDA, 1377 LE, `/tmp/opencode/ddr3-ref`) :
   (blink-codes, flow OSS, JTAG-indépendant). Apicula non pertinent ici
   (fuses ≠ état vivant).
 
+## 15. P2 : usine à .fs headless (27/09 soir)
+
+- `scripts/eda_flow.py` : `compile MODEL --dram` → stage
+  (`rtl/DramSoCTop.v`, `dram/out/litedram_core.v`, `hw_build/.../pins.cst`)
+  → `build.tcl` (`set_device`/`add_file`/`set_option -top_module`/`run all`,
+  cf. SUG100 §8 + méthode pipe `open_project/run all` trouvée sur le net)
+  → `gw_sh.exe build.tcl` → parse `.rsc`/`.rpt` (PASS/FAIL) →
+  `--flash` (programmer_cli, driver vendeur, fini Zadig) →
+  `--validate` (silicon_validate.py).
+- Pièges : lire les totaux `T_Register/T_Lut` (pas les directs) ;
+  valeurs avec parenthèses (`"4765(10)"`) dans les regex.
+- Premier run : **PASS — LUT=8360 REG=4765 BSRAM=43 DLL=1 DQS=2,
+  0 ERROR, .fs 7093 KiB**, identique au build GUI prouvé.
+  `E:/GOWIN-PROJECT` supprimé (logs archivés `out/eda-ui-logs/`).
+- Sorties : `E:/eda-factory/DRAM/{src,build.tcl,impl/{gwsynthesis,pnr}}`.
+
 ## 9. Logs et pièces
 
 - `E:\spinalML\out\scale-*.log` (sim scale bit-exact 30350 cyc, build Yosys
