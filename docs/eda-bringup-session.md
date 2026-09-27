@@ -248,6 +248,12 @@ carte exacte en EDA, 1377 LE, `/tmp/opencode/ddr3-ref`) :
   0 ERROR, .fs 7093 KiB**, identique au build GUI prouvé.
   `E:/GOWIN-PROJECT` supprimé (logs archivés `out/eda-ui-logs/`).
 - Sorties : `E:/eda-factory/DRAM/{src,build.tcl,impl/{gwsynthesis,pnr}}`.
+- Preset `mnist` ajouté (UartSoC.v auto-suffisant : 55 modules, EX3794 si
+  on ajoute la chain) : **PASS — 5719 LUT / 4599 reg / 31 BSRAM /
+  0 ERROR, MNIST.fs 7093 KiB**. À flasher + selftester : si PASS, la
+  factory est prouvée sur RTL connu-bon et le silence DRAM est 100% RTL.
+- Contrôle OSS frais validé avant : `hw_build/mnist-control/top.fs`
+  (Fmax 33.67) répond au ping → M10/CST innocentés.
 
 ## 9. Logs et pièces
 

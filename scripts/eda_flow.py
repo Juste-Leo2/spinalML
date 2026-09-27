@@ -41,6 +41,26 @@ EXPECTED = {  # Proven 27/09 runs (8360 LUT / 4765 reg / DLL 1 / DQS 2).
     "bsram_max": 46,
 }
 
+PRESETS = {
+    # preset -> (compile flags, top, file list (repo-rel), envelope, base)
+    "dram": (
+        ["--dram"], "DramSoCTop",
+        ["rtl/DramSoCTop.v", "dram/out/litedram_core.v",
+         "hw_build/tang-primer-20k/pins.cst"],
+        EXPECTED, "DRAM",
+    ),
+    "mnist": (
+        ["--soc"], "UartSoC",
+        # NB: UartSoC.v is self-contained (55 modules, like DramSoCTop.v);
+        # adding the separate chain files duplicates everything (EX3794).
+        ["out/mnist-control-rtl/UartSoC.v",
+         "hw_build/mnist-control/pins.cst"],
+        {"lut_min": 4000, "lut_max": 14000,
+         "reg_min": 3000, "reg_max": 7000, "bsram_max": 46},
+        "MNIST",
+    ),
+}
+
 
 def sh(cmd, cwd, tag):
     print(f"[{tag}] $ {' '.join(str(c) for c in cmd)}", flush=True)
@@ -62,35 +82,40 @@ def sh(cmd, cwd, tag):
 
 def main():
     ap = argparse.ArgumentParser(description="Headless Gowin EDA factory")
-    ap.add_argument("--model", default=r"tests\universal\UniversalScaleDemo.scala")
+    ap.add_argument("--model", default=None,
+                    help="Scala model file (default per preset)")
     ap.add_argument("--board", default="tang-primer-20k")
     ap.add_argument("--workdir", default=r"E:\eda-factory\DRAM")
-    ap.add_argument("--top", default="DramSoCTop")
+    ap.add_argument("--top", default=None)
+    ap.add_argument("--preset", choices=["dram", "mnist"], default="dram")
     ap.add_argument("--skip-compile", action="store_true")
     ap.add_argument("--report-only", action="store_true",
                     help="Skip compile+gw_sh, only parse WORKDIR outputs")
     ap.add_argument("--flash", choices=["none", "programmer", "openfpgaloader"],
                     default="none")
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument("--validate-script", default=None,
+                    help="Override validation script (default per preset)")
     args = ap.parse_args()
 
+    cflags, preset_top, preset_files, envelope, base = PRESETS[args.preset]
+    top = args.top or preset_top
+    model = args.model or (r"tests\universal\UniversalScaleDemo.scala"
+                           if args.preset == "dram"
+                           else r"examples\Mnist\Model.scala")
     part, devver, cstdir = BOARDS[args.board]
     work = Path(args.workdir)
     src = work / "src"
     src.mkdir(parents=True, exist_ok=True)
 
-    # 1. compile MODEL --dram ---------------------------------------------
+    # 1. compile MODEL ----------------------------------------------------
     if not args.skip_compile and not args.report_only:
-        sh([sys.executable, "cli/main.py", "compile", args.model,
-            "--dram", "--board", args.board], REPO, "compile")
+        sh([sys.executable, "cli/main.py", "compile", model,
+            *cflags, "--board", args.board], REPO, "compile")
 
     # 2. stage -------------------------------------------------------------
     if not args.report_only:
-        files = {
-            REPO / "rtl" / "DramSoCTop.v": src / "DramSoCTop.v",
-            REPO / "dram" / "out" / "litedram_core.v": src / "litedram_core.v",
-            REPO / "hw_build" / cstdir / "pins.cst": src / "pins.cst",
-        }
+        files = {REPO / rel: src / Path(rel).name for rel in preset_files}
         for a, b in files.items():
             if not a.exists():
                 raise SystemExit(f"missing artifact: {a} (compile first?)")
@@ -101,11 +126,11 @@ def main():
     if not args.report_only:
         tcl = "\n".join([
             f"set_device -device_version {devver} {part}",
-            'add_file "src/DramSoCTop.v"',
-            'add_file "src/litedram_core.v"',
+            *[f'add_file "src/{Path(rel).name}"' for rel in preset_files
+              if rel.endswith(".v")],
             'add_file "src/pins.cst"',
-            f"set_option -top_module {args.top}",
-            "set_option -output_base_name DRAM",
+            f"set_option -top_module {top}",
+            f"set_option -output_base_name {base}",
             "run all",
             "exit",
             "",
@@ -117,9 +142,9 @@ def main():
 
     # 4. report -------------------------------------------------------------
     impl = work / "impl"
-    rsc = impl / "gwsynthesis" / "DRAM_syn_rsc.xml"
-    rpt = impl / "pnr" / "DRAM.rpt.txt"
-    fs = impl / "pnr" / "DRAM.fs"
+    rsc = impl / "gwsynthesis" / f"{base}_syn_rsc.xml"
+    rpt = impl / "pnr" / f"{base}.rpt.txt"
+    fs = impl / "pnr" / f"{base}.fs"
     if not (rsc.exists() and rpt.exists() and fs.exists()):
         raise SystemExit("[report] missing outputs "
                          f"(rsc={rsc.exists()} rpt={rpt.exists()} fs={fs.exists()})")
@@ -137,9 +162,9 @@ def main():
     print(f"[report] LUT={lut} REG={reg} BSRAM={bsram} "
           f"DLL={dll.group(1) if dll else '?'} DQS={dqs.group(1) if dqs else '?'} "
           f"ERRORs={len(errs)} fs={fs.stat().st_size // 1024} KiB")
-    ok = (EXPECTED["lut_min"] <= lut <= EXPECTED["lut_max"]
-          and EXPECTED["reg_min"] <= reg <= EXPECTED["reg_max"]
-          and 0 <= bsram <= EXPECTED["bsram_max"]
+    ok = (envelope["lut_min"] <= lut <= envelope["lut_max"]
+          and envelope["reg_min"] <= reg <= envelope["reg_max"]
+          and 0 <= bsram <= envelope["bsram_max"]
           and not errs and fs.stat().st_size > 1_000_000)
     print("[report] " + ("PASS" if ok else "CHECK MANUALLY"))
     if not ok:
@@ -154,8 +179,14 @@ def main():
 
     # 6. validate (optional) --------------------------------------------------
     if args.validate:
-        sh([sys.executable, r"examples\UniversalScale\silicon_validate.py"],
-           REPO, "validate")
+        script = args.validate_script or (
+            r"examples\UniversalScale\silicon_validate.py"
+            if args.preset == "dram" else None)
+        if script is None:
+            print("[validate] no script for preset "
+                  "(run inference.py --selftest-only manually)")
+        else:
+            sh([sys.executable, script], REPO, "validate")
 
 
 if __name__ == "__main__":
