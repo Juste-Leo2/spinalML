@@ -67,6 +67,9 @@ class DramSoCTop[T <: Data](
 
   // Forward declaration: driven from the SoC area below, sampled here.
   val initDoneRaw = Bool()
+  val pllLockedRaw = Bool()
+  val dbgStepRaw = Bits(8 bits)
+  val dbgRstRaw = Bits(8 bits)
 
   // Power-On Reset + DRAM-init sampling, both in a BOOT domain (no reset
   // input port). The init flops MUST NOT live in `cd`: they have to
@@ -94,6 +97,72 @@ class DramSoCTop[T <: Data](
   }.s1
 
   val reset = porActive || !io.resetN || !initSync1
+
+  // Heartbeat: boot-domain UART ticker, alive while `init_done` is low.
+  // Sends 0xA5 + status every ~0.5s on the shared TX line so silicon
+  // always talks, even with the SoC held in reset. Status: bit0 =
+  // pll_locked (synced), bit1 = init_done, bit2 = sys reset,
+  // bits[7:3] = init step idx. Stops once init completes so the host
+  // protocol runs undisturbed afterwards.
+  val hb = new ClockingArea(bootClockDomain) {
+    val lockS0 = Reg(Bool()) init(False)
+    val lockS1 = Reg(Bool()) init(False)
+    lockS0 := pllLockedRaw
+    lockS1 := lockS0
+
+    val status = (dbgStepRaw(4 downto 0) ## dbgStepRaw(7) ##
+      initSync1 ## lockS1).asBits
+
+    val baudDiv = (clkFreq / baudRate).toInt
+    val tickMax = (clkFreq / 2).toInt - 1 // ~0.5s frame period
+    val tick = Reg(UInt(25 bits)) init(0)
+    val bitCnt = Reg(UInt(4 bits)) init(0) // 0 = idle, 1..10 = start+8+stop
+    val byteIdx = Reg(UInt(2 bits)) init(0) // 0 = 0xA5, 1 = status, 2 = rst
+    val baud = Reg(UInt(8 bits)) init(0)
+    val tx = Reg(Bool()) init(True)
+
+    when(!initSync1) {
+      when(bitCnt === 0) {
+        when(tick === tickMax) {
+          tick := 0
+          bitCnt := 1
+          byteIdx := 0
+          baud := 0
+          tx := False // start bit
+        } otherwise {
+          tick := tick + 1
+        }
+      } otherwise {
+        when(baud === baudDiv - 1) {
+          baud := 0
+          val curByte = byteIdx.mux(
+            0 -> B(0xA5, 8 bits),
+            1 -> status,
+            default -> dbgRstRaw
+          )
+          when(bitCnt === 9) {
+            tx := True // stop bit
+            bitCnt := 10
+          } elsewhen(bitCnt === 10) {
+            when(byteIdx === 2) {
+              bitCnt := 0
+            } otherwise {
+              byteIdx := byteIdx + 1
+              bitCnt := 1
+              tx := False // next start bit
+            }
+          } otherwise { // bitCnt 1..8 -> data bits 0..7
+            tx := curByte((bitCnt - 1).resize(3))
+            bitCnt := bitCnt + 1
+          }
+        } otherwise {
+          baud := baud + 1
+        }
+      }
+    } otherwise {
+      tx := True
+    }
+  }
 
   val cd = ClockDomain(
     clock = clockDomain.clock,
@@ -152,7 +221,6 @@ class DramSoCTop[T <: Data](
     tx.io.start := bridge.io.tx.valid
     tx.io.data  := bridge.io.tx.payload
     bridge.io.tx.ready := tx.io.ready
-    io.uartTx := tx.io.tx
 
     // DDR3 pads to the top level.
     io.ddram_a := dram.io.a
@@ -208,6 +276,13 @@ class DramSoCTop[T <: Data](
     bridge.io.accDone := acc.io.done
   }
 
-  // Root-domain sampling of the DRAM init flag (see note above).
+  // Root-domain sampling of the DRAM status flags (see note above).
   initDoneRaw := soc.dram.io.init_done
+  pllLockedRaw := soc.dram.io.pll_locked
+  dbgStepRaw := soc.dram.io.dbg_step
+  dbgRstRaw := soc.dram.io.dbg_rst
+
+  // Shared TX: heartbeat owns the line until init completes, then the
+  // protocol bridge takes over (heartbeat idles high afterwards).
+  io.uartTx := Mux(initSync1, soc.tx.io.tx, hb.tx)
 }

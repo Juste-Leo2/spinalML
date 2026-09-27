@@ -136,56 +136,111 @@ class GowinDramCRG(Module):
         # Power-on reset: the on-board POR is not aware of reprogramming.
         por_count = Signal(16, reset=2**16-1)
         por_done  = Signal()
+        self.por_done = por_done # debug readout (heartbeat)
         self.comb += self.cd_por.clk.eq(clk27)
         self.comb += por_done.eq(por_count == 0)
         self.sync.por += If(~por_done, por_count.eq(por_count - 1))
 
-        # PLL: 2:1 clock needed for DDR.
-        # NB: explicit self.submodules (plain attribute assignment does NOT
-        # register a submodule in Migen).
-        self.submodules.pll = pll = GW2APLL(devicename=devicename, device=device)
-        self.comb += pll.reset.eq(~por_done)
-        pll.register_clkin(clk27, 27e6)
-        # with_reset=False: AsyncResetSynchronizer cannot lower without a
-        # LiteX platform (see sys reset below); fast-domain reset is built
-        # explicitly instead.
-        pll.create_clkout(self.cd_sys2x_i, 2*sys_clk_freq, with_reset=False)
+        # PLL: 2:1 clock needed for DDR. Hand-instantiated rPLL in the
+        # style of the silicon-proven nand2mario ddr3-tang-primer-20k
+        # (Gowin IP wizard output), NOT LiteX GW2APLL: LiteX emits
+        # FCLKIN="27.0", FDLY=15, PSDA_SEL="0000" (wizard: "27", 0,
+        # "0100"), and on silicon both PLL-derived clocks stayed static
+        # despite LOCK=1 with the LiteX lowering. Dividers keep our
+        # in-spec operating point (PFD 27MHz, VCO 864MHz): CLKOUT=54MHz
+        # (sys2x), CLKOUTD=CLKOUT/2=27MHz (sys, no CLKDIV needed).
         # NB: no DHCEN gate on sys2x (the litex-boards CRG gates it with a
         # `stop` tied to the PHY init sequencer). One DHCEN is one of only
         # 24 such BELs on GW2A-18 and the DDR output path already needs
         # them all (see docs/liteDRAM.md §6); sys2x runs free, the DDRDLLA
         # freeze sequencing does not need a fabric clock gate at 54MHz.
-        self.comb += self.cd_sys2x.clk.eq(self.cd_sys2x_i.clk)
+        pll_clkout  = Signal() # 54 MHz -> sys2x / sys2x_i
+        pll_clkoutd = Signal() # 27 MHz -> sys
+        pll_locked  = Signal()
+        pll_reset   = Signal()
+        self.comb += pll_reset.eq(~por_done)
         self.specials += [
-            Instance("CLKDIV",
-                p_DIV_MODE = "2",
-                i_CALIB    = 0,
-                i_HCLKIN   = self.cd_sys2x.clk,
-                i_RESETN   = ~self.reset,
-                o_CLKOUT   = self.cd_sys.clk),
+            Instance("rPLL",
+                p_CLKFB_SEL      = "internal",
+                p_CLKOUTD3_SRC   = "CLKOUT",
+                p_CLKOUTD_BYPASS = "false",
+                p_CLKOUTD_SRC    = "CLKOUT",
+                p_CLKOUTP_BYPASS = "false",
+                p_CLKOUT_BYPASS  = "false",
+                p_CLKOUT_DLY_STEP  = 0,
+                p_CLKOUT_FT_DIR    = 1,
+                p_CLKOUTP_DLY_STEP = 0,
+                p_CLKOUTP_FT_DIR   = 1,
+                p_DEVICE         = devicename,
+                p_DUTYDA_SEL     = "1000",
+                p_DYN_DA_EN      = "false",
+                p_DYN_FBDIV_SEL  = "false",
+                p_DYN_IDIV_SEL   = "false",
+                p_DYN_ODIV_SEL   = "false",
+                p_DYN_SDIV_SEL   = 2,
+                p_FBDIV_SEL      = 1,
+                p_FCLKIN         = "27",
+                p_IDIV_SEL       = 0,
+                p_ODIV_SEL       = 16,
+                p_PSDA_SEL       = "0100",
+                i_CLKIN   = clk27,
+                i_CLKFB   = 0,
+                i_RESET   = pll_reset,
+                i_RESET_P = 0,
+                i_FBDSEL  = 0,
+                i_IDSEL   = 0,
+                i_ODSEL   = 0,
+                i_PSDA    = 0,
+                i_DUTYDA  = 0,
+                i_FDLY    = 0,
+                o_CLKOUT  = pll_clkout,
+                o_CLKOUTD = pll_clkoutd,
+                o_LOCK    = pll_locked,
+            ),
         ]
+        self.comb += self.cd_sys2x_i.clk.eq(pll_clkout)
+        self.comb += self.cd_sys.clk.eq(pll_clkoutd)
+        self.comb += self.cd_sys2x.clk.eq(self.cd_sys2x_i.clk)
 
         # Init clock domain (free-running clk27, reset by PLL reset).
         self.comb += self.cd_init.clk.eq(clk27)
-        self.comb += self.cd_init.rst.eq(pll.reset)
+        self.comb += self.cd_init.rst.eq(pll_reset)
 
-        self.comb += self.locked.eq(pll.locked)
-        # Reset release synchronizer (plain flops: verilog.convert runs
-        # without a LiteX platform, where AsyncResetSynchronizer cannot
-        # lower). Sources are quasi-static (POR counter, PLL lock), so a
-        # synchronous 2-stage release is equivalent in practice.
+        self.comb += self.locked.eq(pll_locked)
+        # Reset release synchronizers. CRITICAL: these flops must NOT live
+        # in the domain whose reset they drive. Migen `sync.X` wraps every
+        # statement with `if (cd_X.rst) regs <= init`, so a release chain
+        # clocked in its own target domain self-holds at init=1 forever
+        # (output=1 asserts the domain reset that forces output=1: the
+        # DRAM silence, heartbeat sys_rst=1/step=0 with pll_locked=1).
+        # Fix: run the chains in release domains whose reset is POR-derived
+        # (independent of the chain outputs); only the released level
+        # drives the real domain resets.
+        self.cd_sys_rel = ClockDomain()
+        self.cd_sys2x_rel = ClockDomain()
+        self.comb += [
+            self.cd_sys_rel.clk.eq(self.cd_sys.clk),
+            self.cd_sys_rel.rst.eq(~por_done),
+            self.cd_sys2x_rel.clk.eq(self.cd_sys2x_i.clk),
+            self.cd_sys2x_rel.rst.eq(~por_done),
+        ]
         _rst0 = Signal(reset=1)
         _rst1 = Signal(reset=1)
-        self.sync.sys += [
-            _rst0.eq(~pll.locked | self.rst | self.reset),
+        self.sys_rst0 = _rst0 # debug readout (heartbeat)
+        self.sync.sys_rel += [
+            _rst0.eq(~pll_locked | self.rst | self.reset),
             _rst1.eq(_rst0),
         ]
         self.comb += self.cd_sys.rst.eq(_rst1)
-        # Fast-domain reset (self-starting from bitstream init values).
+        # Free-running sys tick (debug: proves sys_clk toggles on silicon).
+        self.sys_tick = Signal(24)
+        self.sync.sys += self.sys_tick.eq(self.sys_tick + 1)
+        # Fast-domain release (same self-hold avoidance as above).
         _rst2x_0 = Signal(reset=1)
         _rst2x_1 = Signal(reset=1)
-        self.sync.sys2x_i += [
-            _rst2x_0.eq(~pll.locked | self.reset),
+        self.sys2x_rst1 = _rst2x_1 # debug readout (heartbeat)
+        self.sync.sys2x_rel += [
+            _rst2x_0.eq(~pll_locked | self.reset),
             _rst2x_1.eq(_rst2x_0),
         ]
         self.comb += self.cd_sys2x_i.rst.eq(_rst2x_1)
@@ -244,6 +299,10 @@ class DramInitSequencer(Module):
         max_wait = max(s[4] for s in steps) + 1
         wait = Signal(max=max_wait)
         idx  = Signal(max=len(steps) + 1)
+        # Debug: expose the step counter (read out via heartbeat, see
+        # DramSoCTop). Alias, no extra logic.
+        self.step_idx = idx
+        print("init steps: %d (max_wait %d)" % (len(steps), max_wait))
 
         self.comb += dfii.ext_dfi_sel.eq(~self.init_done)
 
@@ -334,6 +393,11 @@ class LiteDramGowinTop(Module):
             device=device, devicename=devicename)
         self.comb += [
             crg.rst.eq(~self.reset_n),
+            # crg.reset is an external CRG reset input we don't use: tie
+            # explicitly. An undriven net here feeds CLKDIV RESETN and the
+            # reset synchronizers; never leave it floating for the vendor
+            # optimizer (cf. syn_keep saga).
+            crg.reset.eq(0),
             self.pll_locked.eq(crg.locked),
         ]
         self.clock_domains.cd_sys     = crg.cd_sys
@@ -341,6 +405,10 @@ class LiteDramGowinTop(Module):
         self.clock_domains.cd_sys2x_i = crg.cd_sys2x_i
         self.clock_domains.cd_init    = crg.cd_init
         self.clock_domains.cd_por     = crg.cd_por
+        # Reset-release domains (internal; MUST be registered or
+        # verilog.convert turns their clk/rst into top ports).
+        self.clock_domains.cd_sys_rel = crg.cd_sys_rel
+        self.clock_domains.cd_sys2x_rel = crg.cd_sys2x_rel
 
         # SDRAM module + PHY ---------------------------------------------------
         module_cls = SDRAM_MODULES[config["sdram_module"]]
@@ -370,6 +438,37 @@ class LiteDramGowinTop(Module):
         )
         self.comb += self.init_done.eq(initseq.init_done)
 
+        # Debug status byte for the UART heartbeat (DramSoCTop):
+        # bit7 = sys reset (cd_sys.rst), bit6/5 = 0, bits[4:0] = step idx.
+        # Tells on silicon whether the init FSM advances or is held/frozen.
+        # NB: Migen Cat is LSB-first (opposite of Spinal ##).
+        self.dbg_step = Signal(8)
+        step_w = len(initseq.step_idx)
+        assert step_w <= 5, "init step counter exceeds debug field"
+        self.comb += self.dbg_step.eq(Cat(
+            initseq.step_idx,
+            C(0, 5 - step_w),
+            C(0, 1),
+            C(0, 1),
+            crg.cd_sys.rst,
+        ))
+        # Reset-chain readout: bit7 = sys free-tick (toggles iff sys_clk
+        # runs), bit6 = por_done, bit5 = sys reset request (_rst0),
+        # bit4 = crg.reset, bit3 = sys2x reset (_rst2x_1, proves sys2x_i
+        # toggles), bits[2:1] = 0, bit0 = reset_n (board pin).
+        # _rst0=0 + sys_rst=1  =>  sys_clk dead (sync chain frozen).
+        # _rst0=1              =>  a reset source is asserted (see bits).
+        self.dbg_rst = Signal(8)
+        self.comb += self.dbg_rst.eq(Cat(
+            self.reset_n,
+            C(0, 2),
+            crg.sys2x_rst1,
+            crg.reset,
+            crg.sys_rst0,
+            crg.por_done,
+            crg.sys_tick[23],
+        ))
+
         # AXI slave port (SpinalHDL DdrAdapter side, 64-bit) --------------------
         port = core.crossbar.get_port(data_width=64)
         axi_address_width = port.address_width + log2_int(64//8)
@@ -384,7 +483,8 @@ class LiteDramGowinTop(Module):
 
     def ios(self):
         # verilog.convert only accepts leaf Signals (no Records).
-        ios = [self.clk27, self.reset_n, self.init_done, self.pll_locked]
+        ios = [self.clk27, self.reset_n, self.init_done, self.pll_locked,
+               self.dbg_step, self.dbg_rst]
         for channel in (self.axi.aw, self.axi.w, self.axi.b, self.axi.ar, self.axi.r):
             ios += channel.flatten()
         ios += self.pads.ios()

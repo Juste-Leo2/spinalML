@@ -30,6 +30,10 @@ class LiteDramCore(
     val reset_n    = in Bool()
     val init_done  = out Bool()
     val pll_locked = out Bool()
+    /** Debug: bit7 = sys reset, bits[6:0] = init step idx (heartbeat). */
+    val dbg_step   = out Bits(8 bits)
+    /** Debug: reset chain + sys tick (heartbeat byte 2). */
+    val dbg_rst    = out Bits(8 bits)
 
     // DDR3 pads (Tang Primer 20K footprint, SSTL15/D, see boards pinout).
     val a       = out Bits(14 bits)

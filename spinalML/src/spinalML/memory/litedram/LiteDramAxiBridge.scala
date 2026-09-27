@@ -36,6 +36,10 @@ class LiteDramAxiBridge(
     /** Core status (gate SoC reset on `init_done`, see `DramSoCTop`). */
     val init_done  = out Bool()
     val pll_locked = out Bool()
+    /** Debug status byte from the core (init step idx + sys reset). */
+    val dbg_step   = out Bits(8 bits)
+    /** Debug reset-chain byte from the core (heartbeat byte 2). */
+    val dbg_rst    = out Bits(8 bits)
     /** DDR3 pads to the top level (board `.cst`). */
     val a         = out Bits(14 bits)
     val ba        = out Bits(3 bits)
@@ -62,6 +66,8 @@ class LiteDramAxiBridge(
   core.io.reset_n := io.reset_n
   io.init_done := core.io.init_done
   io.pll_locked := core.io.pll_locked
+  io.dbg_step := core.io.dbg_step
+  io.dbg_rst := core.io.dbg_rst
   io.a := core.io.a
   io.ba := core.io.ba
   io.ras_n := core.io.ras_n
