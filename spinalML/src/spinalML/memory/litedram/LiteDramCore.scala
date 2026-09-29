@@ -20,6 +20,30 @@ import spinal.core._
  * pads on the other. Everything between (PLL, PHY, controller, JEDEC
  * init) is inside the generated core.
  */
+object LiteDramCore {
+  /** Absolute path to the generated core (sim-safe: Mill tests fork with
+    * a different CWD than the project root, so walk up to find the repo).
+    */
+  def corePath: String = {
+    val rel = "dram/out/litedram_core.v"
+    sys.env.get("SPINALML_ROOT").map(r => new java.io.File(r, rel))
+      .filter(_.isFile).map(_.getAbsolutePath)
+      .getOrElse {
+        var dir: java.io.File = new java.io.File(sys.props("user.dir")).getAbsoluteFile
+        var found: Option[String] = None
+        var n = 0
+        while (found.isEmpty && dir != null && n < 6) {
+          val f = new java.io.File(dir, rel)
+          if (f.isFile) found = Some(f.getAbsolutePath)
+          dir = dir.getParentFile
+          n += 1
+        }
+        found.getOrElse(throw new RuntimeException(
+          s"LiteDRAM core not found (looked for $rel up from ${sys.props("user.dir")}); run dram-gen first"))
+      }
+  }
+}
+
 class LiteDramCore(
   axiAddrWidth: Int = 27,
   axiDataWidth: Int = 64,
@@ -123,5 +147,5 @@ class LiteDramCore(
   setDefinitionName("litedram_core")
   // Resolved from the project root when elaborating through Mill/CLI.
   // The file is generated (`dram-gen`), never committed.
-  addRTLPath("dram/out/litedram_core.v")
+  addRTLPath(LiteDramCore.corePath)
 }
