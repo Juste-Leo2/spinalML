@@ -210,6 +210,131 @@ object GowinSimPrep {
     f.getAbsolutePath
   }
 
+  // DQS read-capture monitor (stage D), v2: ASYNC change-detect on the
+  // Gowin DQS primitive internals (exact $time per transition — no
+  // sampling alias): RPOINT + WPOINT + RVALID + READ per lane, plus the
+  // DFI rddata_valid strobe. Gives the EXACT R timeline (start lag,
+  // dwell, rate, orbit, rest) needed to place the sample tap.
+  // Bounded: max 3000 lines.
+  val dqsMon: String =
+    """bind SimTopD dqs_mon_probe probe_dqs();
+      |module dqs_mon_probe;
+      |  reg [11:0] n;
+      |  reg done;
+      |  initial begin n = 12'd0; done = 1'b0; end
+      |  task automatic emit;
+      |    begin
+      |      if (core.init_done && !done) begin
+      |        $display("DQSMON t=%0t re=%b wpt0=%d rpt0=%d rv0=%b wpt1=%d rpt1=%d rv1=%b rdv=%b",
+      |          $time, core.gw2ddrphy_dqs_re,
+      |          core.DQS.WPOINT, core.DQS.RPOINT, core.DQS.RVALID,
+      |          core.DQS_1.WPOINT, core.DQS_1.RPOINT, core.DQS_1.RVALID,
+      |          core.gw2ddrphy_dfi_p0_rddata_valid);
+      |        n <= n + 12'd1;
+      |        if (n >= 12'd3000) done <= 1'b1;
+      |      end
+      |    end
+      |  endtask
+      |  always @(core.DQS.WPOINT) emit();
+      |  always @(core.DQS.RPOINT) emit();
+      |  always @(core.DQS.RVALID) emit();
+      |  always @(core.DQS_1.WPOINT) emit();
+      |  always @(core.DQS_1.RPOINT) emit();
+      |  always @(core.DQS_1.RVALID) emit();
+      |  always @(core.gw2ddrphy_dqs_re) emit();
+      |  always @(core.gw2ddrphy_dfi_p0_rddata_valid) emit();
+      |endmodule
+      |""".stripMargin
+
+  def stageDqsMon(simDir: String): String = {
+    val f = new java.io.File(simDir, "dqs_mon.v")
+    // Always rewrite (same reason as stageDbgMon).
+    val w = new java.io.PrintWriter(f)
+    try w.write(dqsMon) finally w.close()
+    f.getAbsolutePath
+  }
+
+  // DFI read-word monitor (stage D): prints the DFI rddata phases
+  // (64 bits each; this halfrate PHY has p0/p1 only) + rddata_valid
+  // strobes on ANY change after init_done (bounded: 3000 lines). Shows
+  // exactly what the PHY presents to the controller each cycle during
+  // the RPOINT transit + settle, killing all speculation about
+  // pipeline depth vs sample time.
+  val dfiMon: String =
+    """bind SimTopD dfi_mon_probe probe_dfi();
+      |module dfi_mon_probe;
+      |  wire [63:0] p0 = core.gw2ddrphy_dfi_p0_rddata;
+      |  wire [63:0] p1 = core.gw2ddrphy_dfi_p1_rddata;
+      |  wire v0 = core.gw2ddrphy_dfi_p0_rddata_valid;
+      |  wire v1 = core.gw2ddrphy_dfi_p1_rddata_valid;
+      |  reg [129:0] prev;
+      |  reg [11:0] n;
+      |  reg init;
+      |  reg done;
+      |  wire [129:0] cur;
+      |  assign cur = {p0, p1, v0, v1};
+      |  initial begin prev = 130'd0; n = 12'd0; init = 1'b0; done = 1'b0; end
+      |  always @(negedge core.sys2x_clk) begin
+      |    if (core.init_done && !done) begin
+      |      if (!init) begin init <= 1'b1; prev <= cur; end
+      |      else if (cur != prev) begin
+      |        $display("DFIMON t=%0t p0=%h p1=%h v=%b%b", $time, p0, p1, v0, v1);
+      |        n <= n + 12'd1;
+      |        prev <= cur;
+      |        if (n >= 12'd3000) done <= 1'b1;
+      |      end
+      |    end
+      |  end
+      |endmodule
+      |""".stripMargin
+
+  def stageDfiMon(simDir: String): String = {
+    val f = new java.io.File(simDir, "dfi_mon.v")
+    // Always rewrite (same reason as stageDbgMon).
+    val w = new java.io.PrintWriter(f)
+    try w.write(dfiMon) finally w.close()
+    f.getAbsolutePath
+  }
+
+  // SIM-ONLY core copy with the PHY read path re-phased for the
+  // zero-delay prim_sim models (see DQSMON findings).
+  // - dqs_re (DQS primitive READ = capture window): LiteX rdtap
+  //   (delayline2|3) is tuned for silicon DLL/IO delays; in sim the
+  //   window opens ~1 beat late (beat0 missed). Moving ONLY dqs_re does
+  //   not alter the controller contract (same delay line, same depth).
+  // - rddata_valid tap (DFI sample strobe): stock = delayline11. The
+  //   RPOINT transit (0>1>3>2>6, ~+3.5..+5 sys after rddata_en) is over
+  //   ~6 sys before the stock sample, so the settled pipeline shows a
+  //   single 2-beat slot broadcast ([x,y,x,y]). Sampling earlier walks
+  //   the sample window back across the transit; at the right tap the
+  //   4-FCLK window covers 4 filled slots = full 8-beat word.
+  // The committed dram/out/litedram_core.v is NEVER modified (silicon
+  // flow untouched); the patched copy is rewritten per run into simDir.
+  def stageCoreSim(simDir: String, dqsTaps: Seq[Int], rdvTap: Int): String = {
+    val src = scala.io.Source.fromFile(LiteDramCore.corePath)
+    val text = try src.mkString finally src.close()
+    val dqsFrom = "assign gw2ddrphy_dqs_re = " +
+      "(gw2ddrphy_rddata_en_tappeddelayline2 | gw2ddrphy_rddata_en_tappeddelayline3);"
+    assert(text.contains(dqsFrom),
+      "dqs_re pattern not found in generated core (regenerate via dram-gen?)")
+    val dqsExpr = dqsTaps.map(t => s"gw2ddrphy_rddata_en_tappeddelayline$t").mkString(" | ")
+    var patched = text.replace(dqsFrom,
+      s"assign gw2ddrphy_dqs_re = ($dqsExpr); // SIM-ONLY re-phase (stageCoreSim)")
+    val rdvFrom0 = "assign gw2ddrphy_dfi_p0_rddata_valid = gw2ddrphy_rddata_en_tappeddelayline11;"
+    val rdvFrom1 = "assign gw2ddrphy_dfi_p1_rddata_valid = gw2ddrphy_rddata_en_tappeddelayline11;"
+    assert(patched.contains(rdvFrom0) && patched.contains(rdvFrom1),
+      "rddata_valid pattern not found in generated core")
+    patched = patched
+      .replace(rdvFrom0,
+        s"assign gw2ddrphy_dfi_p0_rddata_valid = gw2ddrphy_rddata_en_tappeddelayline$rdvTap; // SIM-ONLY (stageCoreSim)")
+      .replace(rdvFrom1,
+        s"assign gw2ddrphy_dfi_p1_rddata_valid = gw2ddrphy_rddata_en_tappeddelayline$rdvTap; // SIM-ONLY (stageCoreSim)")
+    val f = new java.io.File(simDir, "litedram_core_sim.v")
+    val w = new java.io.PrintWriter(f)
+    try w.write(patched) finally w.close()
+    f.getAbsolutePath
+  }
+
   // Homegrown DFI responder (replaces the Micron model for fast debug).
   // Drop-in on the DDR pads: decodes ACT/WR/RD on rising ck, captures WR
   // data framed on dqs_p[0] edges into a 16-entry CAM, replays on RD with

@@ -62,15 +62,26 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
       val rValid = out Bool()
       val rData = out Bits(64 bits)
     }
-    val core = new LiteDramCore()
-    val (primNoRpll, rpllStub) = GowinSimPrep.prepare()
     val simDir = new java.io.File(new java.io.File(LiteDramCore.corePath).getParent, "sim")
     simDir.mkdirs()
+    // SIM-ONLY read-path re-phase (see stageCoreSim): 2|3 + sample at
+    // 9 (one sys earlier than the [2,3]/[4,5] state: expect the sample
+    // to cover chase steps {1,3} = beats [0..3] on read1).
+    // Reset right after constructing so other suites are safe.
+    LiteDramCore.rtlOverride =
+      Some(GowinSimPrep.stageCoreSim(simDir.getAbsolutePath, Seq(2, 3), 9))
+    val core = new LiteDramCore()
+    LiteDramCore.rtlOverride = None
+    val (primNoRpll, rpllStub) = GowinSimPrep.prepare()
     core.addRTLPath(primNoRpll)
     core.addRTLPath(rpllStub)
     core.addRTLPath(GowinSimPrep.stageResp(simDir.getAbsolutePath))
     val liteDbgMon = GowinSimPrep.stageDbgMon(simDir.getAbsolutePath)
     core.addRTLPath(liteDbgMon)
+    val dqsMon = GowinSimPrep.stageDqsMon(simDir.getAbsolutePath)
+    core.addRTLPath(dqsMon)
+    val dfiMon = GowinSimPrep.stageDfiMon(simDir.getAbsolutePath)
+    core.addRTLPath(dfiMon)
     core.mapClockDomain(clock = core.io.clk27)
     core.io.reset_n := io.resetN
     io.initDone := core.io.init_done
@@ -257,14 +268,17 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
         rDataVal
       }
 
-      // One 2-beat burst: words 0x0+0x1 = one 128-bit DRAM word, merged
-      // by the converter (no PRE/ACT/auto_precharge in the way).
+      // Single 2-beat burst (proven write path; back-to-back bursts hit
+      // a posted-write/data-drain ordering issue, parked separately).
       val d1 = BigInt("0123456789ABCDEF", 16)
       val d2 = BigInt("FEDCBA9876543210", 16)
       axiWriteBurst(BigInt(0x0), Seq(d1, d2))
+      // Window map: read BOTH halves before asserting (one run),
+      // back-to-back (R settled at sample; spacing caused pin-salad).
       val got0 = axiRead(BigInt(0x0))
-      assert(got0 == d1, f"mismatch @word 0: got $got0%016X exp $d1%016X")
       val got1 = axiRead(BigInt(0x1))
+      println(f"WINDOWMAP got0=$got0%016X exp=$d1%016X got1=$got1%016X exp=$d2%016X")
+      assert(got0 == d1, f"mismatch @word 0: got $got0%016X exp $d1%016X")
       assert(got1 == d2, f"mismatch @word 1: got $got1%016X exp $d2%016X")
     }
   }

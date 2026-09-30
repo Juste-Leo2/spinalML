@@ -42,6 +42,14 @@ object LiteDramCore {
           s"LiteDRAM core not found (looked for $rel up from ${sys.props("user.dir")}); run dram-gen first"))
       }
   }
+
+  /** Test-only RTL override (sim staging): when set, the BlackBox binds
+    * this file instead of the generated core (e.g. a simDir copy with
+    * SIM-ONLY phasing tweaks). Default None = generated core (silicon
+    * flow untouched). Always reset to None after constructing the test
+    * top so other suites are unaffected.
+    */
+  var rtlOverride: Option[String] = None
 }
 
 class LiteDramCore(
@@ -147,5 +155,5 @@ class LiteDramCore(
   setDefinitionName("litedram_core")
   // Resolved from the project root when elaborating through Mill/CLI.
   // The file is generated (`dram-gen`), never committed.
-  addRTLPath(LiteDramCore.corePath)
+  addRTLPath(LiteDramCore.rtlOverride.getOrElse(LiteDramCore.corePath))
 }
