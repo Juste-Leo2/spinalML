@@ -46,9 +46,12 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
       val dbgRst = out(Bits(8 bits))
       val awValid = in Bool()
       val awAddr = in UInt(27 bits)
+      val awLen = in UInt(8 bits)
       val wValid = in Bool()
       val wData = in Bits(64 bits)
       val wStrb = in Bits(8 bits)
+      val wFirst = in Bool()
+      val wLast = in Bool()
       val arValid = in Bool()
       val arAddr = in UInt(27 bits)
       val awReady = out Bool()
@@ -81,7 +84,7 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
     core.io.aw_first := True
     core.io.aw_last := True
     core.io.aw_payload_burst := 1
-    core.io.aw_payload_len := 0
+    core.io.aw_payload_len := io.awLen
     core.io.aw_payload_size := 3
     core.io.aw_payload_lock := False
     core.io.aw_payload_prot := 0
@@ -94,8 +97,8 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
     core.io.w_valid := io.wValid
     core.io.w_payload_data := io.wData
     core.io.w_payload_strb := io.wStrb
-    core.io.w_first := True
-    core.io.w_last := True
+    core.io.w_first := io.wFirst
+    core.io.w_last := io.wLast
     core.io.w_param_id := 0
     core.io.w_param_dest := False
     core.io.w_param_user := False
@@ -162,7 +165,7 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
       .addSimulatorFlag("-Wno-SELRANGE")
       .addSimulatorFlag("-Wno-CASEX")
     cfg.compile(new SimTopD).doSim { dut =>
-      dut.clockDomain.forkStimulus(period = 37037)
+      dut.clockDomain.forkStimulus(period = 18519) // 54 MHz into the stub (sys2x=54/sys=27 exact)
       val cd = dut.clockDomain
 
       dut.io.awValid #= false
@@ -187,53 +190,82 @@ class LiteDramCoreDfiTest extends AnyFunSuite {
       assert(dut.io.initDone.toBoolean,
         f"init_done stuck 0 (dbg_step=0x${dut.io.dbgStep.toBigInt}%02X)")
 
-      def axiWrite(wordAddr: BigInt, data: BigInt): Unit = {
+      // SoC-like INCR burst (mimics DMAWriter): one address phase for N
+      // beats; last=1 ONLY on the final beat so the converter merges
+      // consecutive half-words into full 128-bit words instead of
+      // committing each half zero-padded (which clobbers).
+      // CRITICAL: wValid stays HIGH across beats (no gaps!) with data
+      // changing after each accept. Dropping wValid between beats inserts
+      // idle cycles that defeat the converter merge (each beat commits
+      // separately, zero-padded, clobbering its pair).
+      def axiWriteBurst(wordAddr: BigInt, datas: Seq[BigInt]): Unit = {
         dut.io.awAddr #= wordAddr
-        dut.io.wData #= data
-        dut.io.wStrb #= 0xFF
+        dut.io.awLen #= datas.size - 1
         dut.io.awValid #= true
-        dut.io.wValid #= true
-        // BOUNDED handshakes (see stage B): never waitSamplingWhere
-        // unbounded, never spin 200k roundtrips (~15min on this stack).
-        var wt = 0
-        while (!dut.io.wReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.wReady.toBoolean, f"w_ready timeout @word $wordAddr%x")
-        dut.io.wValid #= false
-        wt = 0
-        while (!dut.io.awReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.awReady.toBoolean, f"aw_ready timeout @word $wordAddr%x")
+        // 2 TB cycles = 37ns = 1 sys period: the window always contains
+        // exactly one sys edge (exactly-once), any phase.
+        cd.waitSampling(2)
         dut.io.awValid #= false
-        var n = 0
-        while (!dut.io.bValid.toBoolean && n < 30000) { cd.waitSampling(1); n += 1 }
-        assert(dut.io.bValid.toBoolean, f"write b_valid timeout @word $wordAddr%x")
-        assert(dut.io.bResp.toBigInt == 0, "write RESP not OKAY")
+        dut.io.wValid #= true
+        for ((d, i) <- datas.zipWithIndex) {
+          dut.io.wData #= d
+          dut.io.wStrb #= 0xFF
+          dut.io.wFirst #= (i == 0)
+          dut.io.wLast #= (i == datas.size - 1)
+          // Same 2-cycle minimum per beat (window ~= 1 sys period),
+          // valid held across beats (no gaps: converter merge needs it).
+          var wtw = 0
+          var wacc = false
+          while ((wtw < 2 || !wacc) && wtw < 30000) {
+            cd.waitSampling(1); wtw += 1
+            if (dut.io.wReady.toBoolean) wacc = true
+          }
+          assert(wacc, f"w_ready timeout @word $wordAddr%x beat $i")
+        }
+        dut.io.wValid #= false
+        var wt = 1
+        var bSeen = false
+        var bRespVal = BigInt(-1)
+        while (wt < 30000 && !bSeen) {
+          cd.waitSampling(1); wt += 1
+          if (dut.io.bValid.toBoolean) { bSeen = true; bRespVal = dut.io.bResp.toBigInt }
+        }
+        assert(bSeen, f"write b_valid timeout @word $wordAddr%x")
+        assert(bRespVal == 0, f"write RESP not OKAY (got $bRespVal)")
         cd.waitSampling(5)
+        // Reopen check (see stage B): pipe must be free again.
+        wt = 0
+        while (!dut.io.awReady.toBoolean && wt < 2000) { cd.waitSampling(1); wt += 1 }
+        assert(dut.io.awReady.toBoolean, f"aw never reopened @word $wordAddr%x (burst2beat stuck?)")
       }
 
       def axiRead(wordAddr: BigInt): BigInt = {
         dut.io.arAddr #= wordAddr
         dut.io.arValid #= true
-        var wt = 0
-        while (!dut.io.arReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.arReady.toBoolean, f"ar_ready timeout @word $wordAddr%x")
+        // Fire-and-forget (see axiWriteBurst): 2-cycle window.
+        cd.waitSampling(2)
         dut.io.arValid #= false
-        var n = 0
-        while (!dut.io.rValid.toBoolean && n < 30000) { cd.waitSampling(1); n += 1 }
-        assert(dut.io.rValid.toBoolean, f"read r_valid timeout @word $wordAddr%x (PHY read hang?)")
-        val d = dut.io.rData.toBigInt
+        var n = 1
+        var rSeen = false
+        var rDataVal = BigInt(0)
+        while (n < 30000 && !rSeen) {
+          cd.waitSampling(1); n += 1
+          if (dut.io.rValid.toBoolean) { rSeen = true; rDataVal = dut.io.rData.toBigInt }
+        }
+        assert(rSeen, f"read r_valid timeout @word $wordAddr%x (PHY read hang?)")
         cd.waitSampling(5)
-        d
+        rDataVal
       }
 
-      val vectors = Seq(
-        (BigInt(0x0), BigInt("0123456789ABCDEF", 16)),
-        (BigInt(0x10000), BigInt("DEADBEEFCAFEBABE", 16))
-      )
-      for ((wa, data) <- vectors) axiWrite(wa, data)
-      for ((wa, exp) <- vectors) {
-        val got = axiRead(wa)
-        assert(got == exp, f"mismatch @word $wa%x: got $got%016X exp $exp%016X")
-      }
+      // One 2-beat burst: words 0x0+0x1 = one 128-bit DRAM word, merged
+      // by the converter (no PRE/ACT/auto_precharge in the way).
+      val d1 = BigInt("0123456789ABCDEF", 16)
+      val d2 = BigInt("FEDCBA9876543210", 16)
+      axiWriteBurst(BigInt(0x0), Seq(d1, d2))
+      val got0 = axiRead(BigInt(0x0))
+      assert(got0 == d1, f"mismatch @word 0: got $got0%016X exp $d1%016X")
+      val got1 = axiRead(BigInt(0x1))
+      assert(got1 == d2, f"mismatch @word 1: got $got1%016X exp $d2%016X")
     }
   }
 }

@@ -29,14 +29,15 @@ import spinal.core.sim._
  */
 object GowinSimPrep {
   // Functional rPLL stub for Verilator (ideal clocks, LOCK after 256 ref
-  // cycles; phase relationship sys/sys2x preserved for the 1:2 DFI).
-  // CLKOUTD (sys) MUST toggle on both CLKIN edges: sys = 27 MHz like the
-  // TB clock. A posedge-only toggle gives 13.5 MHz, and then a 1-cycle
-  // TB valid pulse can fall between two sys edges deterministically
-  // (aw/w ready are statically 1 with empty FIFOs, so the accept wait
-  // passes vacuously while nothing is captured). Same nominal rate on
-  // both sides => a 1-cycle pulse spans exactly one sys period =>
-  // exactly-once capture, any phase.
+  // cycles; sys/sys2x 1:2 ratio exact, phase-locked).
+  // IMPORTANT: this stub expects 54 MHz on CLKIN (the TB drives io.clk27
+  // at 54 MHz via forkStimulus(18519), NOT the board 27 MHz). Division is
+  // exact: sys2x = CLKIN toggled on both edges (54 MHz), sys = CLKIN
+  // toggled on rising edges only (27 MHz). A single-rate toggle on both
+  // edges yields F/1, NOT 2F (each input period holds 2 toggles = 1 output
+  // period) -- a previous version ran sys2x at 27 MHz (1:1), silently
+  // halving every DFI/DQS rate (measured: 37 ns probe spacing). The real
+  // silicon rPLL (27 MHz board clock, wizard dividers) is unaffected.
   val rpllStub: String =
     """module rPLL (
       |  output reg CLKOUT, output reg CLKOUTP, output reg CLKOUTD, output reg CLKOUTD3,
@@ -64,10 +65,15 @@ object GowinSimPrep {
       |      if (lockCnt > 255) LOCK <= 1;
       |    end
       |  end
-      |  // sys2x (54 MHz) and sys (27 MHz): toggle on both edges of 27 MHz in.
+      |  // sys2x = 54 MHz (CLKIN at 54 MHz toggled both edges = 54 MHz).
       |  always @(posedge CLKIN or negedge CLKIN or posedge RESET) begin
-      |    if (RESET) begin CLKOUT <= 0; CLKOUTD <= 0; end
-      |    else begin CLKOUT <= ~CLKOUT; CLKOUTD <= ~CLKOUTD; end
+      |    if (RESET) CLKOUT <= 0;
+      |    else CLKOUT <= ~CLKOUT;
+      |  end
+      |  // sys = 27 MHz (rising edges only = divide by 2).
+      |  always @(posedge CLKIN or posedge RESET) begin
+      |    if (RESET) CLKOUTD <= 0;
+      |    else CLKOUTD <= ~CLKOUTD;
       |  end
       |endmodule
       |""".stripMargin
@@ -145,38 +151,52 @@ object GowinSimPrep {
   /** Hierarchical $display monitor, bound into SimTopB (sibling scope).
    * Verilator cannot resolve absolute TOP.* paths from a plain module, but
    * `bind` places the probe inside SimTopB where `core.*` resolves.
-   * v6: AXI2Native-W decision chain (30 bits):
-   * {init, aw_v, aw_r, wsrc_v, lvl[4:0], can_wr, req, grant,
+   * v12: v11 signals, but sampled EVERY sys2x edge (54 MHz: no sampling
+   * blindness for 1-cycle pulses/glitches) inside ONE bounded window
+   * (init_done + 15000 edges ~= 278us: burst + reads). ~1 MB log.
+   * Layout (51 bits):
+   * {init, aw_v, aw_r, wsrc_v, lvl[4:0], can_wr,
    *  npc_v, npc_r, npc_last, npc_we, pc_v, pc_r,
-   *  rr0, reqv0, bmc0, wsnk_rdy, cs, ras, cas, we, bvalid,
-   *  wsend, npw_v, npw_r} */
+   *  conv_st[1:0], rr0, reqv0, awrdy, wdatav, wdata[15:0],
+   *  bm_st[2:0], bm_cv, bm_cr, bm_rr,
+   *  cs, ras, cas, we, bvalid, npw_v, npw_r} */
   val liteDbg: String =
     """bind SimTopB lite_dbg_probe probe_i();
+      |bind SimTopD lite_dbg_probe probe_d();
       |module lite_dbg_probe;
-      |  reg [29:0] prev;
-      |  wire [29:0] cur;
+      |  wire [50:0] cur;
       |  assign cur = {core.init_done,
       |    core.write_aw_valid, core.write_aw_ready,
       |    core.write_w_buffer_source_valid,
       |    core.write_w_buffer_level1,
       |    core.write_can_write,
-      |    core.write_cmd_request, core.write_cmd_grant,
       |    core.new_port_cmd_valid, core.new_port_cmd_ready,
       |    core.new_port_cmd_last, core.new_port_cmd_payload_we,
       |    core.port_cmd_valid, core.port_cmd_ready,
+      |    core.litedramcore_state,
       |    core.litedramcore_roundrobin0_request,
-      |    core.core_bankmachine0_req_valid, core.core_bankmachine0_cmd_valid,
-      |    core.write_w_buffer_sink_ready,
+      |    core.core_bankmachine0_req_valid,
+      |    core.write_aw_ready,
+      |    core.litedramnativeportconverter_wdata_buffer_source_source_valid,
+      |    core.litedramnativeportconverter_wdata_buffer_source_source_payload_data[15:0],
+      |    core.litedramcore_bankmachine0_state,
+      |    core.core_bankmachine0_cmd_valid, core.core_bankmachine0_cmd_ready,
+      |    core.core_bankmachine0_refresh_req,
       |    core.gw2ddrphy_dfi_p0_cs_n, core.gw2ddrphy_dfi_p0_ras_n,
       |    core.gw2ddrphy_dfi_p0_cas_n, core.gw2ddrphy_dfi_p0_we_n,
       |    core.b_valid,
-      |    core.write_w_buffer_send,
       |    core.new_port_wdata_valid, core.new_port_wdata_ready};
-      |  initial prev = 30'd0;
-      |  always @(posedge core.sys_clk) begin
-      |    if (cur != prev)
+      |  reg en;
+      |  reg done;
+      |  reg [14:0] cnt;
+      |  initial begin en = 1'b0; done = 1'b0; cnt = 15'd0; end
+      |  always @(posedge core.sys2x_clk) begin
+      |    if (!en && !done && core.init_done) begin en <= 1'b1; cnt <= 15'd0; end
+      |    else if (en) begin
       |      $display("LITEDBG t=%0t %b", $time, cur);
-      |    prev <= cur;
+      |      cnt <= cnt + 15'd1;
+      |      if (cnt >= 15'd15000) begin en <= 1'b0; done <= 1'b1; end
+      |    end
       |  end
       |endmodule
       |""".stripMargin
@@ -206,9 +226,13 @@ object GowinSimPrep {
       #  inout [15:0] dq, inout [1:0] dqs_p, input odt
       #);
       #  parameter RL = 6;
-      #  parameter SKIP_PRE = 1;
+      #  parameter WSKIP = 2;
       #  // Tag masks A10 (auto-precharge flag, not column).
       #  wire [25:0] ctag = {ba, addr[12:11], 1'b0, addr[9:0]};
+      #  // Single-sample command decode. (A 2-sample qualifier was tried:
+      #  // it eats real single-cycle DFI commands while passing 2-ck-wide
+      #  // transitional aliases, exactly inverted. Transitional phantoms
+      #  // are rare and identifiable by timestamp vs the TB windows.)
       #  reg wr_v, rd_v;
       #  reg [25:0] c_tag;
       #  always @(posedge ck) begin
@@ -238,26 +262,29 @@ object GowinSimPrep {
       #  initial warepoch = 4'd0;
       #  wire wactive = (warm != 4'd0);
       #  // Edge-domain capture (single driver each): epoch tags the burst.
+      #  // CALIBRATION: keep 12 edges, print all (alignment chosen offline).
       #  reg [3:0] wcnt;
       #  reg [3:0] wepoch;
-      #  reg [15:0] wsamp [0:8];
+      #  reg [15:0] wsamp [0:11];
       #  initial begin wcnt = 4'd0; wepoch = 4'd0; end
       #  always @(posedge dqs_p[0] or negedge dqs_p[0]) begin
       #    if (wactive && (wepoch != warepoch)) begin wepoch <= warepoch; wcnt <= 4'd0; end
-      #    else if (wactive && (wcnt < 4'd9)) begin wsamp[wcnt] <= dq; wcnt <= wcnt + 4'd1; end
+      #    else if (wactive && (wcnt < 4'd12)) begin wsamp[wcnt] <= dq; wcnt <= wcnt + 4'd1; end
       #  end
       #  // Commit at window close (ck domain).
       #  reg [3:0] warm_d;
-      #  wire [127:0] wdata = SKIP_PRE ?
-      #    {wsamp[8], wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2], wsamp[1]} :
-      #    {wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2], wsamp[1], wsamp[0]};
+      #  // Calibrated 2026-09-29: DQS burst = 2 idle edges (1-CK preamble)
+      #  // + 8 data + idle. Word = samples [9:2] (proven: OUR bytes land
+      #  // there, CDEF..FEDC in order).
+      #  wire [127:0] wdata = {wsamp[9], wsamp[8], wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2]};
       #  always @(posedge ck) begin
       #    warm_d <= warm;
       #    if ((warm_d != 4'd0) && (warm == 4'd0)) begin
       #      cam_tag[cam_ptr] <= w_tag;
       #      cam_dat[cam_ptr] <= wdata;
       #      cam_vld[cam_ptr] <= 1'b1;
-      #      $display("DFIRESP WR tag=%h beats=%0d dm=%b data=%h", w_tag, wcnt, dm, wdata);
+      #      $display("DFIRESP t=%0t WR tag=%h beats=%0d dm=%b data=%h raw=%h_%h_%h_%h_%h_%h_%h_%h_%h_%h_%h_%h", $time, w_tag, wcnt, dm, wdata,
+      #        wsamp[11], wsamp[10], wsamp[9], wsamp[8], wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2], wsamp[1], wsamp[0]);
       #      cam_ptr <= cam_ptr + 4'd1;
       #    end
       #  end
@@ -287,21 +314,28 @@ object GowinSimPrep {
       #  initial begin ph = 1'b0; bcnt = 4'd0; dqs_o = 2'b00; dq_o = 16'd0; end
       #  always @(posedge ck or negedge ck) begin
       #    ph <= ~ph;
-      #    if (rd_v) bcnt <= 4'd0;
+      #    // Pre-drive beat0 (+DQS low) on RD: IDES samples PRE-edge values,
+      #    // so beat[k] must be stable BEFORE DQS edge k (driving it AT the
+      #    // edge samples stale). Fires on both rd_v edges (idempotent).
+      #    if (rd_v) begin bcnt <= 4'd0; dq_o <= rword[15:0]; dqs_o <= 2'b00; end
       #    else if (rd_oe && (rdcnt >= RL-1) && (rdcnt <= RL+2)) begin
       #      dqs_o <= {2{ph}};
-      #      dq_o <= rhit ? rword[bcnt*16 +: 16] : 16'hBEEF;
+      #      if (bcnt < 4'd7) dq_o <= rhit ? rword[(bcnt+1)*16 +: 16] : 16'hBEEF;
       #      bcnt <= bcnt + 4'd1;
       #    end
       #    else if (rd_oe) begin dqs_o <= 2'b00; dq_o <= 16'd0; end
       #  end
-      #  assign dqs_p = rd_oe ? dqs_o : 2'bzz;
-      #  assign dq = rd_oe ? dq_o : 16'hzzzz;
+      #  // Drive ONLY on HIT: a miss (phantom RD on idle bus, or read of
+      #  // never-written addr) must stay high-Z, otherwise its DQS/DQ
+      #  // window contends with a real WR burst nearby and corrupts both.
+      #  // (Real DRAM always drives on RD; for debug, silence > BEEF.)
+      #  assign dqs_p = (rd_oe & rhit) ? dqs_o : 2'bzz;
+      #  assign dq = (rd_oe & rhit) ? dq_o : 16'hzzzz;
       #  // Read summary (hit resolved a cycle after RD).
       #  reg rd_vd;
       #  always @(posedge ck) begin
       #    rd_vd <= rd_v;
-      #    if (rd_vd) $display("DFIRESP RD tag=%h hit=%b data=%h", r_tag, rhit, rword);
+      #    if (rd_vd) $display("DFIRESP t=%0t RD tag=%h hit=%b data=%h", $time, r_tag, rhit, rword);
       #  end
       #endmodule
       #""".stripMargin('#')
@@ -484,8 +518,8 @@ class LiteDramCoreInitTest extends AnyFunSuite {
       .addSimulatorFlag("-Wno-MISINDENT")
       .addSimulatorFlag("-Wno-LATCH")
       .compile(new SimTop).doSim { dut =>
-      // 27 MHz board clock.
-      dut.clockDomain.forkStimulus(period = 37037)
+      // 54 MHz board clock into the stub (sys2x=54/sys=27 exact).
+      dut.clockDomain.forkStimulus(period = 18519)
 
       dut.io.resetN #= false
       dut.clockDomain.waitSampling(10)

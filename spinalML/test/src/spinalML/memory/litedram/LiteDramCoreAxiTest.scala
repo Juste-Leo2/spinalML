@@ -163,7 +163,7 @@ class LiteDramCoreAxiTest extends AnyFunSuite {
       .addSimulatorFlag("+define+sg25E")
       .addSimulatorFlag("+incdir+" + ddrDir)
       .compile(new SimTopB).doSim { dut =>
-      dut.clockDomain.forkStimulus(period = 37037)
+      dut.clockDomain.forkStimulus(period = 18519) // 54 MHz into the stub (sys2x=54/sys=27 exact)
       val cd = dut.clockDomain
 
       // AXI idle defaults (responses always accepted).
@@ -195,44 +195,47 @@ class LiteDramCoreAxiTest extends AnyFunSuite {
         dut.io.wStrb #= 0xFF
         dut.io.awValid #= true
         dut.io.wValid #= true
-        // INDEPENDENT channel completion: aw may backpressure for a full
-        // row cycle (PRE+ACT) while w is taken at once; holding wValid
-        // through the aw wait floods the 16-deep w FIFO with stale copies
-        // (data shifts across writes -> readback mismatch). Drop each
-        // valid on its own ready (1 TB cycle ~= 1 sys period now).
-        // BOUNDED handshakes: bare waitSamplingWhere loops forever if the
-        // signal never comes; per-cycle stepping is ~0.2-4ms/call on this
-        // Windows stack, so caps must be modest (30k cyc ~= tens of sec).
-        var wt = 0
-        while (!dut.io.wReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.wReady.toBoolean, f"w_ready timeout @word $wordAddr%x")
-        dut.io.wValid #= false
-        wt = 0
-        while (!dut.io.awReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.awReady.toBoolean, f"aw_ready timeout @word $wordAddr%x")
+        // Fire-and-forget: 2 TB cycles = 37ns = 1 sys period (TB runs at
+        // 54 MHz, sys at 27 MHz): the window always contains exactly one
+        // sys edge (exactly-once), any phase. Drop BOTH after.
+        cd.waitSampling(2)
         dut.io.awValid #= false
-        // Poll every cycle: b_valid is a ~1-sys-cycle pulse (resp FIFO
-        // pops immediately with b_ready=1); coarser polling can miss it.
-        var n = 0
-        while (!dut.io.bValid.toBoolean && n < 30000) { cd.waitSampling(1); n += 1 }
-        assert(dut.io.bValid.toBoolean, f"write b_valid timeout @word $wordAddr%x")
-        assert(dut.io.bResp.toBigInt == 0, "write RESP not OKAY")
+        dut.io.wValid #= false
+        var wt = 1
+        var bSeen = false
+        var bRespVal = BigInt(-1)
+        // b is a ~1-sys-cycle pulse (resp FIFO pops with b_ready=1):
+        // poll every cycle, and sample RESP with the pulse (stale after).
+        while (wt < 30000 && !bSeen) {
+          cd.waitSampling(1); wt += 1
+          if (dut.io.bValid.toBoolean) { bSeen = true; bRespVal = dut.io.bResp.toBigInt }
+        }
+        assert(bSeen, f"write b_valid timeout @word $wordAddr%x")
+        assert(bRespVal == 0, f"write RESP not OKAY (got $bRespVal)")
         cd.waitSampling(5)
+        // Reopen check: with addr+data digested the pipe must be free
+        // again; if not, burst2beat is wedged (loud, not a 30k hang).
+        wt = 0
+        while (!dut.io.awReady.toBoolean && wt < 2000) { cd.waitSampling(1); wt += 1 }
+        assert(dut.io.awReady.toBoolean, f"aw never reopened @word $wordAddr%x (burst2beat stuck?)")
       }
 
       def axiRead(wordAddr: BigInt): BigInt = {
         dut.io.arAddr #= wordAddr
         dut.io.arValid #= true
-        var wt = 0
-        while (!dut.io.arReady.toBoolean && wt < 30000) { cd.waitSampling(1); wt += 1 }
-        assert(dut.io.arReady.toBoolean, f"ar_ready timeout @word $wordAddr%x")
+        // Same 2-cycle window as writes (see axiWrite).
+        cd.waitSampling(2)
         dut.io.arValid #= false
-        var n = 0
-        while (!dut.io.rValid.toBoolean && n < 30000) { cd.waitSampling(1); n += 1 }
-        assert(dut.io.rValid.toBoolean, f"read r_valid timeout @word $wordAddr%x (PHY read hang?)")
-        val d = dut.io.rData.toBigInt
+        var n = 1
+        var rSeen = false
+        var rDataVal = BigInt(0)
+        while (n < 30000 && !rSeen) {
+          cd.waitSampling(1); n += 1
+          if (dut.io.rValid.toBoolean) { rSeen = true; rDataVal = dut.io.rData.toBigInt }
+        }
+        assert(rSeen, f"read r_valid timeout @word $wordAddr%x (PHY read hang?)")
         cd.waitSampling(5)
-        d
+        rDataVal
       }
 
       // DEBUG-TRIMMED to 2 vectors (init dominates runtime; traffic is
