@@ -30,6 +30,13 @@ import spinal.core.sim._
 object GowinSimPrep {
   // Functional rPLL stub for Verilator (ideal clocks, LOCK after 256 ref
   // cycles; phase relationship sys/sys2x preserved for the 1:2 DFI).
+  // CLKOUTD (sys) MUST toggle on both CLKIN edges: sys = 27 MHz like the
+  // TB clock. A posedge-only toggle gives 13.5 MHz, and then a 1-cycle
+  // TB valid pulse can fall between two sys edges deterministically
+  // (aw/w ready are statically 1 with empty FIFOs, so the accept wait
+  // passes vacuously while nothing is captured). Same nominal rate on
+  // both sides => a 1-cycle pulse spans exactly one sys period =>
+  // exactly-once capture, any phase.
   val rpllStub: String =
     """module rPLL (
       |  output reg CLKOUT, output reg CLKOUTP, output reg CLKOUTD, output reg CLKOUTD3,
@@ -51,16 +58,16 @@ object GowinSimPrep {
       |  end
       |  always @(posedge CLKIN or posedge RESET) begin
       |    if (RESET) begin
-      |      CLKOUTD <= 0; LOCK <= 0; lockCnt <= 0;
+      |      LOCK <= 0; lockCnt <= 0;
       |    end else begin
-      |      CLKOUTD <= ~CLKOUTD;
       |      if (lockCnt < 1000000) lockCnt <= lockCnt + 1;
       |      if (lockCnt > 255) LOCK <= 1;
       |    end
       |  end
+      |  // sys2x (54 MHz) and sys (27 MHz): toggle on both edges of 27 MHz in.
       |  always @(posedge CLKIN or negedge CLKIN or posedge RESET) begin
-      |    if (RESET) CLKOUT <= 0;
-      |    else CLKOUT <= ~CLKOUT;
+      |    if (RESET) begin CLKOUT <= 0; CLKOUTD <= 0; end
+      |    else begin CLKOUT <= ~CLKOUT; CLKOUTD <= ~CLKOUTD; end
       |  end
       |endmodule
       |""".stripMargin
@@ -92,16 +99,23 @@ object GowinSimPrep {
       val w = new java.io.PrintWriter(noPll)
       try w.write(kept.toString()) finally w.close()
     }
-    if (!stub.isFile) {
-      val w = new java.io.PrintWriter(stub)
-      try w.write(rpllStub) finally w.close()
-    }
+    // Always rewrite (see lite_dbg.v above): the stub layout evolves and
+    // a stale cache would silently run the wrong clocks.
+    val wstub = new java.io.PrintWriter(stub)
+    try wstub.write(rpllStub) finally wstub.close()
     (noPll.getAbsolutePath, stub.getAbsolutePath)
   }
 
   // Single-x16 Micron wrapper (dqs_n = ~dqs_p; TDQS unused in x16).
   // Our core has no dqs_n port (SSTL15D tile generates N); in sim the
   // complement is exact (model drives both on reads, we drive P on writes).
+  // TEST-ONLY MODEL HACK: force the Micron init tracker complete. With
+  // MR1 DLL-off the model can never see a legal init (its init_step gate)
+  // so it would drop ALL state updates (ACT never opens, WR never lands
+  // in memory[], RD returns zero-init) while still checking commands.
+  // Forcing init_done=1 keeps every legality/timing check active and only
+  // enables the functional array behavior. Revisit (DLL-on core) if the
+  // DLL-off DQS read path misbehaves.
   val ddrWrap: String =
     """module ddr3_wrap (
       |  input rst_n, input ck, input ck_n, input cke, input cs_n,
@@ -119,6 +133,7 @@ object GowinSimPrep {
       |  defparam mem.check_strict_timing = 0;
       |  defparam mem.check_strict_mrbits = 1;
       |  defparam mem.STOP_ON_ERROR = 0;
+      |  initial force mem.init_done = 1'b1;
       |  ddr3 mem (
       |    .rst_n(rst_n), .ck(ck), .ck_n(ck_n), .cke(cke), .cs_n(cs_n),
       |    .ras_n(ras_n), .cas_n(cas_n), .we_n(we_n), .dm_tdqs(dm), .ba(ba),
@@ -130,28 +145,34 @@ object GowinSimPrep {
   /** Hierarchical $display monitor, bound into SimTopB (sibling scope).
    * Verilator cannot resolve absolute TOP.* paths from a plain module, but
    * `bind` places the probe inside SimTopB where `core.*` resolves.
-   * v4: which bankmachine gets the request + its cmd (25 bits):
-   * {init, npcv, cc.v, cc.r, reqv[7:0], bmc[7:0], cs, ras, cas, we, bvalid} */
+   * v6: AXI2Native-W decision chain (30 bits):
+   * {init, aw_v, aw_r, wsrc_v, lvl[4:0], can_wr, req, grant,
+   *  npc_v, npc_r, npc_last, npc_we, pc_v, pc_r,
+   *  rr0, reqv0, bmc0, wsnk_rdy, cs, ras, cas, we, bvalid,
+   *  wsend, npw_v, npw_r} */
   val liteDbg: String =
     """bind SimTopB lite_dbg_probe probe_i();
       |module lite_dbg_probe;
-      |  reg [24:0] prev;
-      |  wire [24:0] cur;
+      |  reg [29:0] prev;
+      |  wire [29:0] cur;
       |  assign cur = {core.init_done,
-      |    core.new_port_cmd_valid,
-      |    core.core_cmd_valid, core.core_cmd_ready,
-      |    core.core_bankmachine7_req_valid, core.core_bankmachine6_req_valid,
-      |    core.core_bankmachine5_req_valid, core.core_bankmachine4_req_valid,
-      |    core.core_bankmachine3_req_valid, core.core_bankmachine2_req_valid,
-      |    core.core_bankmachine1_req_valid, core.core_bankmachine0_req_valid,
-      |    core.core_bankmachine7_cmd_valid, core.core_bankmachine6_cmd_valid,
-      |    core.core_bankmachine5_cmd_valid, core.core_bankmachine4_cmd_valid,
-      |    core.core_bankmachine3_cmd_valid, core.core_bankmachine2_cmd_valid,
-      |    core.core_bankmachine1_cmd_valid, core.core_bankmachine0_cmd_valid,
+      |    core.write_aw_valid, core.write_aw_ready,
+      |    core.write_w_buffer_source_valid,
+      |    core.write_w_buffer_level1,
+      |    core.write_can_write,
+      |    core.write_cmd_request, core.write_cmd_grant,
+      |    core.new_port_cmd_valid, core.new_port_cmd_ready,
+      |    core.new_port_cmd_last, core.new_port_cmd_payload_we,
+      |    core.port_cmd_valid, core.port_cmd_ready,
+      |    core.litedramcore_roundrobin0_request,
+      |    core.core_bankmachine0_req_valid, core.core_bankmachine0_cmd_valid,
+      |    core.write_w_buffer_sink_ready,
       |    core.gw2ddrphy_dfi_p0_cs_n, core.gw2ddrphy_dfi_p0_ras_n,
       |    core.gw2ddrphy_dfi_p0_cas_n, core.gw2ddrphy_dfi_p0_we_n,
-      |    core.b_valid};
-      |  initial prev = 25'd0;
+      |    core.b_valid,
+      |    core.write_w_buffer_send,
+      |    core.new_port_wdata_valid, core.new_port_wdata_ready};
+      |  initial prev = 30'd0;
       |  always @(posedge core.sys_clk) begin
       |    if (cur != prev)
       |      $display("LITEDBG t=%0t %b", $time, cur);
@@ -162,10 +183,134 @@ object GowinSimPrep {
 
   def stageDbgMon(simDir: String): String = {
     val f = new java.io.File(simDir, "lite_dbg.v")
-    if (!f.isFile) {
-      val w = new java.io.PrintWriter(f)
-      try w.write(liteDbg) finally w.close()
-    }
+    // Always rewrite: the probe layout evolves (v3/v4/v5...), a stale
+    // cached file would silently run the wrong monitor.
+    val w = new java.io.PrintWriter(f)
+    try w.write(liteDbg) finally w.close()
+    f.getAbsolutePath
+  }
+
+  // Homegrown DFI responder (replaces the Micron model for fast debug).
+  // Drop-in on the DDR pads: decodes ACT/WR/RD on rising ck, captures WR
+  // data framed on dqs_p[0] edges into a 16-entry CAM, replays on RD with
+  // a tunable read latency. Prints ONLY our traffic (no model storm).
+  // Margin char is '#' (Verilog '|' would break stripMargin).
+  // Assumptions (adjust once, empirically): word = {samp7..samp0} with
+  // samp0 = first beat = DFI wdata[15:0]; SKIP_PRE skips the WR preamble
+  // edge; RL = read latency in ck.
+  val dfiResp: String =
+    """module dfi_resp (
+      #  input rst_n, input ck, input ck_n, input cke, input cs_n,
+      #  input ras_n, input cas_n, input we_n,
+      #  input [1:0] dm, input [2:0] ba, input [12:0] addr,
+      #  inout [15:0] dq, inout [1:0] dqs_p, input odt
+      #);
+      #  parameter RL = 6;
+      #  parameter SKIP_PRE = 1;
+      #  // Tag masks A10 (auto-precharge flag, not column).
+      #  wire [25:0] ctag = {ba, addr[12:11], 1'b0, addr[9:0]};
+      #  reg wr_v, rd_v;
+      #  reg [25:0] c_tag;
+      #  always @(posedge ck) begin
+      #    if (~rst_n) begin wr_v <= 1'b0; rd_v <= 1'b0; end
+      #    else begin
+      #      wr_v <= ~cs_n & ras_n & ~cas_n & ~we_n;
+      #      rd_v <= ~cs_n & ras_n & ~cas_n & we_n;
+      #    end
+      #    c_tag <= ctag;
+      #  end
+      #  // 16-entry CAM tag -> 128-bit word.
+      #  reg [25:0] cam_tag [0:15];
+      #  reg [127:0] cam_dat [0:15];
+      #  reg [15:0] cam_vld;
+      #  reg [3:0] cam_ptr;
+      #  integer i;
+      #  initial begin cam_vld = 16'd0; cam_ptr = 4'd0; end
+      #  // Write capture window (ck domain) + epoch for edge-domain reset.
+      #  reg [3:0] warm;
+      #  reg [3:0] warepoch;
+      #  reg [25:0] w_tag;
+      #  always @(posedge ck) begin
+      #    if (~rst_n) begin warm <= 4'd0; end
+      #    else if (wr_v) begin warm <= 4'd12; w_tag <= c_tag; warepoch <= warepoch + 4'd1; end
+      #    else if (warm != 4'd0) warm <= warm - 4'd1;
+      #  end
+      #  initial warepoch = 4'd0;
+      #  wire wactive = (warm != 4'd0);
+      #  // Edge-domain capture (single driver each): epoch tags the burst.
+      #  reg [3:0] wcnt;
+      #  reg [3:0] wepoch;
+      #  reg [15:0] wsamp [0:8];
+      #  initial begin wcnt = 4'd0; wepoch = 4'd0; end
+      #  always @(posedge dqs_p[0] or negedge dqs_p[0]) begin
+      #    if (wactive && (wepoch != warepoch)) begin wepoch <= warepoch; wcnt <= 4'd0; end
+      #    else if (wactive && (wcnt < 4'd9)) begin wsamp[wcnt] <= dq; wcnt <= wcnt + 4'd1; end
+      #  end
+      #  // Commit at window close (ck domain).
+      #  reg [3:0] warm_d;
+      #  wire [127:0] wdata = SKIP_PRE ?
+      #    {wsamp[8], wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2], wsamp[1]} :
+      #    {wsamp[7], wsamp[6], wsamp[5], wsamp[4], wsamp[3], wsamp[2], wsamp[1], wsamp[0]};
+      #  always @(posedge ck) begin
+      #    warm_d <= warm;
+      #    if ((warm_d != 4'd0) && (warm == 4'd0)) begin
+      #      cam_tag[cam_ptr] <= w_tag;
+      #      cam_dat[cam_ptr] <= wdata;
+      #      cam_vld[cam_ptr] <= 1'b1;
+      #      $display("DFIRESP WR tag=%h beats=%0d dm=%b data=%h", w_tag, wcnt, dm, wdata);
+      #      cam_ptr <= cam_ptr + 4'd1;
+      #    end
+      #  end
+      #  // Read replay: lookup on RD, drive preamble + 8 beats + postamble.
+      #  reg rd_on;
+      #  reg [3:0] rdcnt;
+      #  reg [127:0] rword;
+      #  reg rhit;
+      #  reg [25:0] r_tag;
+      #  always @(posedge ck) begin
+      #    if (~rst_n) rd_on <= 1'b0;
+      #    else if (rd_v) begin
+      #      rd_on <= 1'b1; rdcnt <= 4'd0; rhit <= 1'b0; rword <= 128'd0; r_tag <= ctag;
+      #      for (i = 0; i < 16; i = i + 1)
+      #        if (cam_vld[i] && (cam_tag[i] == ctag)) begin rhit <= 1'b1; rword <= cam_dat[i]; end
+      #    end
+      #    else if (rd_on) begin
+      #      rdcnt <= rdcnt + 4'd1;
+      #      if (rdcnt == 4'd10) rd_on <= 1'b0;
+      #    end
+      #  end
+      #  wire rd_oe = rd_on && (rdcnt >= RL-2) && (rdcnt <= RL+3);
+      #  reg ph;
+      #  reg [3:0] bcnt;
+      #  reg [1:0] dqs_o;
+      #  reg [15:0] dq_o;
+      #  initial begin ph = 1'b0; bcnt = 4'd0; dqs_o = 2'b00; dq_o = 16'd0; end
+      #  always @(posedge ck or negedge ck) begin
+      #    ph <= ~ph;
+      #    if (rd_v) bcnt <= 4'd0;
+      #    else if (rd_oe && (rdcnt >= RL-1) && (rdcnt <= RL+2)) begin
+      #      dqs_o <= {2{ph}};
+      #      dq_o <= rhit ? rword[bcnt*16 +: 16] : 16'hBEEF;
+      #      bcnt <= bcnt + 4'd1;
+      #    end
+      #    else if (rd_oe) begin dqs_o <= 2'b00; dq_o <= 16'd0; end
+      #  end
+      #  assign dqs_p = rd_oe ? dqs_o : 2'bzz;
+      #  assign dq = rd_oe ? dq_o : 16'hzzzz;
+      #  // Read summary (hit resolved a cycle after RD).
+      #  reg rd_vd;
+      #  always @(posedge ck) begin
+      #    rd_vd <= rd_v;
+      #    if (rd_vd) $display("DFIRESP RD tag=%h hit=%b data=%h", r_tag, rhit, rword);
+      #  end
+      #endmodule
+      #""".stripMargin('#')
+
+  def stageResp(simDir: String): String = {
+    val f = new java.io.File(simDir, "dfi_resp.v")
+    // Always rewrite (probe/stub rule).
+    val w = new java.io.PrintWriter(f)
+    try w.write(dfiResp) finally w.close()
     f.getAbsolutePath
   }
   def stageDdr(): String = {
@@ -197,15 +342,18 @@ object GowinSimPrep {
       try w.write(text) finally w.close()
     }
     val wrap = new java.io.File(simDir, "ddr3_wrap.v")
-    if (!wrap.isFile) {
-      val w = new java.io.PrintWriter(wrap)
-      try w.write(ddrWrap) finally w.close()
-    }
+    // Always rewrite (probe/stub rule): the wrapper carries test-only
+    // hacks (init_done force) that must track the source of truth here.
+    val wwrap = new java.io.PrintWriter(wrap)
+    try wwrap.write(ddrWrap) finally wwrap.close()
     simDir.getAbsolutePath
   }
 }
 
-class LiteDramCoreSimTest extends AnyFunSuite {
+/** Stage-A suite: JEDEC init only (green, run on demand as regression).
+ * Run: `mill ... testOnly spinalML.memory.litedram.LiteDramCoreInitTest`
+ * (or `cli/main.py test-all -k LiteDramCoreInit`). */
+class LiteDramCoreInitTest extends AnyFunSuite {
 
   /** Test wrapper: BlackBox core, AXI idle, DDR pads floating. */
   class SimTop extends Component {
@@ -363,226 +511,11 @@ class LiteDramCoreSimTest extends AnyFunSuite {
         f"init_done stuck 0 after ${waited}cyc (dbg_step=0x$step%02X dbg_rst=0x$rst%02X)")
     }
   }
-
-  /** Single-x16 Micron model wrapper BlackBox (see ddrWrap above). */
-  class Ddr3Wrap extends BlackBox {
-    setDefinitionName("ddr3_wrap")
-    val io = new Bundle {
-      val rst_n = in Bool()
-      val ck = in Bool()
-      val ck_n = in Bool()
-      val cke = in Bool()
-      val cs_n = in Bool()
-      val ras_n = in Bool()
-      val cas_n = in Bool()
-      val we_n = in Bool()
-      val dm = inout(Analog(Bits(2 bits)))
-      val ba = in Bits(3 bits)
-      val addr = in Bits(13 bits)
-      val dq = inout(Analog(Bits(16 bits)))
-      val dqs_p = inout(Analog(Bits(2 bits)))
-      val odt = in Bool()
-    }
-    noIoPrefix()
-  }
-
-  /** Stage-B top: core + Micron x16 model on the DDR pads. */
-  class SimTopB extends Component {
-    val io = new Bundle {
-      val resetN = in(Bool())
-      val initDone = out(Bool())
-      val pllLocked = out(Bool())
-      val dbgStep = out(Bits(8 bits))
-      val dbgRst = out(Bits(8 bits))
-      // AXI single-beat host port (LiteX streaming flavour).
-      val awValid = in Bool()
-      val awAddr = in UInt(27 bits)
-      val wValid = in Bool()
-      val wData = in Bits(64 bits)
-      val wStrb = in Bits(8 bits)
-      val arValid = in Bool()
-      val arAddr = in UInt(27 bits)
-      val awReady = out Bool()
-      val wReady = out Bool()
-      val bValid = out Bool()
-      val bResp = out Bits(2 bits)
-      val arReady = out Bool()
-      val rValid = out Bool()
-      val rData = out Bits(64 bits)
-    }
-    val core = new LiteDramCore()
-    val (primNoRpll, rpllStub) = GowinSimPrep.prepare()
-    val simDir = GowinSimPrep.stageDdr()
-    core.addRTLPath(primNoRpll)
-    core.addRTLPath(rpllStub)
-    core.addRTLPath(simDir + "/ddr3.v")
-    core.addRTLPath(simDir + "/ddr3_wrap.v")
-    val liteDbgMon = GowinSimPrep.stageDbgMon(simDir)
-    core.addRTLPath(liteDbgMon)
-    core.mapClockDomain(clock = core.io.clk27)
-    core.io.reset_n := io.resetN
-    io.initDone := core.io.init_done
-    io.pllLocked := core.io.pll_locked
-    io.dbgStep := core.io.dbg_step
-    io.dbgRst := core.io.dbg_rst
-
-    // AXI host side: single-beat INCR x64, TB-driven valid/addr/data.
-    core.io.aw_valid := io.awValid
-    core.io.aw_payload_addr := io.awAddr
-    core.io.aw_first := True
-    core.io.aw_last := True
-    core.io.aw_payload_burst := 1
-    core.io.aw_payload_len := 0
-    core.io.aw_payload_size := 3
-    core.io.aw_payload_lock := False
-    core.io.aw_payload_prot := 0
-    core.io.aw_payload_cache := 0
-    core.io.aw_payload_qos := 0
-    core.io.aw_payload_region := 0
-    core.io.aw_param_id := 0
-    core.io.aw_param_dest := False
-    core.io.aw_param_user := False
-    core.io.w_valid := io.wValid
-    core.io.w_payload_data := io.wData
-    core.io.w_payload_strb := io.wStrb
-    core.io.w_first := True
-    core.io.w_last := True
-    core.io.w_param_id := 0
-    core.io.w_param_dest := False
-    core.io.w_param_user := False
-    core.io.b_ready := True
-    core.io.ar_valid := io.arValid
-    core.io.ar_payload_addr := io.arAddr
-    core.io.ar_first := True
-    core.io.ar_last := True
-    core.io.ar_payload_burst := 1
-    core.io.ar_payload_len := 0
-    core.io.ar_payload_size := 3
-    core.io.ar_payload_lock := False
-    core.io.ar_payload_prot := 0
-    core.io.ar_payload_cache := 0
-    core.io.ar_payload_qos := 0
-    core.io.ar_payload_region := 0
-    core.io.ar_param_id := 0
-    core.io.ar_param_dest := False
-    core.io.ar_param_user := False
-    core.io.r_ready := True
-    io.awReady := core.io.aw_ready
-    io.wReady := core.io.w_ready
-    io.bValid := core.io.b_valid
-    io.bResp := core.io.b_payload_resp
-    io.arReady := core.io.ar_ready
-    io.rValid := core.io.r_valid
-    io.rData := core.io.r_payload_data
-
-    val mem = new Ddr3Wrap()
-    mem.io.rst_n := core.io.reset_n_1
-    mem.io.ck := core.io.clk_p
-    mem.io.ck_n := core.io.clk_n
-    mem.io.cke := core.io.cke
-    mem.io.cs_n := core.io.cs_n
-    mem.io.ras_n := core.io.ras_n
-    mem.io.cas_n := core.io.cas_n
-    mem.io.we_n := core.io.we_n
-    val dmW = Analog(Bits(2 bits))
-    dmW := core.io.dm
-    mem.io.dm := dmW
-    mem.io.ba := core.io.ba
-    mem.io.addr := core.io.a(12 downto 0)
-    val dqW = Analog(Bits(16 bits))
-    val dqsW = Analog(Bits(2 bits))
-    core.io.dq := dqW
-    mem.io.dq := dqW
-    core.io.dqs_p := dqsW
-    mem.io.dqs_p := dqsW
-    mem.io.odt := core.io.odt
-  }
-
-  test("litedram-core-axi (verilator, stage B: write->read vs Micron x16)") {
-    // Stage the DDR3 model first: SpinalSim copies RTL into its workspace,
-    // losing the ddr3.v sibling .vh -> pass +incdir explicitly.
-    val ddrDir = GowinSimPrep.stageDdr().replace("\\", "/")
-    // -Wno-MULTIDRIVEN/SELRANGE/CASEX: Micron model internals (multi-clocked
-    // check pipelines, param selects); zero-delay with --no-timing, order
-    // preserved. Revisit if reads misalign.
-    val noLint = Seq("--no-timing", "-Wno-COMBDLY", "-Wno-IEEEMAYDEPRECATE",
-      "-Wno-REALCVT", "-Wno-IMPLICIT", "-Wno-PINMISSING", "-Wno-CASEINCOMPLETE",
-      "-Wno-MISINDENT", "-Wno-LATCH", "-Wno-MULTIDRIVEN", "-Wno-SELRANGE",
-      "-Wno-CASEX")
-    var cfg = SimConfig
-    for (f <- noLint) cfg = cfg.addSimulatorFlag(f)
-    cfg
-      .addSimulatorFlag("+define+den1024Mb")
-      .addSimulatorFlag("+define+sg25E")
-      .addSimulatorFlag("+incdir+" + ddrDir)
-      .compile(new SimTopB).doSim { dut =>
-      dut.clockDomain.forkStimulus(period = 37037)
-      val cd = dut.clockDomain
-
-      // AXI idle defaults (responses always accepted).
-      dut.io.awValid #= false
-      dut.io.wValid #= false
-      dut.io.arValid #= false
-
-      dut.io.resetN #= false
-      cd.waitSampling(10)
-      dut.io.resetN #= true
-
-      var waited = 0
-      while (!dut.io.pllLocked.toBoolean && waited < 100000) {
-        cd.waitSampling(1000)
-        waited += 1000
-      }
-      assert(dut.io.pllLocked.toBoolean, "rPLL never locked in sim")
-      waited = 0
-      while (!dut.io.initDone.toBoolean && waited < 500000) {
-        cd.waitSampling(1000)
-        waited += 1000
-      }
-      assert(dut.io.initDone.toBoolean,
-        f"init_done stuck 0 (dbg_step=0x${dut.io.dbgStep.toBigInt}%02X)")
-
-      def axiWrite(wordAddr: BigInt, data: BigInt): Unit = {
-        dut.io.awAddr #= wordAddr
-        dut.io.wData #= data
-        dut.io.wStrb #= 0xFF
-        dut.io.awValid #= true
-        dut.io.wValid #= true
-        cd.waitSamplingWhere(dut.io.awReady.toBoolean && dut.io.wReady.toBoolean)
-        dut.io.awValid #= false
-        dut.io.wValid #= false
-        var n = 0
-        while (!dut.io.bValid.toBoolean && n < 20000) { cd.waitSampling(10); n += 10 }
-        assert(dut.io.bValid.toBoolean, f"write b_valid timeout @word $wordAddr%x")
-        assert(dut.io.bResp.toBigInt == 0, "write RESP not OKAY")
-        cd.waitSampling(5)
-      }
-
-      def axiRead(wordAddr: BigInt): BigInt = {
-        dut.io.arAddr #= wordAddr
-        dut.io.arValid #= true
-        cd.waitSamplingWhere(dut.io.arReady.toBoolean)
-        dut.io.arValid #= false
-        var n = 0
-        while (!dut.io.rValid.toBoolean && n < 20000) { cd.waitSampling(10); n += 10 }
-        assert(dut.io.rValid.toBoolean, f"read r_valid timeout @word $wordAddr%x (PHY read hang?)")
-        val d = dut.io.rData.toBigInt
-        cd.waitSampling(5)
-        d
-      }
-
-      // Word addresses span columns/rows (byte addr = word << 3).
-      val vectors = Seq(
-        (BigInt(0x0), BigInt("0123456789ABCDEF", 16)),
-        (BigInt(0x1), BigInt("FEDCBA9876543210", 16)),
-        (BigInt(0x100), BigInt("A5A5A5A55A5A5A5A", 16)),
-        (BigInt(0x10000), BigInt("DEADBEEFCAFEBABE", 16))
-      )
-      for ((wa, data) <- vectors) axiWrite(wa, data)
-      for ((wa, exp) <- vectors) {
-        val got = axiRead(wa)
-        assert(got == exp, f"mismatch @word $wa%x: got $got%016X exp $exp%016X")
-      }
-    }
-  }
 }
+
+// Stage-B suite (LiteDramCoreAxiTest) moved to LiteDramCoreAxiTest.scala
+// (same package) to keep this file to GowinSimPrep + stage A.
+
+// Stage-D suite (DfiResp + LiteDramCoreDfiTest) moved to
+// LiteDramCoreDfiTest.scala (same package) to keep this file to
+// GowinSimPrep + stage A.

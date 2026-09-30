@@ -201,6 +201,7 @@ def dram_gen(
     out: Optional[Path] = typer.Option(None, "-o", "--out", help="Output directory for litedram_core.v [default: dram/out/]"),
     name: str = typer.Option("litedram_core", "--name", help="Top module name for the generated core"),
     debug: bool = typer.Option(False, "--debug", help="Show verbose raw logs"),
+    por_cycles: Optional[int] = typer.Option(None, "--por-cycles", help="SIM-ONLY POR length (256 = fast Verilator init). NEVER before a silicon build: rerun without this flag first."),
 ):
     """
     Validate the board DRAM config and generate the LiteDRAM core Verilog
@@ -210,7 +211,8 @@ def dram_gen(
     from rich.console import Console
     try:
         code = run_dram_gen(board=board, out_dir=out, name=name,
-                            console=Console(), debug=debug)
+                            console=Console(), debug=debug,
+                            por_cycles=por_cycles)
     except (FileNotFoundError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)

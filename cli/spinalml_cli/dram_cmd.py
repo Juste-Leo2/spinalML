@@ -37,10 +37,12 @@ def dram_prims() -> Path:
 
 def run_dram_gen(board: str, out_dir: Optional[Path] = None,
                  name: str = "litedram_core", console=None,
-                 debug: bool = False) -> int:
+                 debug: bool = False, por_cycles: Optional[int] = None) -> int:
     """Validates the board config and generates the LiteDRAM core Verilog.
 
     Returns the generator return code (0 = ok). Raises on missing pieces.
+    por_cycles: SIM-ONLY override (see gowin_gen --por-cycles); pass None
+    for the silicium POR. Silicon flows never pass it.
     """
     root = get_project_root()
     gen = root / "dram" / "gen" / "gowin_gen.py"
@@ -66,7 +68,10 @@ def run_dram_gen(board: str, out_dir: Optional[Path] = None,
     rc = run([py, validate, config], f"[dram-gen] Validating {config.name}")
     if rc != 0:
         return rc
-    rc = run([py, gen, "--config", config, "--out", out, "--name", name],
+    gen_cmd = [py, gen, "--config", config, "--out", out, "--name", name]
+    if por_cycles is not None:
+        gen_cmd += ["--por-cycles", str(por_cycles)]
+    rc = run(gen_cmd,
              f"[dram-gen] Generating {name}.v for board '{board}'")
     if rc != 0:
         return rc

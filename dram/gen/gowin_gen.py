@@ -122,7 +122,8 @@ DDR_PINMAP = {
 
 class GowinDramCRG(Module):
     """clk27 -> GW2APLL -> sys / sys2x / init clock domains."""
-    def __init__(self, clk27, sys_clk_freq, device, devicename):
+    def __init__(self, clk27, sys_clk_freq, device, devicename,
+                 por_cycles=65536):
         self.rst     = Signal()
         self.cd_sys  = ClockDomain()
         self.cd_sys2x   = ClockDomain()
@@ -134,7 +135,10 @@ class GowinDramCRG(Module):
         self.locked = Signal()
 
         # Power-on reset: the on-board POR is not aware of reprogramming.
-        por_count = Signal(16, reset=2**16-1)
+        # por_cycles is a SIM-ONLY speed knob (--por-cycles): JEDEC wants
+        # ~ms of reset on silicon (65536 @27MHz = 2.43ms); 256 cuts sim
+        # init by a third. Never pass it on a silicon build path.
+        por_count = Signal(max=por_cycles, reset=por_cycles - 1)
         por_done  = Signal()
         self.por_done = por_done # debug readout (heartbeat)
         self.comb += self.cd_por.clk.eq(clk27)
@@ -390,7 +394,8 @@ class LiteDramGowinTop(Module):
         # CRG ------------------------------------------------------------------
         self.submodules.crg = crg = GowinDramCRG(
             clk27=self.clk27, sys_clk_freq=sys_clk_freq,
-            device=device, devicename=devicename)
+            device=device, devicename=devicename,
+            por_cycles=int(config.get("_por_cycles", 65536)))
         self.comb += [
             crg.rst.eq(~self.reset_n),
             # crg.reset is an external CRG reset input we don't use: tie
@@ -571,11 +576,21 @@ def main():
     parser.add_argument("--config", required=True, help="Board YAML config (dram/configs/*.yml)")
     parser.add_argument("--out", required=True, help="Output directory for litedram_core.v")
     parser.add_argument("--name", default="litedram_core", help="Top module name")
+    parser.add_argument("--por-cycles", type=int, default=65536,
+        help="SIM-ONLY POR length (default 65536 = 2.43ms at 27MHz). "
+             "Pass 256 to speed up Verilator init. NEVER use on silicon.")
     args = parser.parse_args()
 
     import yaml
     with open(args.config, encoding="utf-8") as f:
         config = yaml.safe_load(f)
+
+    if args.por_cycles != 65536:
+        print("WARNING: --por-cycles=%d is SIM-ONLY (reset lasts %d us, "
+              "below the JEDEC RST_N minimum) - do NOT build silicon from "
+              "this output; rerun dram-gen without the flag first."
+              % (args.por_cycles, args.por_cycles * 1000000 // 27000000))
+        config["_por_cycles"] = args.por_cycles
 
     for key in ("sys_clk_freq", "device", "devicename", "sdram_module"):
         if key not in config:
