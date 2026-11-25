@@ -21,8 +21,13 @@ case class UniversalLargeSpillDemo(
   override val axiConfig: Axi4Config = Axi4Config(addressWidth = 32, dataWidth = 64, idWidth = 4)
 ) extends Accelerator(
   dataType = I8(),
-  inputShape = Seq(1, 36),
+  inputShape = Seq(8, 8, 2),
   modelSpec = Seq(
+    Conv2D(inChannels = 2, outChannels = 4, kernelSize = 3, customType = Some(I16())),
+    ReLU(),
+    AvgPool2D(poolSize = 2, stride = 2),
+    Requantize(shift = 2, targetType = I8()),
+    Flatten(),
     Linear(inFeatures = 36, outFeatures = 16, weightLanes = 4, spillKSlice = 12),
     ReLU(),
     Linear(inFeatures = 16, outFeatures = 10)
