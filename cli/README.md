@@ -1,17 +1,17 @@
 # SpinalML CLI
 
-L'outil en ligne de commande (CLI) de **SpinalML** permet d'orchestrer facilement toute la chaîne de conception FPGA (compilation SpinalHDL, simulations Verilator, synthèse Yosys, placement-routage NextPNR, programmation hardware openFPGALoader) sans exiger d'installation système complexe.
+The **SpinalML** command-line interface (CLI) makes it easy to orchestrate the entire FPGA design flow (SpinalHDL compilation, Verilator simulations, Yosys synthesis, NextPNR place-and-route, and openFPGALoader hardware programming) without requiring complex system-wide installations.
 
 > [!IMPORTANT]
-> **Règle d'or :** Que vous utilisiez les sources Python (`python cli/main.py`) ou le binaire autonome (`./spinalml`), les commandes doivent **toujours être exécutées depuis la racine du projet** (`spinalML/`).
+> **Golden rule:** Whether you run from Python sources (`python cli/main.py`) or the standalone binary (`./spinalml`), commands must **always be executed from the project root** (`spinalML/`).
 
 ---
 
-## 1. Binaires Précompilés Autonomes (Recommandé)
+## 1. Precompiled Standalone Binaries (Recommended)
 
-Des exécutables autonomes uniques (single-file) sont automatiquement générés et disponibles au téléchargement sur la page des [**GitHub Releases**](https://github.com/Juste-Leo2/spinalML/releases) :
+Single-file standalone executables are automatically built and available for download on the [**GitHub Releases**](https://github.com/Juste-Leo2/spinalML/releases) page:
 
-| Plateforme | Archive Release | Binaire exécutable |
+| Platform | Release Archive | Executable Binary |
 | :--- | :--- | :--- |
 | **Windows (x64)** | `spinalml-windows-x64.zip` | `spinalml-windows-x64.exe` |
 | **Linux (x64)** | `spinalml-linux-x64.tar.gz` | `spinalml-linux-x64` |
@@ -19,69 +19,69 @@ Des exécutables autonomes uniques (single-file) sont automatiquement générés
 | **macOS (Apple Silicon)** | `spinalml-darwin-arm64.tar.gz` | `spinalml-darwin-arm64` |
 | **macOS (Intel)** | `spinalml-darwin-x64.tar.gz` | `spinalml-darwin-x64` |
 
-### Que contient le binaire ?
-- **Ultra-léger (~15 Mo)** : Le binaire embarque le moteur CLI pur (`typer`, `rich`, `requests`), les profils de cartes FPGA (`boards/`), le framework matériel (`spinalML/`) et la configuration de build (`build.mill`).
-- **Ce qui n'est PAS embarqué** : Les tests de co-simulation Python (`cocotb`, `pytest`). Cocotb nécessite une compilation VPI dynamique liée au CPython 3.12 local du système (sur Linux ou WSL). Les utilisateurs souhaitant exécuter la suite de tests Python de développement doivent utiliser l'environnement source complet (voir [`docs/building_from_source.md`](../docs/building_from_source.md)).
+### What's inside the binary?
+- **Ultra-lightweight (~15 MB)**: The binary bundles the pure CLI engine (`typer`, `rich`, `requests`), FPGA board profiles (`boards/`), the hardware framework (`spinalML/`), and the build configuration (`build.mill`).
+- **What is NOT bundled**: Python co-simulation tests (`cocotb`, `pytest`). Cocotb requires dynamic VPI compilation linked against the local system's CPython 3.12 (on Linux or WSL). Users who want to run the development Python test suite should use the full source environment (see [`docs/building_from_source.md`](../docs/building_from_source.md)).
 
-### Démarrage rapide avec le binaire :
+### Quickstart with the binary:
 ```bash
-# 1. Téléchargez et décompressez l'exécutable pour votre OS depuis les Releases
-# 2. Placez-vous à la racine de votre projet SpinalML
+# 1. Download and extract the executable for your OS from Releases
+# 2. Navigate to the root of your SpinalML project
 cd spinalML
 
-# 3. Initialisez les outils EDA (OSS CAD Suite, Mill, w64devkit)
+# 3. Initialize EDA tools (OSS CAD Suite, Mill, w64devkit)
 ./spinalml setup
 
-# 4. Compilez un modèle Scala en Verilog
+# 4. Compile a Scala model into Verilog
 ./spinalml compile tests/universal/UniversalOpsDemo.scala -o rtl/
 
-# 5. Lancez la vérification bit-exacte sous Verilator
+# 5. Run bit-exact verification under Verilator
 ./spinalml test tests/universal/UniversalOpsDemo.scala
 ```
 
 ---
 
-## 2. Reproduction des Binaires depuis les Sources
+## 2. Building Binaries from Source
 
-Pour compiler vous-même le binaire autonome avec PyInstaller :
+To build the standalone binary yourself with PyInstaller:
 
 ```bash
-# Depuis la racine du projet spinalML :
+# From the spinalML project root:
 uv pip install -r requirements.txt pyinstaller
 
-# Lancer le script de compilation
+# Run the build script
 python cli/build_binary.py
 ```
-Le binaire résultant sera généré dans le dossier `dist/`.
+The resulting binary will be generated in the `dist/` directory.
 
 ---
 
-## 3. Utilisation depuis les Sources Python
+## 3. Running from Python Sources
 
-Si vous préférez exécuter le CLI sans compiler de binaire :
+If you prefer running the CLI without building a binary:
 
-1. **Installer les dépendances minimales :**
+1. **Install the minimal dependencies:**
    ```bash
    uv pip install -r requirements.txt
    ```
-2. **Invoquer le CLI via `python cli/main.py` :**
+2. **Invoke the CLI via `python cli/main.py`:**
    ```bash
    python cli/main.py --help
    ```
 
 ---
 
-## 4. Commandes Principales
+## 4. Main Commands
 
-| Commande | Description |
+| Command | Description |
 | :--- | :--- |
-| `spinalml setup` | Télécharge et configure automatiquement Mill et OSS CAD Suite dans `~/.spinalml_tools` |
-| `spinalml compile <modele.scala>` | Compile un modèle Scala en Verilog autonome et génère le wrapper UartSoC |
-| `spinalml test <modele.scala>` | Exécute la vérification universelle bit-exacte sous simulation C++ Verilator |
-| `spinalml build <modele.scala>` | Synthèse Yosys -> Placement & Routage NextPNR -> Génération du bitstream `.fs` |
-| `spinalml flash` | Programme la carte FPGA connectée en USB via openFPGALoader |
-| `spinalml mill [...]` | Wrapper direct vers l'outil de build Mill Scala |
-| `spinalml verilator [...]` | Wrapper direct vers le simulateur Verilator |
-| `spinalml yosys [...]` | Wrapper direct vers l'outil de synthèse Yosys |
-| `spinalml nextpnr <arch> [...]` | Wrapper direct vers NextPNR (`ice40`, `himbaechel`...) |
-| `spinalml openfpgaloader [...]` | Wrapper direct vers l'utilitaire de programmation JTAG/UART |
+| `spinalml setup` | Automatically downloads and configures Mill and OSS CAD Suite in `~/.spinalml_tools` |
+| `spinalml compile <model.scala>` | Compiles a Scala model into standalone Verilog and generates the UartSoC wrapper |
+| `spinalml test <model.scala>` | Runs universal bit-exact verification under Verilator C++ simulation |
+| `spinalml build <model.scala>` | Yosys synthesis -> NextPNR place & route -> `.fs` bitstream generation |
+| `spinalml flash` | Programs the connected USB FPGA board via openFPGALoader |
+| `spinalml mill [...]` | Direct wrapper for the Mill Scala build tool |
+| `spinalml verilator [...]` | Direct wrapper for the Verilator simulator |
+| `spinalml yosys [...]` | Direct wrapper for the Yosys synthesis tool |
+| `spinalml nextpnr <arch> [...]` | Direct wrapper for NextPNR (`ice40`, `himbaechel`, etc.) |
+| `spinalml openfpgaloader [...]` | Direct wrapper for the JTAG/UART programming utility |

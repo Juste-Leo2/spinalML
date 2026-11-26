@@ -102,7 +102,14 @@ case class LinearLayer[T <: Data, TW <: Data, TAcc <: Data](
       bMux.stream.payload := io.b.stream.payload
       io.b.stream.ready := bMux.stream.ready
     } otherwise {
-      bMux.stream.valid := zeroRemain =/= 0
+      // reArm/fire race guard (same family as the BiasAddOp LoadBias guard):
+      // the zeroRemain reset below runs last-assignment-wins against the
+      // decrement, so a zero offered on the reArm cycle would be consumed
+      // yet the reset lost (or vice versa), desyncing the zero count from
+      // the bias-cache reload. Bubbling valid on reArm keeps the count
+      // clean; the N zeros flow right after. One elastic cycle, no contract
+      // change (still exactly N beats per pass).
+      bMux.stream.valid := zeroRemain =/= 0 && !io.biasReArm
       bMux.stream.payload(0).assignFromBits(B(0, widthOf(accType) bits))
       io.b.stream.ready := False
       when(bMux.stream.fire) {

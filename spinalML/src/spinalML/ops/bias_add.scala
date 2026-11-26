@@ -45,7 +45,14 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
   val fsm = new StateMachine {
     val stateLoadBias: State = new State with EntryPoint {
       whenIsActive {
-        io.b.stream.ready := True
+        // reArm/fire race guard (multi-beat spill hang, N>8): the reArm
+        // clear below runs last-assignment-wins against the load increment,
+        // so a bias beat parked (valid) on the reArm cycle would be consumed
+        // (ready) yet never counted — the load then stalls one beat short
+        // forever (LoadBias with a dry buffer). Bubbling ready on reArm keeps
+        // the beat parked: the counter restarts clean and the full N beats
+        // are counted after. One elastic cycle, no behavior change otherwise.
+        io.b.stream.ready := !io.reArm
         when(io.b.stream.valid) {
           biasMem(loadCounter.value) := io.b.stream.payload(0)
           loadCounter.increment()
@@ -61,9 +68,14 @@ case class BiasAddOp[T <: Data](dataType: HardType[T], shapeA: Seq[Int], shapeB:
     
     val stateProcess: State = new State {
       whenIsActive {
-        // Transparent passthrough for backpressure
-        io.a.stream.ready := io.c.stream.ready
-        io.c.stream.valid := io.a.stream.valid
+        // Same race guard on the A/c passthrough: an A fire coinciding with
+        // the pass-abort reArm would emit a y beat downstream while the
+        // aCounter reset eats its count (extra y + misalignment). Bubbling
+        // both sides on reArm keeps the beat parked upstream; the abort then
+        // restarts from a clean state. No-op in practice (reArm only fires
+        // at command boundaries with c dry), purely defensive.
+        io.a.stream.ready := io.c.stream.ready && !io.reArm
+        io.c.stream.valid := io.a.stream.valid && !io.reArm
         
         val startCol = (aCounter.value * lanes) % N
         

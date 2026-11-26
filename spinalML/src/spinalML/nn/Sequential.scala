@@ -1073,6 +1073,9 @@ case class Sequential(
           // upstream never stalls; passIdx is prelude-stable during flow.
           val rowBeatsA = l.inFeatures / l.effLanes
           val winBeatsA = l.spillKSlice / l.effLanes
+          val totalBeatsA = rows * rowBeatsA
+          val aBeatsSeen = Reg(UInt(log2Up(totalBeatsA + 1) bits)) init(0)
+          val aPassDrained = aBeatsSeen === U(totalBeatsA, log2Up(totalBeatsA + 1) bits)
           val aWinT = Tensor(repackedTensor.dataType, repackedTensor.shape, repackedTensor.lanes)
           val aBeatInRow = Reg(UInt((log2Up(rowBeatsA) max 1) bits)) init(0)
           val winLo = (spillPassIdxOf(i) * U(winBeatsA, 16 bits)).resize(16 bits)
@@ -1087,6 +1090,9 @@ case class Sequential(
           aWinT.stream.payload := repackedTensor.stream.payload
           repackedTensor.stream.ready := !inWin || aWinT.stream.ready
           when(repackedTensor.stream.fire) {
+            when(!aPassDrained) {
+              aBeatsSeen := aBeatsSeen + 1
+            }
             when(aBeatInRow === U(rowBeatsA - 1, (log2Up(rowBeatsA) max 1) bits)) {
               aBeatInRow := 0
             } otherwise {
@@ -1143,7 +1149,21 @@ case class Sequential(
           spillWriter.io.inStream.stream << linComp.io.spillOut.get.stream
           spillReader.io.cmd << ctrl.io.readerCmd
           spillWriter.io.cmd << ctrl.io.writerCmd
-          ctrl.io.passDone := linComp.io.passDone.get
+          // Gate passDone on A-stream drain so StreamTap finishes snooping
+          // all elements (and repack/aBeatInRow reach row boundary) before
+          // SpillPassController can fire restartA for the next pass.
+          val linPassDoneSeen = RegInit(False)
+          val effectivePassDone = (linPassDoneSeen || linComp.io.passDone.get) && aPassDrained
+          when(linComp.io.passDone.get && !aPassDrained) {
+            linPassDoneSeen := True
+          }
+          when(effectivePassDone || ctrl.io.biasReArm || (io.start.valid && !prevStartValid)) {
+            linPassDoneSeen := False
+          }
+          when(ctrl.io.biasReArm || (io.start.valid && !prevStartValid)) {
+            aBeatsSeen := 0
+          }
+          ctrl.io.passDone := effectivePassDone
           ctrl.io.writerDone := spillWriter.io.done
           // weightDmaFire IS this layer's reqW.fire (hoisted var, same
           // signal): the pass-0 START fetch and every controller refetch
